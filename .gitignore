@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output (produced by `pnpm build` / the `prepare` script)
+lib/
+
+# Packaged tarballs
+*.tgz
+
+# Local development scratch space: the --patch overlay and a throwaway DSH_HOME
+# used for the clean-profile install test. Both hold machine-specific absolute
+# paths or installed copies, so neither belongs in history.
+scratch/
+
+# Internal working notes: written for this machine, not part of the published
+# package. AGENTS.md and tasks/ are this workspace's own conventions; the
+# repository analysis is a study of the upstream project, kept locally.
+AGENTS.md
+tasks/
+仓库分析.md
+说明.md
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

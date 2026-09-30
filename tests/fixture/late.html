@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>晚一点才有内容</title>
+  </head>
+  <body>
+    <!--
+      The shape this exists to reproduce: `document.readyState` is already `complete` while the
+      body is still a shell, and the content arrives from a request afterwards. Baidu's results
+      page does exactly this, which is why a run once declared a search finished that it had
+      never read (2026-09-30). Used by tests/browser.integration.test.ts.
+    -->
+    <p>先到的这一句</p>
+    <div id="late"></div>
+    <script>
+      const parts = []
+      for (let index = 1; index <= 20; index += 1) parts.push(`<p>迟到的内容 第 ${index} 段</p>`)
+      setTimeout(() => {
+        document.getElementById('late').innerHTML = parts.join('')
+      }, 600)
+    </script>
+  </body>
+</html>

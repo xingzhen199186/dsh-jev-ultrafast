@@ -1,0 +1,7 @@
+# pnpm 11 records the install-script decision for third-party packages here.
+# esbuild ships its platform binary as an optional dependency, so its install
+# script is only a sanity check: declining it keeps `pnpm install` from running
+# code we did not ask for, and it unblocks `pnpm run` (pnpm fails every script
+# with ERR_PNPM_IGNORED_BUILDS until this decision is recorded).
+allowBuilds:
+  esbuild: false

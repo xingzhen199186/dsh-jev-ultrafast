@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>dsh-jev-ultrafast browser probe</title>
+    <style>
+      body { font: 14px system-ui; margin: 24px; }
+      .row { margin: 8px 0; }
+      #covered-wrap { position: relative; display: inline-block; }
+      #veil { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.05); }
+      #offscreen { position: absolute; left: -9999px; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser probe</h1>
+    <p>The page the browser-layer tests drive. Every control here is deterministic.</p>
+
+    <div class="row">
+      <button id="bump" type="button" onclick="bump()">Add one</button>
+      <span id="counter" role="status">0</span>
+    </div>
+
+    <div class="row">
+      <label for="field">Guest name</label>
+      <input id="field" type="text" placeholder="Guest name" />
+      <span id="echo"></span>
+    </div>
+
+    <div class="row">
+      <label for="room">Room</label>
+      <select id="room">
+        <option value="">Choose a room</option>
+        <option value="single">Single</option>
+        <option value="double">Double</option>
+      </select>
+      <span id="room-out"></span>
+    </div>
+
+    <div class="row">
+      <label><input id="agree" type="checkbox" /> Accept the terms</label>
+    </div>
+
+    <div class="row">
+      <span id="covered-wrap">
+        <button id="covered" type="button" onclick="bump()">Covered button</button>
+        <span id="veil"></span>
+      </span>
+    </div>
+
+    <div id="offscreen"><button id="hidden-far" type="button" onclick="bump()">Off screen</button></div>
+
+    <div class="row">
+      <a id="new-window" href="./newtab.html" target="_blank" rel="noopener">Open a second page</a>
+    </div>
+
+    <script>
+      let counts = 0
+      const counter = document.getElementById('counter')
+      function bump() {
+        counter.textContent = String(++counts)
+      }
+      document.getElementById('field').addEventListener('input', (event) => {
+        document.getElementById('echo').textContent = 'typed:' + event.target.value
+      })
+      document.getElementById('room').addEventListener('change', (event) => {
+        document.getElementById('room-out').textContent = 'room:' + event.target.value
+      })
+      window.__probeCount = () => counts
+    </script>
+  </body>
+</html>

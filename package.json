@@ -1,0 +1,96 @@
+{
+  "name": "dsh-jev-ultrafast",
+  "version": "0.1.0",
+  "description": "Drive a browser from one natural-language goal: TypeSafe Jev picks the next operation and target from an indexed element table, so a DeepSeek Harness session spends one tool call instead of one turn per click.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "browser-automation",
+    "jev",
+    "typesafe"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xingzhen199186/dsh-jev-ultrafast.git"
+  },
+  "homepage": "https://github.com/xingzhen199186/dsh-jev-ultrafast#readme",
+  "bugs": {
+    "url": "https://github.com/xingzhen199186/dsh-jev-ultrafast/issues"
+  },
+  "type": "module",
+  "main": "lib/index.mjs",
+  "types": "lib/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.mts",
+      "default": "./lib/index.mjs"
+    },
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "README-zh.md",
+    "README-es.md",
+    "README-pt.md",
+    "README-hi.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "postbuild": "node scripts/check-client-id.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare": "tsdown"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-credentials": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.1 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.12",
+    "react": "^18.3.1",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-credentials": ">=0.1.7-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.2 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.2"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "license": "MIT",
+  "disclosure": "Each step of a run sends the page's indexed element table (page text, control labels, field names) to the decision service you configure — TypeSafe Jev, or any OpenAI-compatible route you point it at. The plugin keeps no credentials of its own: it reads and writes the harness credential store, and screenshots stay on this machine."
+}
