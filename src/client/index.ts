@@ -448,8 +448,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       })
       setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
       setNotice(
-        `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是插件自己的数据目录，` +
-          `和你日常那个分开，第一次要自己登录一次${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
+        `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是插件自己的数据目录（${report.profileDir}），` +
+          `和你日常那个分开；需要登录的网站，就在这个窗口里登录一次，登录会留在那里${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
       )
     } catch (failure) {
       setError(message(failure))
@@ -887,7 +887,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
             createElement(
               'span',
               { style: S.actionsHint },
-              '会打开一个插件自己的浏览器窗口（端口它自己挑，不用你填），第一次要自己登录一次。',
+              '会打开一个插件自己的浏览器窗口（端口它自己挑，不用你填）。它和你日常那个互相独立，需要登录的网站就在这个窗口里登录一次，登录会保留。',
             ),
           )
         : null,

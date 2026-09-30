@@ -102,6 +102,16 @@ export interface StorableKey {
   state: KeyState
 }
 
+/**
+ * What a run that stopped short gets told when the page it stopped on may want a login.
+ *
+ * A hint, not a diagnosis: a `blocked` run has many causes, and the one thing the reader
+ * cannot see from the report is that this plugin drives a browser profile of its own —
+ * separate from the one they are logged into every day.
+ */
+export const LOGIN_HINT =
+  '如果卡在要登录的页面：插件用的是它自己那份浏览器，和你日常那个互相独立；需要登录的网站，得先在它开出来的窗口里登录一次，登录会保留。'
+
 /** Chinese wording for a store source id; an unknown id is shown as it came. */
 export function sourceLabel(source: string): string {
   switch (source) {

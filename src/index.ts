@@ -12,6 +12,7 @@ import { captureLlm } from './dsh-model'
 import { runTask } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
+import { LOGIN_HINT } from './protocol'
 import { launchNote, prepareRun } from './run-setup'
 
 export const name = 'dsh-jev-ultrafast'
@@ -130,6 +131,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           if (value.actions.length > 0) {
             summary.push(value.actions.map((action, index) => `${index + 1}. ${action}`).join('\n'))
           }
+          if (value.status === 'blocked') summary.push(LOGIN_HINT)
           if (value.status !== 'done' && value.elements.length > 0) {
             summary.push(`当时页面上还能操作的有：\n${value.elements.slice(0, 20).join('\n')}`)
           }

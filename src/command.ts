@@ -26,7 +26,7 @@ import type { Config as ConfigShape } from './config'
 import type { captureLlm } from './dsh-model'
 import type { LoopEvent, RunStatus, TaskResult } from './loop'
 import { runTask } from './loop'
-import { INSPECTOR_PATH } from './protocol'
+import { INSPECTOR_PATH, LOGIN_HINT } from './protocol'
 import { namedSite, resolveStart } from './resolve-start'
 import { unfinishedDeaths } from './run-history'
 import { prepareRun } from './run-setup'
@@ -113,6 +113,7 @@ export function summaryText(result: TaskResult, url: string): string {
     const excerpt = pageExcerpt(result.page.text)
     if (excerpt) lines.push(excerpt)
   } else lines.push(`没能读到页面（起点：${url}）`)
+  if (result.status === 'blocked') lines.push(LOGIN_HINT)
   if (result.recordDir) {
     lines.push(`这次运行的原始往返留痕（开着截图时还有逐帧画面）在这个目录里：${result.recordDir}`)
     if (!result.screenshot) lines.push(`（这次没有逐帧画面：设置页的「每一步都截图」关着。）`)
