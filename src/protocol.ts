@@ -80,6 +80,26 @@ export interface ProfileAdoptReport {
 }
 
 /**
+ * How far the "use the logins I already have" sequence has got.
+ *
+ * The sequence is driven by the host rather than by this page, because the browser it closes
+ * is usually the one this page is open in. So the page reads this while the browser lasts,
+ * and when the browser comes back this state is simply gone — which is correct: the profile
+ * either has the logins or it does not, and the browser block says which.
+ */
+export interface AdoptRunStatus {
+  state: 'counting' | 'closing' | 'copying' | 'done' | 'failed'
+  /** The browser being closed and copied from, for the sentence the page shows. */
+  browser: string
+  /** Whole seconds left before that browser is closed; 0 once the countdown is over. */
+  secondsLeft: number
+  /** Set once the copy has happened. */
+  report?: ProfileAdoptReport
+  /** Set when the sequence could not finish, in the words the page shows. */
+  note?: string
+}
+
+/**
  * What the browser block's own button did.
  *
  * The launched browser reports where it listens and which profile directory it was given,

@@ -30,6 +30,7 @@ import { decisionProvider, resolveDecisionRoute } from '../decision/providers'
 import { TEXT_PROVIDERS, isDshRoute, resolveTextRoute, textProvider } from '../decision/text-providers'
 import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, inspectorUrl, sourceLabel } from '../protocol'
 import type {
+  AdoptRunStatus,
   DecisionTestReport,
   KeyState,
   LaunchReport,
@@ -153,11 +154,37 @@ const BUSY_FLOOR_MS = 1200
  * How long this page keeps asking for the reader's browser to be closed, and how often.
  *
  * A running browser holds its cookie store exclusively, so there is no way to copy a login
- * out of it until it closes. Two minutes is long enough for someone who has just been told
- * to close it, and short enough that a page left open does not sit there pretending to work.
+ * out of it until it closes. That closing, and everything after it, happens in the host; this
+ * page only re-reads how far along it is, once a second, so that a countdown a reader does get
+ * to see ticks once a second.
  */
-const ADOPT_WAIT_MS = 120_000
-const ADOPT_POLL_MS = 2000
+const ADOPT_POLL_MS = 1000
+
+/**
+ * The one line under the adoption buttons, which is where the countdown lives.
+ *
+ * The `done` line is deliberately empty: which profile is in use is a state the browser block
+ * shows by itself, and a sentence congratulating the reader on it would be noise.
+ */
+function adoptHint(run: AdoptRunStatus | undefined): string {
+  if (run === undefined) {
+    return (
+      '点一下：倒计时结束后，插件会自己关掉你日常那个浏览器，把登录数据搬进它的档案，' +
+      '启动它自己的浏览器，再把你日常那个原样打开。只搬登录相关的那一小部分（cookie、每站点存储），缓存不搬；' +
+      '以后在插件这份里新登录的站不会回流到日常那份，想同步就再按一次。'
+    )
+  }
+  if (run.state === 'counting') {
+    return (
+      `${run.secondsLeft} 秒后自动关掉 ${run.browser} 并开始搬。如果你正用这个浏览器看着这个页面，` +
+      `页面会跟着它一起关掉——不用管，搬完它会把 ${run.browser} 重新打开。要反悔就点「先别关」。`
+    )
+  }
+  if (run.state === 'closing') return `正在关掉 ${run.browser}…`
+  if (run.state === 'copying') return '正在把登录数据搬进插件自己的档案…'
+  if (run.state === 'done') return ''
+  return run.note ?? '没能完成。'
+}
 
 /** A block's visible title, for the sentences that have to name the block they are about. */
 function blockTitle(id: FieldGroupId): string {
@@ -177,8 +204,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const [adopting, setAdopting] = useState(false)
   /** True while this page is going back to the profile the plugin started with. */
   const [dropping, setDropping] = useState(false)
-  /** The browser this page is waiting to be closed, empty when it is waiting for nothing. */
-  const [waitingFor, setWaitingFor] = useState('')
+  /** The running "use my own logins" sequence, as the host reports it. */
+  const [adoptRun, setAdoptRun] = useState<AdoptRunStatus>()
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   /** Which blocks have their rarely-used fields opened; an unset entry follows the values. */
@@ -477,13 +504,11 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   }, [filled, save])
 
   /**
-   * Take the logins out of the browser the reader actually uses.
+   * Start the host's "use the logins I already have" sequence and watch it.
    *
-   * The wait is the interesting part. That browser holds its cookie store exclusively while
-   * it runs, so this asks, is told `locked`, and asks again — with the page saying which
-   * browser it is waiting for. Closing a browser is an ordinary thing to do; making someone
-   * close it and then press something a second time would be two actions for one intention.
-   * The deadline is there because waiting forever with no way back is its own kind of broken.
+   * Nothing here closes anything. The browser this sequence closes is usually the one this
+   * page is open in, so the host does the work; this only reads how far it has got, and if the
+   * page disappears along with that browser, the work still finishes.
    */
   const adoptFromPage = useCallback(async () => {
     setAdopting(true)
@@ -492,36 +517,56 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
     try {
       const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
       await save('browser')
-      const deadline = Date.now() + ADOPT_WAIT_MS
-      for (;;) {
-        const report = await ask<ProfileAdoptReport>('/adopt-profile', {
+      setAdoptRun(
+        await ask<AdoptRunStatus>('/adopt-run', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ kind }),
-        })
-        if (report.ok) {
-          setWaitingFor('')
-          // The launch line that follows reports the profile it really ended up on, so the
-          // confirmation the reader needs — "this is my own data now" — comes from what
-          // happened rather than from a second sentence written here.
-          await launchBrowserFromPage()
-          return
-        }
-        if (report.reason !== 'locked' || Date.now() > deadline) {
-          setWaitingFor('')
-          setError(report.note ?? '没能把登录数据搬过来。')
-          return
-        }
-        setWaitingFor(report.browser)
+        }),
+      )
+      for (;;) {
         await new Promise((resolve) => setTimeout(resolve, ADOPT_POLL_MS))
+        const current = await ask<AdoptRunStatus | null>('/adopt-run')
+        if (current === null) {
+          setAdoptRun(undefined)
+          return
+        }
+        setAdoptRun(current)
+        if (current.state === 'done') {
+          // The controls carry the outcome rather than a sentence: re-reading the browser block
+          // shows which profile is in use, and the way back appears alongside it.
+          setStatus(await ask<StatusReport>('/status'))
+          setAdoptRun(undefined)
+          return
+        }
+        if (current.state === 'failed') {
+          setError(current.note ?? '没能把登录数据搬过来。')
+          setAdoptRun(undefined)
+          return
+        }
       }
     } catch (failure) {
+      setAdoptRun(undefined)
       setError(message(failure))
     } finally {
-      setWaitingFor('')
       setAdopting(false)
     }
-  }, [filled, save, launchBrowserFromPage])
+  }, [filled, save])
+
+  /** Stop the countdown, for a reader who was not ready to lose their browser. */
+  const cancelAdoptFromPage = useCallback(async () => {
+    try {
+      await ask('/adopt-run/cancel', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+    } catch (failure) {
+      setError(message(failure))
+      return
+    }
+    setAdoptRun(undefined)
+  }, [])
 
   /** Go back to the profile this plugin started with, leaving the copy on disk. */
   const dropAdoptedFromPage = useCallback(async () => {
@@ -994,13 +1039,14 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
               { type: 'button', onClick: () => void adoptFromPage(), disabled: adopting },
               adopting ? '正在搬…' : '搬进我日常的登录数据',
             ),
-            createElement(
-              'span',
-              { style: S.actionsHint },
-              waitingFor
-                ? `在等你关掉 ${waitingFor}：它开着的时候，登录数据被它独自占着，读不出来；关掉之后我会自己接着搬。`
-                : '把日常浏览器里的登录搬进插件这份档案，需要登录的网站就不用再登一遍——只搬登录相关的那一小部分（cookie、每站点存储），缓存不搬。过程中要请你先关掉那个浏览器；以后在插件这份里新登录的站不会回流到日常那份，想同步就再按一次。',
-            ),
+            adoptRun?.state === 'counting'
+              ? createElement(
+                  'button',
+                  { type: 'button', onClick: () => void cancelAdoptFromPage() },
+                  '先别关',
+                )
+              : null,
+            createElement('span', { style: S.actionsHint }, adoptHint(adoptRun)),
           )
         : null,
       group.id === 'browser' && status?.browser?.adopted
