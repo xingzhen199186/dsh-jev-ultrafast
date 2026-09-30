@@ -29,7 +29,7 @@ Page text (excerpt): about 12,300 results; season 1 episodes (S1 E5–E9); Douba
 - **"Done" is verified.** Write what must be on the page when the task succeeds into `expect`; if it is not there the run reports `blocked` instead of trusting the model's own verdict.
 - **Long documents are read in full.** The second tool scrolls screen by screen and stitches the text back together, spending no decision requests.
 - **Every run keeps its raw log.** Each run writes `trace.jsonl` in a temp directory (requests and responses, credentials masked to `***`), and the result tells you where.
-- **You can watch it, and you can drive it without a model.** The inspector pauses / steps / stops before an action and replays a finished run frame by frame; typing `/jev-ultrafast` in the prompt box works too.
+- **You can drive it without a model.** Typing `/jev-ultrafast` in the prompt box works too, and a URL in the sentence skips the model entirely.
 
 ## Install
 
@@ -61,8 +61,6 @@ To build from source: `pnpm install && pnpm build`; `pnpm test` runs the unit te
 | Tool `jev_browser_task` | Take one natural-language goal (optionally with `expect`) and come back with the result and page text |
 | Tool `jev_browser_read` | Read a long document screen by screen, de-duplicated and stitched, spending no decision requests |
 | Command `/jev-ultrafast` | Say what to do in the prompt box; a URL in the sentence skips the model, no URL asks the text model for a start page |
-
-On its own, `/jev-ultrafast` explains itself and gives the inspector URL; the inspector page lives at `/jev-ultrafast/inspector`.
 
 ## Configuration
 
