@@ -8,8 +8,11 @@
  * and the list of places an install usually sits.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  activeProfileDir,
   parseActivePort,
   pluginProfileDir,
   pluginProfileDirs,
@@ -96,13 +99,26 @@ describe('browser launcher', () => {
   it('tries the chosen browser before the other one, and reads both from the same place', () => {
     // Both browsers can be running at once — one press of the button each — so the order of
     // these two candidates is the only thing deciding which one a task drives.
-    expect(pluginProfileDirs('chrome')[0]).toBe(pluginProfileDir('chrome'))
-    expect(pluginProfileDirs('chrome')[0].endsWith(join('browser', 'chrome'))).toBe(true)
-    expect(pluginProfileDirs('chrome')[1].endsWith(join('browser', 'edge'))).toBe(true)
-    expect(pluginProfileDirs('edge')[0].endsWith(join('browser', 'edge'))).toBe(true)
-    expect(pluginProfileDirs('edge')[1].endsWith(join('browser', 'chrome'))).toBe(true)
-    // Nothing chosen yet: Chrome, the same default the settings page shows.
-    expect(pluginProfileDirs(undefined)[0].endsWith(join('browser', 'chrome'))).toBe(true)
+    //
+    // Pinned to a scratch harness home: each entry names the adopted profile when the reader
+    // has one, so reading the real home would make this test mean something different on a
+    // machine that has used the button than on one that has not.
+    const before = process.env.DSH_HOME
+    const home = mkdtempSync(join(tmpdir(), 'jev-profiles-'))
+    process.env.DSH_HOME = home
+    try {
+      expect(pluginProfileDirs('chrome')[0]).toBe(activeProfileDir('chrome'))
+      expect(pluginProfileDirs('chrome')[0].endsWith(join('browser', 'chrome'))).toBe(true)
+      expect(pluginProfileDirs('chrome')[1].endsWith(join('browser', 'edge'))).toBe(true)
+      expect(pluginProfileDirs('edge')[0].endsWith(join('browser', 'edge'))).toBe(true)
+      expect(pluginProfileDirs('edge')[1].endsWith(join('browser', 'chrome'))).toBe(true)
+      // Nothing chosen yet: Chrome, the same default the settings page shows.
+      expect(pluginProfileDirs(undefined)[0].endsWith(join('browser', 'chrome'))).toBe(true)
+    } finally {
+      if (before === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = before
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 

@@ -22,8 +22,8 @@ import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  activeProfileDir,
   discoverBrowser,
-  pluginProfileDir,
   readActivePort,
   type BrowserEndpoint,
   type BrowserKind,
@@ -122,7 +122,9 @@ export async function launchBrowser(
   options: LaunchOptions = {},
 ): Promise<LaunchedBrowser> {
   const label = BROWSER_LABELS[kind]
-  const profileDir = pluginProfileDir(kind)
+  // An adopted profile when the reader has one, this plugin's own otherwise: see
+  // `activeProfileDir`, which is also where a run looks for an already-running browser.
+  const profileDir = activeProfileDir(kind)
 
   const running = await liveEndpoint(profileDir)
   if (running !== null) {

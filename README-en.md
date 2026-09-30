@@ -70,7 +70,7 @@ Three blocks in the settings page (Settings → Jev browser):
 |---|---|
 | Decision service | TypeSafe Jev direct, or any OpenAI-compatible route; the credential comes from the DSH credential store, the plugin stores nothing of its own |
 | Text model | Filling in field values, and the start-page fallback when a sentence carries no URL; can use a DSH built-in model or your own route |
-| Browser | Pick Chrome or Edge; **Launch and connect** starts one with the plugin's own data directory — a profile of its own, separate from your daily browser, so log in once inside that window for any site that needs it and the login is kept |
+| Browser | Pick Chrome or Edge. **Launch and connect** starts a browser of the plugin's own; to give it the logins you already have, press **搬进我日常的登录数据** — it asks you to close that browser first, then carries on by itself. Or skip it and log in once inside its own window; that login is kept too |
 
 Under **Advanced** you can set the decision output cap (default `393216`; when a server rejects it, the reply reports that server's own limit).
 

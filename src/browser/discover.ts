@@ -7,9 +7,11 @@
  * `/json/version` endpoint, because that is what reports the browser's own
  * version string and the exact WebSocket URL to use.
  */
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { adoptedProfileDir } from './adopt'
 
 /** One working browser DevTools endpoint, plus where it came from. */
 export interface BrowserEndpoint {
@@ -154,10 +156,22 @@ export function pluginProfileDir(kind: BrowserKind): string {
   return join(home && home.length > 0 ? home : join(homedir(), '.dsh'), 'jev-ultrafast', 'browser', kind)
 }
 
+/**
+ * The profile a launch should use, and the one this plugin's runs look in.
+ *
+ * An adopted profile wins when there is one: it holds the reader's own logins copied here,
+ * and a run that quietly fell back to the empty profile would look exactly like a copy that
+ * had failed.
+ */
+export function activeProfileDir(kind: BrowserKind): string {
+  const adopted = adoptedProfileDir(kind)
+  return existsSync(adopted) ? adopted : pluginProfileDir(kind)
+}
+
 /** The same directories as a candidate list, with the chosen browser first. */
 export function pluginProfileDirs(preferred?: BrowserKind): string[] {
   const kinds: BrowserKind[] = preferred === 'edge' ? ['edge', 'chrome'] : ['chrome', 'edge']
-  return kinds.map((kind) => pluginProfileDir(kind))
+  return kinds.map((kind) => activeProfileDir(kind))
 }
 
 /** Read the port and WebSocket path a browser wrote next to its profile. */

@@ -17,8 +17,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { adoptProfile, dropAdoptedProfile, hasAdoptedProfile } from './browser/adopt'
 import { discoverBrowser } from './browser/discover'
-import { launchBrowser } from './browser/launch'
+import { BROWSER_LABELS, launchBrowser } from './browser/launch'
 import { BrowserSession } from './browser/session'
 import type { Config as ConfigShape } from './config'
 import { changeKey, describeKey, resolveKey, storableNames } from './credentials'
@@ -203,8 +204,35 @@ async function handle(
       // setting is the fallback for a caller that sends nothing.
       const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
       const launched = await launchBrowser(kind, { exeOverride: config.browserPath.get() || undefined })
-      const report: LaunchReport = { ...launched, browser: await browserReport(config) }
+      const report: LaunchReport = {
+        ...launched,
+        adopted: hasAdoptedProfile(kind),
+        browser: await browserReport(config),
+      }
       send(res, 200, report)
+      return
+    }
+    if (path === '/adopt-profile') {
+      if (req.method !== 'POST') {
+        send(res, 405, { error: '这个接口只接受 POST。' })
+        return
+      }
+      // Idempotent and cheap to ask again, which is what lets the page keep asking while the
+      // reader closes their browser: `locked` is the only answer that means "ask again", and
+      // the page is the one that decides how long to keep trying.
+      const body = await readJson(req)
+      const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
+      send(res, 200, await adoptProfile(kind, { label: BROWSER_LABELS[kind] }))
+      return
+    }
+    if (path === '/drop-adopted-profile') {
+      if (req.method !== 'POST') {
+        send(res, 405, { error: '这个接口只接受 POST。' })
+        return
+      }
+      const body = await readJson(req)
+      const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
+      send(res, 200, await dropAdoptedProfile(kind, { label: BROWSER_LABELS[kind] }))
       return
     }
     if (path === '/text-models') {
@@ -360,6 +388,7 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
         source: endpoint.source,
         title: page.title,
         elements: page.actions.length,
+        adopted: hasAdoptedProfile(config.browserKind.get()),
       }
     } finally {
       await session.close()

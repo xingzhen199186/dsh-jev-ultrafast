@@ -33,6 +33,7 @@ import type {
   DecisionTestReport,
   KeyState,
   LaunchReport,
+  ProfileAdoptReport,
   StatusReport,
   StorableKey,
   TextModelReport,
@@ -148,6 +149,16 @@ const SECTION_ORDER: readonly SectionId[] = ['decision', 'text', 'browser']
  */
 const BUSY_FLOOR_MS = 1200
 
+/**
+ * How long this page keeps asking for the reader's browser to be closed, and how often.
+ *
+ * A running browser holds its cookie store exclusively, so there is no way to copy a login
+ * out of it until it closes. Two minutes is long enough for someone who has just been told
+ * to close it, and short enough that a page left open does not sit there pretending to work.
+ */
+const ADOPT_WAIT_MS = 120_000
+const ADOPT_POLL_MS = 2000
+
 /** A block's visible title, for the sentences that have to name the block they are about. */
 function blockTitle(id: FieldGroupId): string {
   return FIELD_GROUPS.find((group) => group.id === id)?.title ?? id
@@ -162,6 +173,12 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<DecisionTestReport>()
   const [launching, setLaunching] = useState(false)
+  /** True while the logins are being copied out of the browser the reader actually uses. */
+  const [adopting, setAdopting] = useState(false)
+  /** True while this page is going back to the profile the plugin started with. */
+  const [dropping, setDropping] = useState(false)
+  /** The browser this page is waiting to be closed, empty when it is waiting for nothing. */
+  const [waitingFor, setWaitingFor] = useState('')
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   /** Which blocks have their rarely-used fields opened; an unset entry follows the values. */
@@ -448,7 +465,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       })
       setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
       setNotice(
-        `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是插件自己的数据目录（${report.profileDir}），` +
+        `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是` +
+          `${report.adopted ? '从你日常浏览器搬过来的那份数据' : '插件自己的数据目录'}（${report.profileDir}），` +
           `和你日常那个分开；需要登录的网站，就在这个窗口里登录一次，登录会留在那里${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
       )
     } catch (failure) {
@@ -457,6 +475,82 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setLaunching(false)
     }
   }, [filled, save])
+
+  /**
+   * Take the logins out of the browser the reader actually uses.
+   *
+   * The wait is the interesting part. That browser holds its cookie store exclusively while
+   * it runs, so this asks, is told `locked`, and asks again — with the page saying which
+   * browser it is waiting for. Closing a browser is an ordinary thing to do; making someone
+   * close it and then press something a second time would be two actions for one intention.
+   * The deadline is there because waiting forever with no way back is its own kind of broken.
+   */
+  const adoptFromPage = useCallback(async () => {
+    setAdopting(true)
+    setError('')
+    setNotice('')
+    try {
+      const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
+      await save('browser')
+      const deadline = Date.now() + ADOPT_WAIT_MS
+      for (;;) {
+        const report = await ask<ProfileAdoptReport>('/adopt-profile', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind }),
+        })
+        if (report.ok) {
+          setWaitingFor('')
+          // The launch line that follows reports the profile it really ended up on, so the
+          // confirmation the reader needs — "this is my own data now" — comes from what
+          // happened rather than from a second sentence written here.
+          await launchBrowserFromPage()
+          return
+        }
+        if (report.reason !== 'locked' || Date.now() > deadline) {
+          setWaitingFor('')
+          setError(report.note ?? '没能把登录数据搬过来。')
+          return
+        }
+        setWaitingFor(report.browser)
+        await new Promise((resolve) => setTimeout(resolve, ADOPT_POLL_MS))
+      }
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setWaitingFor('')
+      setAdopting(false)
+    }
+  }, [filled, save, launchBrowserFromPage])
+
+  /** Go back to the profile this plugin started with, leaving the copy on disk. */
+  const dropAdoptedFromPage = useCallback(async () => {
+    setDropping(true)
+    setError('')
+    setNotice('')
+    try {
+      const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
+      const report = await ask<ProfileAdoptReport>('/drop-adopted-profile', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind }),
+      })
+      if (report.ok) {
+        setStatus((current) =>
+          current === undefined
+            ? current
+            : { ...current, browser: { ...(current.browser ?? { ok: false }), adopted: false } },
+        )
+      } else {
+        setError(report.note ?? '没能改回插件自己的档案。')
+      }
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setDropping(false)
+    }
+  }, [filled])
+
   /** The name a value pasted into a block would be stored under, defaults included. */
   const decisionName = filled('decisionKeyRef') || routeDefault('keyRef', filled('decisionProvider'))
   // The name a block will actually use. Deliberately not falling back to the server's
@@ -888,6 +982,40 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
               'span',
               { style: S.actionsHint },
               '会打开一个插件自己的浏览器窗口（端口它自己挑，不用你填）。它和你日常那个互相独立，需要登录的网站就在这个窗口里登录一次，登录会保留。',
+            ),
+          )
+        : null,
+      group.id === 'browser'
+        ? createElement(
+            'div',
+            { style: S.actions },
+            createElement(
+              'button',
+              { type: 'button', onClick: () => void adoptFromPage(), disabled: adopting },
+              adopting ? '正在搬…' : '搬进我日常的登录数据',
+            ),
+            createElement(
+              'span',
+              { style: S.actionsHint },
+              waitingFor
+                ? `在等你关掉 ${waitingFor}：它开着的时候，登录数据被它独自占着，读不出来；关掉之后我会自己接着搬。`
+                : '把日常浏览器里的登录搬进插件这份档案，需要登录的网站就不用再登一遍——只搬登录相关的那一小部分（cookie、每站点存储），缓存不搬。过程中要请你先关掉那个浏览器；以后在插件这份里新登录的站不会回流到日常那份，想同步就再按一次。',
+            ),
+          )
+        : null,
+      group.id === 'browser' && status?.browser?.adopted
+        ? createElement(
+            'div',
+            { style: S.actions },
+            createElement(
+              'button',
+              { type: 'button', onClick: () => void dropAdoptedFromPage(), disabled: dropping },
+              dropping ? '正在改回…' : '改回插件自己的浏览器',
+            ),
+            createElement(
+              'span',
+              { style: S.actionsHint },
+              '搬过来的那份登录数据会留在磁盘上，只是不再使用它。',
             ),
           )
         : null,

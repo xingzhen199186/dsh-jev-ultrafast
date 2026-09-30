@@ -52,6 +52,31 @@ export interface BrowserReport {
   elements?: number
   /** Why it failed, in the words the discovery code would use. */
   message?: string
+  /** True while this plugin drives data copied from the reader's own browser, not its own profile. */
+  adopted?: boolean
+}
+
+/**
+ * What the settings page's "use the logins I already have" button did.
+ *
+ * `locked` is neither a failure to dress up as success nor a dead end: a running browser
+ * holds its cookie store exclusively, so the page says which browser to close and asks again
+ * by itself until the store can be read.
+ */
+export interface ProfileAdoptReport {
+  ok: boolean
+  /** `locked` = that browser is running; `no-profile` = it has never been used; `empty` = nothing to copy. */
+  reason?: 'locked' | 'no-profile' | 'empty'
+  /** The browser's name, for the sentence the page shows. */
+  browser: string
+  /** The profile the logins were read from. */
+  from?: string
+  /** Where they were written, or where an adopted profile was moved aside. */
+  to?: string
+  files?: number
+  bytes?: number
+  /** What to tell the reader when this did not do what the button says. */
+  note?: string
 }
 
 /**
@@ -70,6 +95,8 @@ export interface LaunchReport {
   endpoint: string
   profileDir: string
   source: string
+  /** True while this profile is the adopted one rather than one this plugin started empty. */
+  adopted: boolean
   browser: BrowserReport
 }
 
