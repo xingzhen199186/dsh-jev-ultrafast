@@ -1,210 +1,105 @@
 # dsh-jev-ultrafast
 
-English | [中文](README-zh.md) | [Español](README-es.md) | [Português](README-pt.md) | [हिन्दी](README-hi.md)
+[English](README-en.md) | 中文 | [Español](README-es.md) | [Português](README-pt.md) | [हिन्दी](README-hi.md)
 
-> **One goal in, one tool call per step.** Give DeepSeek Harness one natural-language
-> goal and let TypeSafe **Jev** drive the browser. The page is compressed into an
-> indexed table of controls, and a single request decides both *which operation* to
-> perform and *which element* to perform it on — so a session pays for one tool call
-> instead of one model turn per click.
+> **一句话进去，一步一次调用。** 给 DeepSeek Harness 一句自然语言目标，让 TypeSafe 的 **Jev** 去操作浏览器。页面先被压成一张带编号的控件清单，一次请求同时决定「做什么操作」和「对哪个元素」——所以一次会话只花一次工具调用，而不是每个点击花一轮模型往返。
 
-What that buys, in short:
+换成好处说，有这么几条：
 
-- **One request per step.** The operation and its target come back together, so the
-  model is not asked to look, think and click across three separate turns.
-- **No selectors, coordinates or code in the loop.** Targets are indexes into a table
-  the plugin mints from the live page, and freshness, visibility, geometry and
-  occlusion are re-checked immediately before the input.
-- **It brings its own browser.** When nothing is reachable, a run starts the Chrome or
-  Edge you picked and connects to it — its own data directory, its own free port.
-- **It follows the tab a click opens**, and closes only the tab it opened itself.
-- **`blocked` is not `failed`.** A run that hits a brake stops as `blocked` and reports
-  what was still operable on the page, so the stuck point is visible.
-- **It reads long pages too.** A second tool scrolls a page one screen at a time and
-  stitches the text back together, so a document longer than a screen comes back whole —
-  without spending a single decision request.
-- **`done` is checked, not taken on trust.** Write down what the finished page must show
-  and the plugin goes looking for it; a run that claims to be finished without it comes
-  back as `blocked`.
-- **Every run leaves a raw trace.** Each run writes `trace.jsonl` into a temporary directory
-  of its own — the request body and the response of every decision call and every text-model
-  call, with the key scrubbed to `***` and anything past 20,000 characters cut off — plus, when
-  screenshots are on, one `frames/NNNNNN.jpg` per step and a `frames.json` recording each
-  frame's name and time. The result names that directory.
-- **A dropped text-model call is retried; a dropped connection is not.** A 429, 503 or 529
-  from the text model is retried up to twice, waiting 0.5 s and then 1 s; a network break is
-  reported as it stands, which is where the upstream Python version draws the same line.
-- **You can watch a run, not only read about it.** The host serves one inspector page (see
-  "Watching a run" below): start a run by hand, watch the live screen, see which element each
-  step is about to pick and how sure the model is, and pause, step or stop **before** the
-  action is executed — or replay a finished run frame by frame.
-- **You can start it without a model turn.** Type `/jev-ultrafast` and then what you want, in
-  plain words: an address anywhere in the sentence is used as it is, and a sentence without one
-  costs a single small text-model call to pick the starting site. The command line and its
-  result stay in the UI; on its own the command explains itself and gives the inspector URL.
+- **一步就是一次请求。** 操作和它的目标一起回来，不用让模型分三轮去看、想、再点。
+- **循环里没有选择器、坐标和代码。** 目标是插件从当前页面现做的一张清单里的编号；真正输入之前，还会重新核对页面有没有变、元素可见不可见、位置与遮挡对不对。
+- **浏览器它自己带。** 一个都连不上时，任务会按你选的那台（Chrome 或 Edge）自己起一个再连上——专属数据目录、端口自己挑。
+- **点击点开的新标签页它会跟过去**，而且结束时只关它自己开的那个。
+- **`blocked` 不等于 `failed`。** 撞到刹车而停下时报 `blocked`，并列出当时页面上还能操作的东西，卡在哪一步看得见。
+- **长文档也能读。** 第二个工具会一屏一屏往下滚、把每屏文字拼回整篇，比一屏长的文档能完整拿回来——而且一次决策请求都不花。
+- **「完成」是核对过的，不是听信来的。** 把「做成时页面上必须有什么」写下来交给插件，它会去页面上找；模型自称完成而页面上找不到，这一趟会报成没做成。
+- **每跑一次都留一份原始往来的底。** 每次运行都在自己的临时目录里写一份 `trace.jsonl`——每次决策请求、每次文本模型请求的请求体和响应，密钥一律抹成 `***`，超过 2 万字截断；开着截图时还有逐帧的 `frames/NNNNNN.jpg` 和一份 `frames.json`（记下每帧的名字与时间点）。结果里会给出这个目录的路径。
+- **文本模型那条路遇瞬断会重试，网断了不重试。** 文本模型回 429 / 503 / 529 时最多重试 2 次，先等 0.5 秒、再等 1 秒；网络本身断了就照实报错——上游 Python 版划的是同一条线。
+- **运行是可以看的，不是只能读结论。** 宿主自己吐出一个检查器页面（见下面「看一次运行」）：可以手动开始一次运行、看当前画面、看每一步准备选哪个元素、模型有多大把握，并在动作**真正执行之前**「暂停 / 单步 / 停止」；跑完的运行也能回看，逐帧按当时真实的节奏回放。
+- **不经过模型也能叫它干活。** 输入框里打 `/jev-ultrafast`，后面直接说要做什么：话里带网址就照它跑（这一步不调用模型），整句没带网址时，会拿设置页上配的那条文本模型问一次「该先打开哪个网站」再跑；命令与结果都留在界面里。不带参数时只回一段说明与检查器的网址。
 
-**Status:** version `0.1.0`, developer preview. Not published to npm — it installs from
-a local tarball (see [Install](#install)). DeepSeek Harness itself is iterating fast, so
-expect to re-check this plugin against it.
+**状态：** 版本 `0.1.0`，开发者预览。没有发布到 npm；可以从 GitHub 仓库装，也可以用本机打好的 tarball（两条路都在下面的 [安装](#install)）。DeepSeek Harness 本身还在快速迭代，所以对着它复查这件事要留着。
 
-This is an independent, unofficial TypeScript port of
-[jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser
-Use), packaged as a DeepSeek Harness bundle. Upstream is Python with a little
-JavaScript; the loop, the page-snapshot script and the prompts here are rewritten
-from it.
+这是 [jev-ultrafast](https://github.com/browser-use/jev-ultrafast)（MIT，© 2026 Browser Use）的独立、非官方 TypeScript 移植，打包为 DeepSeek Harness 的 bundle。上游是 Python 加一点 JavaScript，这里的循环、页面快照脚本和提示词是从它改写过来的。
 
-> **Not affiliated.** This project is not affiliated with, endorsed by, or sponsored
-> by Browser Use or TypeSafe. "Browser Use", "TypeSafe" and "Jev" are their owners'
-> trademarks, used here only to describe provenance and the API this plugin calls.
-> No trademark licence is granted.
+> **非官方。** 本项目与 Browser Use、TypeSafe 无隶属、无背书、无赞助关系。「Browser Use」「TypeSafe」「Jev」是各自所有者的商标，此处仅用于说明来源与本插件所调用的接口；未授予任何商标许可。
 >
-> **You bring your own key.** The plugin never ships, bundles, proxies or resells API
-> access. It resolves your TypeSafe key from the DeepSeek Harness credential store at
-> call time, and your use of that service is governed by TypeSafe's own terms.
+> **密钥自备。** 插件不内置、不打包、不中转、不转售任何 API 访问。它在调用时从 DeepSeek Harness 的凭据库里解析你自己的 TypeSafe 密钥；你对该服务的使用受 TypeSafe 自身条款约束。
 
 ## Compatibility
 
-| Surface | Status |
+| 项目 | 状态 |
 |---|---|
-| Harness | DeepSeek Harness `0.1.7-rc.2` and `0.2.0-rc.1` (both run here); the plugin declares `>=0.1.7-rc.2 <0.3.0-0` in `peerDependencies`, so a version outside that range is refused by the harness's compatibility gate before it loads, with the reason printed |
+| Harness | DeepSeek Harness `0.1.7-rc.2` 与 `0.2.0-rc.1`（本机两个版本都实跑过）；插件在 `peerDependencies` 里声明 `>=0.1.7-rc.2 <0.3.0-0`，不在此范围的版本会在装载前被 DSH 的版本门拦下并说明原因 |
 | Node | `^22.19.0 || >=24.0.0` |
-| Platforms | Windows, macOS, Linux |
-| Desktop app | Works in the Electron desktop app; its profile is managed by the application, so see the desktop paragraph under Install below |
-| Browser | Chrome or Edge: pick one on the settings page and press 「启动并连接」, and the plugin starts it for you (its own profile directory, its own free port). You can also start one yourself with `--remote-debugging-port` and the plugin will find it — and when nothing is reachable at all, a task starts that browser itself, so the button is not a prerequisite |
-| Credentials | `TYPESAFE_API_KEY`; plus a key for the text model when a field has to be typed — for a preset that default name is the vendor's own convention (for DeepSeek it is `DEEPSEEK_API_KEY`), and the DSH built-in routes need none |
+| 平台 | Windows、macOS、Linux |
+| 桌面端 | 桌面应用（Electron）里可用；profile 由应用独占管理，装法见下面 Install 里的桌面端一段 |
+| 浏览器 | Chrome 或 Edge：在设置页里选一个、按「启动并连接」，插件自己把它起起来（给它一个专属的数据目录、端口自己挑）。也可以自己先带 `--remote-debugging-port` 起一个，插件去找。**一个都没连着时，任务会自己按这个选择起一个**——不必先去按那个按钮 |
+| 凭据 | `TYPESAFE_API_KEY`；需要往输入框里填字时，再加一个文本模型的密钥——预设的默认名字是厂商惯例那个（DeepSeek 那条是 `DEEPSEEK_API_KEY`），改走 DSH 内置那几条则不用 |
 
 ## What it does
 
-The plugin registers two tools.
+插件注册两个工具。
 
-**`jev_browser_task`** drives a page toward one goal, running the whole loop inside a
-single call. It takes four arguments:
+**`jev_browser_task`**：朝着一个目标驱动页面，整个循环在这一次调用里跑完。它收四个参数：
 
-| Argument | Required | Meaning |
+| 参数 | 必填 | 说明 |
 |---|---|---|
-| `goal` | yes | The whole task in one sentence, including every value to type and every filter to set. The loop sees only this sentence and the current page, never your conversation. |
-| `url` | yes | The page to open first. The action space has no "go to address" operation, so the entry point can only come from here. |
-| `maxSteps` | no | Overrides the step budget for this run only, without touching the configuration. |
-| `expect` | no | Strings the finished page must show, written down before the run and checked by the plugin afterwards. Prefix one with `!` to require that it must *not* be there. This is what keeps `done` from being the last word of the model that did the work. |
+| `goal` | 是 | 整件事写成一句话，要填的值、要设的条件都写在里面。循环只看得到这句话和当前页面，看不到你的对话。 |
+| `url` | 是 | 从哪一页开始。动作清单里没有「打开网址」这一项，入口只能由这里给。 |
+| `maxSteps` | 否 | 只覆盖这一次运行的步数上限，不改配置。 |
+| `expect` | 否 | 「做成时页面上必须出现的文字」，在开跑前写下来，跑完由插件去核对；某一项以 `!` 开头表示「必须不出现」。它的作用是让「完成」不再是做事那个模型的一面之词：它说完成而页面上找不到，这一趟报成没做成。 |
 
-It returns `status` (`done` / `blocked` / `failed`), `reason`, `verification`, `url`,
-`title`, `text`, `steps`, `decisions`, `elapsedMs`, `actions`, `elements`,
-`omittedActions` and `textCalls`, plus the path of the run's own trace directory. When
-`status` is `blocked` or `failed`, `elements` carries what was still operable on the page,
-so it is clear where the run got stuck. `omittedActions` counts the controls a page offered
-beyond the 250 that fit in the table; the step list marks a step the model itself was unsure
-about (below half probability); and with screenshots switched on it also returns the
-absolute path, inside the system temporary directory, of the last screen's picture.
+它回给你：`status`（`done` / `blocked` / `failed`）、`reason`、`verification`、`url`、`title`、`text`、`steps`、`decisions`、`elapsedMs`、`actions`、`elements`、`omittedActions`、`textCalls`，另外还给这次运行自己的留痕目录路径。`status` 是 `blocked` 或 `failed` 时，`elements` 会带上当时页面上还能操作的元素，方便看清卡在哪一步。`omittedActions` 是页面上的控件超过 250 个、没能进候选表的那些；某一步要是模型自己也没把握（概率低于一半），步骤行里会标出来；开着截图时还会给最后一屏那张图的**绝对路径**，它落在系统临时目录里。
 
-**`jev_browser_read`** reads a page instead of acting on it. It takes `url`, and
-optionally `maxScreens` (default 20) and `maxChars` (default 60000). It collects the
-visible text one screen at a time, drops the lines consecutive screens share, and returns
-the whole text, so a document longer than a screen comes back complete. It calls no
-decision model and clicks nothing: this is the cheap route, and reading is the one thing
-it does. It stops for one of four reasons — the page ended, the screen budget ran out, the
-character budget ran out, or the page stopped scrolling — and says which one it was; a
-screen that exactly filled the 6000-character single-screen limit is counted and flagged as
-possibly cut off. A freshly opened tab swallows the first scroll event (found on a real
-run), so a screen that did not move is pushed once more.
+**`jev_browser_read`**：只读页面，不操作它。它收 `url`，可选 `maxScreens`（默认 20）与 `maxChars`（默认 60000）。它一屏一屏收可见正文、去掉相邻两屏重复的行，把整篇拼回来，所以比一屏长的文档能完整拿到。它不调用决策模型、不点任何东西——这是便宜的那条路，也是它唯一做的事。它停在四种情况之一并说明是哪一种：到底了 / 屏数到上限 / 字数到上限 / 页面不再滚动；某一屏正好顶到单屏上限 6000 字时会计数，并在结果里说明这一屏可能被截断。真机上还修掉一处：标签页刚打开时**第一个滚动事件会被吞掉**（真跑一次才发现的），所以这一屏没动就再推一次。
 
-Why reading needs its own route: the snapshot is viewport-only by design. It drops every
-line that is off screen and caps what is left at 6000 characters, and that same text rides
-along with *every* decision request, so widening it would raise the price of every step.
-The task tool therefore sees one screen; the reading tool walks the page.
+为什么读长文档要另开一条路：页面快照只收视口以内的文字（这是有意的），并且把剩下的截在 6000 字，而这段文字会跟着**每一次**决策请求一起发出去——放宽它等于让每一步都变贵。所以任务工具永远只看一屏，而读的那个工具负责把整页走一遍。
 
-**What a run leaves behind.** Every run writes into a temporary directory of its own: a
-`trace.jsonl` holding the request body and the response of each decision call and each
-text-model call, with the key scrubbed to `***` and anything past 20,000 characters
-truncated; plus, when screenshots are on, one `frames/NNNNNN.jpg` per step and a
-`frames.json` recording each frame's name and time. The result reports that directory, so
-the raw exchange can be read back afterwards.
+**一次运行留下了什么。** 每次运行都往自己的一个临时目录里写东西：一份 `trace.jsonl`，装着每次决策调用与每次文本模型调用的请求体和响应，密钥一律抹成 `***`，超过 2 万字截断；开着截图时还有每一步一张 `frames/NNNNNN.jpg`，以及一份记下每帧名字与时间点的 `frames.json`。结果里会报出这个目录，所以那次原始往来之后还能翻出来看。
 
-**Watching a run.** The host also serves an interactive inspector at
-`http://127.0.0.1:3080/jev-ultrafast/inspector`. There you can start a run by hand, watch
-the current screen, see which element each step is selecting and how sure the model is, and
-pause, step or stop **before** the action is executed. A run that already happened can be
-watched again: its frames play back at the pace they were taken, and each request's raw
-JSON can be unfolded. The page is one whole HTML file emitted by the host rather than a
-client bundle, so nothing has to be rebuilt to get it; only the page itself needs no token,
-while every endpoint it calls takes the same token as the settings page.
+**看一次运行。** 宿主另外在 `http://127.0.0.1:3080/jev-ultrafast/inspector` 提供一个交互式检查器：可以手动开始一次运行、看当前画面、看每一步准备选哪个元素、模型有多大把握，并在动作**真正执行之前**「暂停 / 单步 / 停止」。已经跑过的运行也能回看：逐帧按当时真实的节奏回放，每条请求的原始 JSON 都能展开看。这个页面是宿主直接吐出的一整份 HTML，不经过客户端打包，所以不必重新构建就能拿到；只有页面本身免令牌，它调用的其余接口都用与设置页同一个令牌。
 
-### Or type the slash command (an address needs no model turn)
+### 也可以直接用斜杠命令（带网址时不占模型轮次）
 
-Type `/jev-ultrafast` in the composer and then say what you want:
+在输入框里打 `/jev-ultrafast`：
 
-- `/jev-ultrafast https://www.example.com find the price and say what it is` — runs once. The
-  address may sit anywhere in the sentence, and a bare domain counts too
-  (`/jev-ultrafast open example.com and find the price`). With an address in the line, nothing
-  else is called before the run starts.
-- `/jev-ultrafast 查一下明天北京的天气` — the same, only without an address. A site named in the
-  sentence itself (百度, 必应, 谷歌, 知乎, 微博, 豆瓣, 淘宝/天猫, 京东, 小红书, 抖音, B站, 维基,
-  GitHub) is read straight off, with no model call at all, and anything else starts at a search
-  engine — a real place to begin, and one the running browser can leave on its own. The default is
-  Bing (cn.bing.com) rather than Baidu: Baidu answers this plugin's own browser with a slider
-  verification page, which no run can get past. No model is asked
-  which site to open first: that question used to be asked here, it was the one step that kept being
-  cut short before a run existed, and nothing about a run depends on it. After each step it waits
-  for the page's text to actually arrive before looking again — up to 4 s, or 1.5 s when a step
-  changes nothing — so a run is never reported finished on a page whose results have not been
-  painted yet, and the answer quotes back what that page actually said.
-- The command answers at once; the run continues in the background (watch or stop it in the
-  session's jobs panel) and reports back when it ends. **If it is cut off halfway** — most often
-  because DSH was restarted while it ran — the next use of the command says so first: which run
-  never finished, that there is no result, and that re-sending the command starts it again. Only
-  runs newer than your last successful one are mentioned, so the note neither vanishes nor nags.
-- `/jev-ultrafast` on its own — prints this explanation and the inspector URL.
+- `/jev-ultrafast https://www.example.com 找到价格并说明是多少` —— 跑一次。网址也可以出现在句中的任何位置，写成一个裸域名也算（`/jev-ultrafast 打开 example.com 看价格`）；话里带了网址，开跑前不调用任何模型。
+- `/jev-ultrafast 查一下明天北京的天气` —— 同上，只是没写网址：这句话会交给设置页上配的那条文本模型，由它回一个「先打开哪个网站」再开跑。这一步多花一次很小的模型调用；它也说不出网站时，回话里会请你把网址写上。
+- 命令立刻返回，任务在后台进行（会话头部的「任务」面板里能看到进度、也能停），跑完把结果交回来。**要是它在半路被掐断**（最常见的原因是 DSH 在这中间重启过），下一次你用这条命令时我会先补一句「那趟没跑完、没有结果」——只提你上次跑通之后还没跑完的那些，不静默消失，也不反复啰嗦。
+- `/jev-ultrafast`（不带参数）—— 只回一段说明，并给出交互式检查器的网址。
 
-The command line and its result stay in the UI: they never become part of the conversation, and a
-line with an address in it spends no model turn. The name must be lowercase ASCII (a DSH rule),
-which is why it is `/jev-ultrafast` and not a Chinese name; the command name and the sentence
-after it need a space between them, while the address may stand anywhere in that sentence.
-Per-step pictures still follow the settings page's "a screenshot on every step" switch: with it
-off, the run keeps only its raw exchange trace.
+命令行与它的结果都留在界面里，不会变成对话内容。没带网址时先看句子里有没有点名站点（百度、必应、谷歌、知乎、微博、豆瓣、淘宝天猫、京东、小红书、抖音、B 站、维基、GitHub）——**点名的本地就认出来**；没点名的就从**必应**（`https://cn.bing.com`）开始——实测百度会给插件的浏览器一个「安全验证」滑块页，换个起点才拿得到结果。**开跑前这一步不经过模型**：不会失败，也不会让你先等一次提问；当前起点写在回话里。回话里还会附上**页面上读到的内容（节选）**，不只告诉你停在哪一页。**点完一步，它会等页面把内容真的画出来再看**：有新内容立刻往下走，某一步什么都没变就最多等 1.5 秒——不会再对着还没出结果的空页面说「完成」。名字只能是 ASCII 小写（DSH 的规则），所以是 `/jev-ultrafast` 而不是中文名；命令名与后面那句话之间要有空格，网址写在句里哪个位置都认。逐帧画面仍听设置页那个「每一步都截图」开关：关着时这次运行只留原始往来留痕。
 
-In a brand-new session the first one may leave the screen on the welcome page (as if nothing
-happened) — send anything else and the command card is there.
+在一个**全新会话**里第一次打这条命令，界面可能仍停在欢迎页（看起来像没反应）——随便再发一条消息，那张命令卡片就在对话里。
 
-The loop inside is four steps:
+里面的循环是四步：
 
-1. **Observe** — an in-page script reads the visible controls into an indexed table
-   (role, name, current value, checked/selected state).
-2. **Decide** — one TypeSafe request returns the operation (`CLICK`, `TYPE_TEXT`,
-   `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) together with a
-   candidate target for every operation the page supports; only the target belonging
-   to the chosen operation is executed.
-3. **Type** — only when the operation is `TYPE_TEXT` does a small OpenAI-compatible
-   model write the field value.
-4. **Execute** — freshness, visibility, geometry and occlusion are re-checked
-   immediately before the input, and the action is logged *before* its result is
-   observed, so a navigation cannot erase it.
+1. **观察**——注入页面的脚本把可见控件读成一张带编号的清单（角色、名称、当前值、勾选/选中状态）。
+2. **决策**——一次 TypeSafe 请求返回操作（`CLICK`、`TYPE_TEXT`、`SELECT`、`SCROLL_UP`、`SCROLL_DOWN`、`WAIT`、`DONE`、`BLOCKED`），同时给出页面支持的每种操作各自的候选目标；只执行被选中操作对应的那个目标。
+3. **取值**——只有当操作是 `TYPE_TEXT` 时，才由一个小型 OpenAI 兼容模型写出要填的内容。
+4. **执行**——输入之前重新核对页面是否变化、元素是否可见、几何位置与遮挡；动作**先记账再观察结果**，所以一次页面跳转不会把已经发生的动作抹掉。
 
-The model never emits selectors, coordinates or executable code: targets are indexes
-into the observed table, minted by the plugin.
+模型永远不能产出选择器、坐标或可执行代码：目标是插件自己发放的清单编号。
 
-Three brakes bound a run: the action count reaches `maxSteps`; the decision calls
-reach `2 × maxSteps`; or three consecutive steps leave the page unchanged. A run that
-stops this way ends as `blocked`, not as a failure — it did not get there, it did not
-crash.
+三处刹车：动作数到 `maxSteps` 停；决策调用到 `2 × maxSteps` 停；连续三步页面没有任何变化也停。这样停下时状态是 `blocked` 而不是失败——它只是没做成，不是崩了。
 
-The plugin opens its own connection to the browser and deliberately does **not** use
-the `ctx.browserUse` provider slot: it needs to drive the page one step at a time at
-its own pace, which is not what that slot's "hand the page to a provider" contract is
-for.
+浏览器由插件自己去连，**不占用** `ctx.browserUse` 那个槽位：它需要按自己的节奏一步一步驱动，和那个槽位「交给提供者托管」的用法不是一回事。
 
-**Not done yet:** the package is not on npm, so it installs from a local tarball or
-directory; tool results currently use the generic card, and no custom rich card has
-been written for it; multiple tabs are only handled as far as following a tab a click
-opens (the run never switches to a tab you already had); file uploads and drag-and-drop,
-as well as anything inside Shadow DOM, iframes or a canvas, have never been in the
-action space, upstream or here.
+**还没做**：npm 上还没有这个包，只能从本地 tarball 或目录装；工具结果目前走通用卡片，专门为它做的富卡片还没写；**多标签页**只做到「点开的新标签页跟过去」——它不会主动切到你已有的其他标签页；文件上传、拖拽，以及 Shadow DOM、iframe、canvas 里的内容，从上游起就不在动作清单里。
 
-Two limits of the evidence are worth knowing. The task tool hands back at most 6000
-characters of the final page, and it looks for a success marker on that final screen
-only — a marker parked further down a very long page is not found there, which is why a
-failed check means "not confirmed" rather than "not true". The reading tool is how you
-look further.
+有两处证据上的边界值得知道：任务工具最多交回最终页面 6000 字，而且核验只在**最后那一屏**的文字里找——很长的页面里更靠下的成功标志，它在那儿找不到，所以核验没过只说明「没在这儿确认」，不等于「事情没成」；想看得更远就用读的那个工具。
 
 ## Install
+
+**从 GitHub 装**（推荐：源码可追溯、可锁到某个标签）。pnpm 默认不跑源码包的构建脚本，首次会失败——按它给出的包键，把 `dsh-jev-ultrafast: true` 写进该 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds`，再装一次：
+
+```sh
+dsh plugin --profile <name> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
+dsh --profile <name> --dump-config | grep 'dsh-jev-ultrafast'
+```
+
+**或者用本机打好的 tarball**：
 
 ```sh
 pnpm pack
@@ -212,34 +107,15 @@ dsh plugin --profile <name> add ./dsh-jev-ultrafast-0.1.0.tgz
 dsh --profile <name> --dump-config | grep 'dsh-jev-ultrafast'
 ```
 
-**The desktop app takes a different route.** Its profile belongs to the application
-and the command line refuses it outright (`profile "desktop" is managed exclusively
-by the Electron application`). In the app, open **插件 → 添加插件**, paste the
-tarball's **absolute path** (for example `C:\Users\you\dsh-jev-ultrafast-0.1.0.tgz`),
-then press 立即启用, and **restart the app once**.
+**桌面端另走一条路。** 桌面应用的 profile 由应用自己管，命令行会直接拒绝（`profile "desktop" is managed exclusively by the Electron application`）。在应用里点 **插件 → 添加插件**，把 tarball 的**绝对路径**粘进去（例如 `C:\Users\你\dsh-jev-ultrafast-0.1.0.tgz`），装完点「立即启用」，然后**重启一次应用**。
 
-That restart is not the plugin being fussy; the reason sits outside it. The desktop
-boot payload — the list of injections the page starts from — is sent once per
-application start, and enabling a plugin happens after that. Without the restart the
-plugin's settings page cannot see its own token and reports one line of Chinese
-saying so, while the tool itself works fine. The web app has no such step: it renders
-its index per request.
+那次重启不是插件要多此一举，原因在插件之外：桌面端那份「启动负载」（页面开头的一串注入清单）只在应用启动时送一次，而「启用插件」这个动作发生在它之后——不重启的话，插件页面会因为拿不到自己的令牌而报一句中文错，工具本身却是好的。网页版没有这个毛病，它的首页是每次请求现渲染的。
 
-Two things have to be in place before a run.
+跑之前有两件事要就位。
 
-First, a browser the plugin can reach. The shortest route is to pick one on the plugin's
-own page: **Settings → Jev 浏览器**, choose Chrome or Edge in the browser block's dropdown,
-then press 「启动并连接」. The plugin starts that browser's own executable with a
-**profile directory of its own** (separate from the one you browse in — log in once inside
-it and it keeps that state), lets the browser pick a free port, and leaves the address in
-that profile directory, so no port number has to be typed and a restarted DSH finds it
-again. Chrome and Edge have refused a debugging port on the default profile since version
-136, which is why "the plugin starts a clean one" is also the only one-press form.
-**That press is not required, though**: when no browser is reachable at all, a task starts
-the chosen one itself and connects to it, and says so in its result. The button keeps its
-other use — a site that needs a login gets that login once, by hand, inside that window.
+一是能让插件连上的浏览器。最省事的做法是在插件自己的设置页里选一个按一下：**设置 → Jev 浏览器**，**浏览器**那块的下拉里选 Chrome 或 Edge，按「启动并连接」。插件用那个浏览器自己的程序启动它，给它一个**插件专属的数据目录**（在你日常那个之外，互不干扰；第一次用它要自己登录一次，之后就一直带着），端口让它自己挑一个空闲的，再把地址留在那个数据目录里——所以不用知道端口号，DSH 重启之后它也找得回来。Chrome 和 Edge 从 136 版起不允许用默认的个人数据目录开调试端口，所以「插件起一个干净的」也是唯一能一键做到的形态。**这一下不是必须的**：一个浏览器都没连着时，任务会自己按这个选择起一个、连上，并在结果里写明「本来没有可连的浏览器，已按设置启动 Edge 并连上」。按钮仍然有用——需要登录的站点，先按它把窗口开出来、自己登一次，再让任务去跑。
 
-You can also start a dedicated instance yourself and leave the button alone:
+也可以不用这个按钮，自己先起一个带调试端口的实例：
 
 ```sh
 # Chrome
@@ -248,390 +124,123 @@ chrome --remote-debugging-port=9222 --user-data-dir=/tmp/jev-profile --no-first-
 msedge --remote-debugging-port=9222 --user-data-dir=/tmp/jev-profile --no-first-run
 ```
 
-On Windows, spell the path out:
+Windows 上路径要写全，例如：
 
 ```powershell
 & "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
-  --remote-debugging-port=9222 --user-data-dir="C:\Users\<you>\jev-profile" `
+  --remote-debugging-port=9222 --user-data-dir="C:\Users\<你>\jev-profile" `
   --no-first-run --no-default-browser-check
 ```
 
-With `cdpUrl` left empty, the plugin looks in this order: the configured
-address → the `BU_CDP_URL` / `BU_CDP_WS` environment variables → the port file the
-browser itself wrote (including the two profile directories the plugin started) → the two
-conventional ports 9222 and 9223. If none of them answers, it fails with a Chinese message
-saying how to start a browser and mentioning that button. If yours is already listening
-elsewhere, set `cdpUrl`. **With both browsers running, a task drives the one you chose in
-the dropdown** — it sorts ahead of the other, instead of whichever started first winning.
+`cdpUrl` 留空时，插件按这个顺序找：配置里的地址 → 环境变量 `BU_CDP_URL` / `BU_CDP_WS` → 浏览器自己写下的端口文件（其中包含插件自己起过的那两个数据目录）→ 9222、9223 两个惯用端口。都找不到时报一句中文，说清该怎么起浏览器、也提醒上面那个按钮。已经在别的端口上跑，就把 `cdpUrl` 填上。**两台同时开着时，任务驱动的是你在下拉里选的那台**——它在候选顺序里排在前面，否则会变成「谁先起就驱动谁」。
 
-Second, the two keys. The shortest route is to type them into the plugin's own page in
-DSH's settings (the next section), which writes them into DSH's credential file; they can
-also be stored as credentials (the decision key defaults to `TYPESAFE_API_KEY`, the text
-model to the default name of whichever route is chosen) or exported in the environment
-that starts DSH. A missing one produces a Chinese
-error naming which key is absent. Keys are never written into configuration —
-configuration holds the **variable names**.
+二是两把密钥。最省事的做法是在插件自己的设置页里直接填（见下面「插件设置页」那一节），它会把值写进 DSH 自己的凭据文件；也可以存成凭据（决策默认 `TYPESAFE_API_KEY`，文本模型用所选那条路的默认名字），或者在启动 DSH 的环境里导出它们。缺了会在调用时报中文错，指明缺哪一把。密钥不写进配置——配置里放的是**变量名**。
 
 ## Configuration
 
-Every key can be set from cordis.yml or from the plugin's own page in DSH's settings
-(the next section). The names are flat — there is no nesting.
+每一项都可以在 cordis.yml 里改，也可以在插件自己的设置页里改（见下一节）。键名是平铺的，没有嵌套。
 
-| Key | Type | Default | Description |
+| 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `browserKind` | `chrome` \| `edge` | `chrome` | Which browser 「启动并连接」 starts, and which one a task starts by itself when nothing is reachable. It gets a profile directory of its own, so this only chooses which one. |
-| `browserPath` | string | empty | Where that browser's executable lives. Only needed when it is installed outside the usual places (a portable copy, say). |
-| `cdpUrl` | string | empty | The browser's debugging endpoint, for example `http://127.0.0.1:9222`. Empty means discover one. |
-| `userDataDir` | string | empty | The browser's user-data directory. Only needed when the browser was started with a non-default `--user-data-dir`. |
-| `decisionProvider` | `typesafe` \| `openrouter` | `typesafe` | Which door the decision service is reached through: TypeSafe's own endpoint, or OpenRouter's alpha route. See "Two routes" below. |
-| `decisionEndpoint` | string | empty | Full address of the decision service. Empty uses the chosen provider's own; fill it in only for a resale route. |
-| `decisionModel` | string | empty | Decision model name. Empty uses the chosen provider's own. |
-| `decisionKeyRef` | string | empty | The decision key's **credential name** (an environment-variable name), not the key itself. Empty uses the chosen provider's own. |
-| `textProvider` | string | `deepseek` | Which route the text model takes: a preset name (`deepseek`, `openrouter`, `bailian`, `zhipu`, `moonshot`, `siliconflow`, `openai`), or `dsh:<provider id>` (a model already configured in DSH). See "Which route the text model takes" below. |
-| `textBaseUrl` | string | empty | OpenAI-compatible base URL of the text model. Empty uses the chosen route's own. |
-| `textModel` | string | empty | Text model name. Empty uses the chosen route's own default model; the `dsh:` route has no default, so one has to be chosen. |
-| `textKeyRef` | string | empty | The text model key's credential name. Empty uses the chosen route's own name; on the `dsh:` route DSH keeps the key itself. |
-| `textReasoning` | `none` \| `auto` | `none` | `none` keeps the text model from thinking (typing a field is transcription, not reasoning); `auto` uses each vendor's default. On a DSH built-in route this setting is not sent: DSH and the model behind it decide, because models accept different values and dictating one can fail the whole call. |
-| `maxSteps` | number | `60` | How many steps one task may take. The decision-call budget is twice this. |
-| `screenshots` | boolean | `false` | Screenshot every step. Noticeably slower; usually left off. |
+| `browserKind` | `chrome` \| `edge` | `chrome` | 「启动并连接」启动哪一个。插件会给它一个自己的数据目录，所以这里只管选哪一个。 |
+| `browserPath` | string | 空 | 上面那个浏览器的程序位置。只有装在标准位置之外（便携版之类）才要填。 |
+| `cdpUrl` | string | 空 | 浏览器的调试端口，例如 `http://127.0.0.1:9222`。留空则自动查找。 |
+| `userDataDir` | string | 空 | 浏览器的用户数据目录。只有当浏览器是用 `--user-data-dir` 起了非默认目录时才要填。 |
+| `decisionProvider` | `typesafe` \| `openrouter` | `typesafe` | 决策服务走哪条路：TypeSafe 官方直连，还是 OpenRouter 的 alpha 通道。见下面「两条决策路线」。 |
+| `decisionEndpoint` | string | 空 | 决策服务的完整地址。留空就用所选供应商的默认地址；只有走转售路由之类才需要填。 |
+| `decisionModel` | string | 空 | 决策模型名。留空就用所选供应商的默认模型。 |
+| `decisionKeyRef` | string | 空 | 决策密钥的**凭据名**（环境变量名），不是密钥本身。留空就用所选供应商的默认名字。 |
+| `textProvider` | string | `deepseek` | 文本模型走哪条路：预设名（`deepseek`、`openrouter`、`bailian`、`zhipu`、`moonshot`、`siliconflow`、`openai`），或者 `dsh:<供应商 id>`（DSH 里已经配好的模型）。见下面「文本模型走哪条路」。 |
+| `textBaseUrl` | string | 空 | 文本模型的 OpenAI 兼容地址。留空就用所选那条路自己的地址。 |
+| `textModel` | string | 空 | 文本模型名。留空就用所选那条路自己的默认模型；`dsh:` 那条路没有默认值，必须选一个。 |
+| `textKeyRef` | string | 空 | 文本模型密钥的凭据名。留空就用所选那条路自己的名字；`dsh:` 那条路由 DSH 自己管密钥。 |
+| `textReasoning` | `none` \| `auto` | `none` | `none` 不让文本模型思考（填字段是抄写，不需要思考）；`auto` 用各家默认。走「DSH 内置」那条路时这一项不生效——那条路由 DSH 和它背后的模型自己决定，插件不替它指定（各家能接受的取值不一样，替它指定反而可能让整次调用失败）。 |
+| `maxSteps` | number | `60` | 一次任务最多走多少步。决策调用上限是它的两倍。 |
+| `screenshots` | boolean | `false` | 每一步都截图。明显变慢，一般不用开。 |
 
-Configuration is validated by the Schemastery `Config` schema in `src/config.ts`, so an
-invalid value fails at load time instead of running broken.
+配置由 `src/config.ts` 里的 Schemastery `Config` 校验，值写错会在加载时就报错，不会带病运行。
 
-Both `keyRef` fields hold a credential *name* and carry the `credential-ref` role. Every
-field is `volatile`, which is what lets the settings page save and take effect
-immediately: a value changed while DSH is running is picked up by the next task, with no
-restart. The *value* behind a name goes in the 密钥 row of the page's own block, which
-writes DSH's own credential file — equally immediate.
+两个 `keyRef` 存的是凭据**名字**，带 `credential-ref` 标记。所有字段都是 `volatile` 的：运行期间改了值，下一次任务就用新值，不用重启——设置页保存后立刻生效，靠的就是这个。名字对应的**值**在设置页每一块下面的**密钥**行里填，写进的是 DSH 的凭据文件，一样立刻生效。
 
-### How much the small questions may write
+### 小问题能写多少
 
-The text model is asked three short things — the value of a field, which site a sentence is about,
-and the settings page's own connection probe. Each of those requests carries one number: the most
-the model may write back. It is not a target (a model stops when it is done), so it can only stop a
-runaway or cut a real answer off. On a route where the model thinks first, the thinking and the
-answer share that one budget, which is how "it said nothing" happens on a route whose reasoning
-`HELPER_MAX_TOKENS` (393216) is therefore set well above anything one short answer could need, and
-all three questions share it. The decision loop's own per-step calls carry no such cap.
+文本模型只被问三件小事：往输入框里填什么、这句话该先去哪个网站、「测试连接」那一问。每次问都带着一个数：这一问最多能写回多少。它不是目标（模型写完自己会停），所以它只会做两件事之一——挡住写起来没完的模型，或者把一次正常回答切掉。在「先思考、再写正文」的模型上，思考与正文共用这一个额度，而在一条关不掉思考的通道上，正文被吃掉就表现为「它什么也没说」。因此这个上限被定在**远高于一次短回答所需**的位置（`HELPER_MAX_TOKENS = 393216`），三处共用；主循环里「每一步做什么」的决策调用**没有**这个上限。另外，有些服务端会在读到内容之前就拒收「超过它模型上限」的数字——那不是对问题的回答，于是插件会**从对方的拒绝话里读出它承认的上限再问一次**；话里没给出上限时用一个不挑人的 8192。只有提到「max tokens」的拒绝才会重问，其余错误原样报出。
 
-Some routes refuse a number above their own model's maximum output before reading a word. That
-refusal is not an answer about the question, so `askText` reads the limit the refusal names and asks
-again with it — and when the sentence names no limit, with 8192. Only a refusal that mentions max
-tokens is retried; every other error is passed on as it is.
+### 文本模型走哪条路
 
-### Which route the text model takes
+文本模型只在「往输入框里填字」时用到，它自己也有一条路的选法，分两类：
 
-The text model is used only for "typing into an input field", and it too picks a route of
-its own. There are two kinds:
-
-| Kind | What it is | Address and key |
+| 类别 | 是什么 | 地址与密钥 |
 |---|---|---|
-| Preset (`deepseek`, `openrouter`, `bailian`, `zhipu`, `moonshot`, `siliconflow`, `openai`) | a table the plugin ships with | the address, the default model and the default credential name all come from that table; the key's value goes into DSH's credential file from the settings page's paste box |
-| DSH built-in (`dsh:<provider id>`, for example `dsh:deepseek-official`) | a model already configured in DSH | the address and the key are both kept by DSH; the settings page picks a model only and draws no paste box |
+| 预设（`deepseek`、`openrouter`、`bailian`、`zhipu`、`moonshot`、`siliconflow`、`openai`） | 插件自带的一张表 | 地址、默认模型、默认凭据名都由这张表给；密钥的值由设置页的粘贴框存进 DSH 的凭据文件 |
+| DSH 内置（`dsh:<供应商 id>`，例如 `dsh:deepseek-official`） | DSH 里已经配好的模型 | 地址和密钥都由 DSH 自己管，设置页只挑一个模型，不画粘贴框 |
 
-Whichever route is chosen governs, and the other three fields follow it when left empty —
-the same arrangement as the decision service below. The `dsh:` prefix is not decoration:
-DSH may well have a provider named `deepseek` too, and with the prefix "the plugin's preset
-deepseek" and "DSH's deepseek" are two options standing side by side, without either
-displacing the other; and a value already saved will not be treated as the other one just
-because DSH later registers a provider under the same name.
+选了哪条路就以哪条路为准，另外三项留空跟着走——同下面决策服务那套。`dsh:` 这个前缀不是装饰：DSH 里也可能有一个叫 `deepseek` 的供应商，加了前缀，「插件的预设 deepseek」和「DSH 的 deepseek」才是并列的两个选项，不会互相顶掉；已经保存的值也不会因为 DSH 后来注册了同名供应商而被当成另一个。
 
-The presets take in only the OpenAI-protocol vendors because the text half needs nothing
-more than "give one sentence, get one piece of JSON". Other protocols such as Anthropic or
-Gemini work just as well through the DSH built-in route, with no gap in capability.
+预设只收 OpenAI 协议那几家，是因为文本这一半只需要「给一句话、要一段 JSON」。Anthropic、Gemini 这类别的协议走 DSH 内置那条路一样能用，能力没有缺口。
 
-**Transient trouble is retried; a broken connection is not.** A text-model call that comes
-back 429, 503 or 529 is retried up to twice, waiting 0.5 s and then 1 s. A network drop is
-not retried at all and is reported as it stands — the same line the upstream Python version
-draws.
+**瞬断重试、网断不重试。** 文本模型回 429、503 或 529 时最多重试 2 次，先等 0.5 秒、再等 1 秒；网络本身断了则一次都不重试，照实报出来——上游 Python 版划的是同一条线。
 
-**One trade-off**: the preset DeepSeek route's default credential name is written
-`DEEPSEEK_API_KEY` by the vendor's convention, and DSH itself uses that name too — so that
-route comes out of the box already "configured". To give it a key of its own, fill the
-"key name" on the settings page's "advanced settings" with something else.
+**一条取舍**：预设里 DeepSeek 那条的默认凭据名按厂商惯例写成 `DEEPSEEK_API_KEY`，而 DSH 自己也在用这个名字——所以这条开箱就是「已配置」。想让它单独用一把钥匙，就在设置页的「高级设置」里把「密钥名」填成别的。
 
-### Two routes to the decision service
+### 两条决策路线
 
-The two doors differ in exactly three values — the address, the model name, and which
-credential name holds the key. Because they belong together, the configuration names only
-the door and lets the other three follow it; the page shows what an empty field will use as
-its grey placeholder, so switching providers needs no copying and leaves nothing behind.
+两条路的差别只有三样：地址、模型名、密钥放在哪个名字下。既然绑在一起，配置里就只需要选一家，另外三项留空跟着走——设置页会把「留空会用掉的值」用灰字显示出来，所以切换供应商不必手抄地址，也不会把上一家的值留在那里被误用。
 
-| Provider | Address | Model | Credential name |
+| 供应商 | 地址 | 模型 | 凭据名 |
 |---|---|---|---|
-| TypeSafe, direct | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
+| TypeSafe 官方直连 | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
 | OpenRouter | `https://openrouter.ai/api/alpha/decisions` | `~typesafe/jev-latest` | `OPENROUTER_API_KEY` |
 
-The leading tilde in OpenRouter's model name is not a typo: it is how that route spells the
-same model, and dropping it asks for a model that does not exist. That route has also been
-seen to want the request body wrapped in a `decisionsRequest` envelope, so on that door the
-plugin sends the flat body first and retries once wrapped only when the body is refused with
-400 or 422 — a refusal about shape rather than content. TypeSafe's own endpoint never wraps.
-Neither door has been exercised against a live service from this machine, which has no key
-for either.
+OpenRouter 那栏模型名前面那个波浪号不是笔误，是这条路自己的写法，去掉就会被路由到一个不存在的模型。这条路还有个已知脾气：请求体可能要包一层 `decisionsRequest` 才收。所以走 OpenRouter 时，插件先按平铺写法发一次，只有被 400 或 422 拒了（拒的理由是格式，不是内容），才换成包好的写法重发一次；官方直连那条路从不包。这个兜底本机还没用真密钥实测过——两把钥匙本机都没有。
 
-**Where a key comes from.** The fields above hold names, not keys; DSH resolves the name,
-in a fixed order: the process environment as inherited at startup, then the `refs:` section
-of its own credential file `~/.dsh/.credentials.yaml`, then a `.env` in the working
-directory, then `~/.dsh/.env`. The name is the variable name, with no prefix.
+**密钥从哪来。** 上面这些字段存的是名字，不是密钥；密钥由 DSH 按固定顺序去找：先在启动时继承来的环境变量里找，再找它自己的凭据文件 `~/.dsh/.credentials.yaml` 的 `refs:` 一节，然后是启动目录下的 `.env`，最后是 `~/.dsh/.env`。名字就是原样的变量名，不加任何前缀。
 
-The shortest route is the plugin's own page (the 密钥 row in each block): it writes that
-credential file for you, takes effect immediately, and needs no knowledge of where the file
-is. The other two routes still work — set a same-named environment variable in the same
-terminal before starting `dsh web`, or add one line under `refs:` in `.credentials.yaml`,
-which DSH reloads by itself. A `.env` works too, but it may not define any name beginning
-with `DSH_`, which makes DSH refuse to start.
+最省事的一条是在插件自己的设置页里填（见下面「插件设置页」一节）：它写的就是那个凭据文件，存完立刻生效、不用重启，也不必知道文件在哪。另外两条路也还在：启动 `dsh web` 之前、在同一个终端里设一个同名环境变量；或者直接往 `.credentials.yaml` 的 `refs:` 下面加一行，DSH 会自己重读。`.env` 也能用，但里面不许出现以 `DSH_` 开头的名字，否则 DSH 启动直接报错。
 
-One layer the page cannot change: **the environment inherited at startup wins, and is read
-once, at that moment.** When a name's value comes from there, the page marks that row
-「这一页改不了它」 and offers no input at all, saying why. That refusal is deliberate: a write
-that appeared to succeed while resolution kept returning the old environment value would be
-worse than an honest "this one is out of my reach".
+有一层是设置页也改不动的：**启动时继承的环境变量最优先，而且只在启动那一刻读一次**。所以某个名字的值如果是环境变量给的，设置页会把它标成「这一页改不了它」，连输入框都不给，并说明该怎么办。这是刻意的——悄悄让写入看起来成功了、实际却一直用环境变量那个旧值，比直接说改不了更糟。
 
-## The plugin's page in DSH settings
+## 插件设置页（设置 → Jev 浏览器）
 
-Open **Settings → Jev 浏览器**. The page is four blocks — **浏览器**, **决策服务**,
-**文本模型**, **任务** — and each one is laid out the same way: a line saying how that part
-stands right now, then the controls that change it. Those state lines come from a real
-round trip rather than a guess: "connected" means a debugging endpoint answered *and* a
-snapshot came back from an actual tab, and "missing a key" sits directly above the box that
-fixes it. The page never sends you to another part of the page to fix what it just reported.
+打开**设置 → Jev 浏览器**。这一页分四块：**浏览器**、**决策服务**、**文本模型**、**任务**。四块的排法是同一套：先一行「现在」说这块目前怎么样，紧接着就是改它的地方。那一行是真跑出来的，不是猜的——「连上了」意味着调试端口有回应、而且真的在一个标签页里走了一遍快照；「缺密钥」就贴在填密钥的框上面。这一页不会让你跑到别处去修它刚报出来的问题。
 
-The browser block carries one more thing: a 「用哪个浏览器」 dropdown (Chrome / Edge) and a
-「启动并连接」 button. Press it and the plugin starts that browser and connects, writing the
-result straight into this page. It saves the block first — that block only, so nothing
-half-typed in another block is committed by it. When the executable cannot be found it lists
-where it looked; open 高级设置 and fill in **浏览器程序** for a portable copy kept elsewhere. Below those sits one
-more button, 「打开交互式检查器」, which takes you straight to the page described above; it builds
-the address from wherever you are reading this, so it is right on any port.
+**浏览器**那块除了一行「现在」，还有一个「用哪个浏览器」下拉（Chrome / Edge）和一个「启动并连接」按钮：选好按一下，插件就把那个浏览器起起来并连上，结果当场写进这一页。按它会先把你在这个块里的改动存下来再启动——只写这一块，别的块没保存的改动不会被顺手带走。找不到程序时它会列出找过哪些位置，装好再按一次就行；便携版那种装在别处的，点开「高级设置」把**浏览器程序**填成完整路径。这一块里选的那个浏览器，任务自己起的时候用的也是它——没有浏览器连着时，任务按这里的选择起一个，不必先来按这个按钮。下面还有一个「打开交互式检查器」按钮，一按就跳到上面说的那个页面；地址是按你此刻打开这一页的地址现拼的，所以换端口、换主机都对。
 
-Two things it can do that the tool itself cannot report. It says whether each credential
-name resolves — never what the value is. And 测一次决策服务 sends one real decision
-question, which is the only way to prove that the address, the model name and the key all
-work together; that one spends a call, so it runs only when you press it.
+有两件事是工具本身报不出来、只在这一页做的：它说明每个凭据名能不能解析出来（但从不显示值），以及「测一次决策服务」会真发一次提问——这是唯一能同时验证「地址、模型名、密钥」三样都对的法子，要花掉一次很小的调用，所以只在你自己按下按钮时才发。
 
-Configuration is edited in the same blocks. Saves go through DSH's own config service, so
-the validation and the "someone else just changed this" check are the harness's, not ours;
-the change lands in the profile's patch layer as an id-targeted override. The 决策服务 and
-文本模型 blocks each carry their own 保存: pressing one writes that block's own fields, the
-overrides it keeps in 高级设置 included, and leaves the other block's unsaved edits alone.
-The button at the bottom is called 保存全部改动 and writes every change on the page at once.
-Either way the configuration goes first and the pasted keys after. That order is not
-cosmetic: a credential name you have just typed into a field becomes storable only once the
-configuration naming it is saved, so one press can switch a name *and* give it a value.
+改配置也在这四块里。保存走的是 DSH 自己的配置服务，校验、以及「有人刚改过」的判定都由 DSH 负责；改动会按 id 写进这个 profile 的补丁层。**决策服务**和**文本模型**这两块各自带一个「保存」：按其中一块，只写这一块的改动（连它在「高级设置」里改过的覆盖项），另一块还没保存的改动不会被顺手带走；页面最下面那个按钮是「保存全部改动」，一次把页面上所有改动都写下去。两块自己的「保存」在这一块没有改动时是按不动的，旁边那行小字会说这一块有几处改动没保存。不管按哪一个，都是先写配置、再写你粘的密钥——这个顺序不是讲究：你在「密钥名」里新填的名字，要等配置存好才被允许写值，所以按一次「保存」就能把「换个名字 + 给它存上新值」一起做完。
 
-The provider is a dropdown, and the model box right under it may stay empty: the grey
-placeholder then shows what that door will use, so switching providers needs no copying and
-leaves nothing behind. The model is worth seeing next to its provider, which is why it sits in
-the block; the address and the credential name are the overrides you touch once, and they wait
-behind the 高级设置 disclosure at the bottom.
+「决策服务」那一块的**供应商**是个下拉，两家任选。它下面**模型**留空时，灰字里显示的就是这家会用掉的值，切换供应商不用手抄、也不会把上一家的值剩在那里；**地址**和**密钥名**也是这个规矩，只是它们极少动一次，收在最下面的「高级设置」里。
 
-The 文本模型 block looks the same, with its dropdown split into two labelled groups:
-「DSH 内置（由 DSH 管理地址和密钥）」 lists the models already configured in DSH, and
-「插件预设（本插件直连）」 lists the presets the plugin brings; the option texts are the
-suppliers' own names, with no prefix. One more grey line under the dropdown describes the
-chosen supplier — where its address comes from, where to apply for its key; picking DSH
-built-in draws no such line, because the key row below already says DSH owns both. With the
-model left empty the route's own
-default is used, and the candidate list in that box can be opened to pick one or typed
-over. Picking a preset brings its address, model and credential name along with it, and the
-paste box is drawn underneath as usual; picking DSH built-in replaces that key row with a
-line saying DSH keeps it itself and draws no paste box — that route's address and key both
-live in DSH, out of this page's reach.
+「文本模型」那块长得一样：**供应商**下拉分两组——上面一组「DSH 内置（由 DSH 管理地址和密钥）」里是 DSH 已经配好的模型，下面一组「插件预设（本插件直连）」里是插件自带的预设；两组里的选项名就是那家自己的名字，不带前缀。下拉下面还会多一行灰字，说这一家自己的事（地址在哪、钥匙去哪申请）；选 DSH 内置时不再重复这一句，因为下面密钥那一行已经说了。**模型**那一格的候选清单不再只有插件写死的几个名字：这一页会拿着这条路自己的地址和密钥去问供应商「你现在有哪些模型」，取回来的清单直接变成候选，并在下面写出取回多少个；取不到就在那一行写明原因（钥匙不对、地址不通、供应商没回话），候选退回插件自带的那几个。这一问只读、不改任何东西，密钥只在插件这一侧用掉，页面只拿到模型名；想再问一次，按那一块动作行里的「获取模型列表」。**模型**留空就用这条路的默认模型，框里的清单可以点开挑、也可以自己填。选预设时，那一家会把地址、模型、凭据名一起带过来，下面照旧画粘贴框；选 DSH 内置时，密钥那一行换成一句「由 DSH 自己管」，不画粘贴框——那条路的地址和钥匙都在 DSH 里，这一页无从插手，模型清单也由 DSH 给，不再另问。
 
-The candidates in the 模型 box are no longer only the handful of names this plugin writes down:
-the page asks the chosen supplier which models it serves right now, using that route's own address
-and the key this plugin holds, and the answer becomes the candidate list with its count written
-underneath. A read that fails says why on that line — a refused key, an unreachable address, a
-supplier that did not answer — and the built-in names come back as the candidates. The request
-changes nothing, the key is used on the host side and never reaches the page, and 获取模型列表 in
-that block's action row asks again. A DSH built-in route is not asked: DSH already answers that
-roster, and the address and key behind it are DSH's business.
+那一块的动作行里还有两个按钮。**测试连接**是拿这一块现在填的路线，真发一次最小的请求（让它回一个 JSON），把地址、模型、密钥三样一起验掉：成了会在这一块下面多一行「刚测过 · 正常」，没成则把那句话原样显示出来——密钥不对、模型不肯回 JSON、额度不够，说法各不相同。它要花你一次调用，所以只在按的时候发生；它测的是框里现在填的东西，不是已保存的，但**密钥用的是已存下来的那份**，所以新粘的密钥要先按「保存」存进去，再按这个按钮。**获取模型列表**只读不改，问的是这一家的模型清单本身。走「DSH 内置」那条路时它照样在，只是不用联网——直接报出 DSH 给的那份清单（就是「模型」那一格能点开的候选）。按下去是**真的重新取一次**（走「DSH 内置」时由后台现场向 DSH 再问一遍，走插件直连时去问那家供应商）。走 DSH 内置时这一问只在本机、几十毫秒就有答案，所以按钮上的「正在获取…」**至少保留 1.2 秒**再恢复（答得慢就等它答完）——不让那一下快得看不见。取完**不会有任何文字提示**，清单本身就是答案；只有**取不到**时下面才会留一行写明原因。**模型**那一栏在清单完整时是真正的下拉框（点开就能看到全部可选模型，走 DSH 内置时是 DSH 报的那份，走插件直连时是那家供应商的真实清单）；只有清单不完整、退回插件自带的那几个名字时，它才留成可以自己填的文本框。取回几个、清单是谁给的这类话不再单独占一行，只有**取不到**时才在下面写出原因。
 
-That block's action row carries two more buttons. 测试连接 sends one real, minimal request — the
-same one-key JSON a field asks for — through the route the boxes currently name, which is the only
-way to know its address, model and key work together: a success adds a 刚测过 · 正常 line to the
-block, and a failure shows the sentence it got instead, so a refused key, a model that will not
-answer in JSON and an exhausted budget each read differently. It spends one call, so it happens on
-a press and never on its own, and it tests what the boxes hold rather than what is saved — but the
-**key** comes from the credential store, so a freshly pasted key needs 保存 first. 获取模型列表
-changes nothing: it only asks that supplier what it serves. On a DSH built-in route the same button
-is still there and needs no network: it reports the roster DSH already gave. Pressing it is a real re-read — on a DSH route the host asks DSH again for what that route serves now,
-on a preset it asks the supplier. A DSH route answers locally in tens of milliseconds, so the button
-keeps saying 正在获取… for at least 1.2 s (a slower answer is simply awaited) — a state nobody can read
-is no feedback, and the eye is on the pointer when it clicks. When it succeeds it says nothing else, because the list is the answer. Only a failure keeps a line, with the reason. The 模型 box itself is a
-real pick list whenever the list is complete — its supplier's own answer, or DSH's roster — so one
-click shows every choice; it stays a text box only when the list is short and unverified, where
-typing a name nobody listed is what matters. How many models came back is not a line of its own: it
-is said only when the list could not be read at all.
+每个要用密钥的服务下面跟着一行**密钥**。那行字先报这个名字现在的状态（还没有值 / 已配置，来自哪 / 这一页改不了它），下面就是粘贴的地方。粘进去点「保存」，值就写进 DSH 的凭据文件，下一次任务立刻用它，不用重启；「清除」是把这一项从那个文件里删掉。存过之后这一页只会显示「已配置」和它来自哪里，值本身不会再显示出来——DSH 的凭据接口只回答「有没有、来自哪、能不能写」这三样，从来不把值交给页面，所以这一页想知道值也是拿不到的。名字的值来自启动环境变量时，这里连输入框都不给，并把原因写在那行字里。
 
-Every service that needs a key has a 密钥 row under it. Its first line reports the state of
-that name — "no value yet", "configured, from DSH's credential file", or "out of reach from
-this page" — and the paste box follows it. Paste a value, press 保存 and it is written into
-DSH's credential file, used by the next task with no restart; 清除 removes the entry from
-that file. Afterwards the page shows only "configured" and where the value comes from —
-DSH's credential interface answers whether a name is set, which layer won and whether it is
-writable, and never hands the value to any page, so this page cannot show it even if it
-wanted to. When the value comes from the launching environment there is no box at all, and
-the line says so.
-
-The page no longer spells out where the key file lives or what it does not protect against.
-The path shows up where it matters: when a name is shadowed by the launching environment,
-that row names the file and offers the two ways out. The rest belongs here rather than on
-the page: the file is open to your own user account only, and DSH does not hand its path to
-the model — but an AI's tool processes run as the same user, so they can read it. DSH's own
-documentation puts it more gently than we do: it is discretion, not a boundary. Guarding
-against a local AI needs the operating system's keychain, which does not exist yet.
+密钥写在哪儿、这一层挡不住什么，这一页不再单独说一段：文件名出现在该出现的地方——某个名字被启动时的环境变量遮住时，那一行的说明会直接点名那个文件，并给出「清掉变量」和「换个名字」两条出路。至于「同用户的 AI 工具进程读得到它」这条实情，记在这里：文件只对你自己这个用户开放，DSH 也不把它的路径交给模型，但 AI 的工具进程和你用的是同一个用户，它要去读是读得到的；DSH 官方文档把这一条写得比我委婉——「靠的是不主动去读，不是一道边界」。真要防住本机上的 AI，得等操作系统的钥匙串方案。
 
 ## Development
 
 ```sh
 pnpm install
 pnpm run typecheck
-pnpm test          # 168 unit tests across 15 files, no key and no network needed
+pnpm test          # 168 个单测（15 个文件），不需要密钥、不联网
 pnpm run build
 ```
 
-The browser layer has 14 integration tests of its own, skipped by default and run only
-against a real browser:
+浏览器那一层另有 14 个集成测试，默认跳过，要真浏览器才跑：
 
 ```sh
 JEV_BROWSER=1 pnpm exec vitest run tests/browser.integration.test.ts
 ```
 
-On Windows that is `$env:JEV_BROWSER='1'; pnpm exec vitest run
-tests/browser.integration.test.ts`. It connects to port 9222 by
-default, or to whatever `JEV_CDP_URL` names.
+Windows 上写 `$env:JEV_BROWSER='1'; pnpm exec vitest run tests/browser.integration.test.ts`。它默认连 9222，也可以用 `JEV_CDP_URL` 指定别的地址。
 
-You can also mount it without packaging: `dsh web --patch ./scratch/cordis.yml`, which
-already points at this repository's built `lib/index.mjs`.
+不想打包也能挂上去试：`dsh web --patch ./scratch/cordis.yml`，里面已指向本仓库构建出来的 `lib/index.mjs`。
 
-What has been verified so far: 168 unit tests pass, across 15 files; the 14 browser
-integration tests pass, run here against Edge (the earlier 11 ran here against Chrome
-153.0.8010.53 and Edge 154.0.4258.37, all green both times); and a
-`pnpm pack` tarball installs and loads in a clean throwaway profile. The page's key section
-was exercised against a throwaway instance in sixteen checks: store, the row flipping to
-"comes from the credential file", the value still configured after a process restart, and
-清除 returning the name to unconfigured; a name shadowed by the launch environment refuses
-the write and says why; a name outside the page's list (403), an empty value, and a request
-without the token are each refused; and across eight response bodies the value never
-appeared once. The regrouped page was then walked through on a throwaway instance with the
-packed tarball installed: one 保存 changes configuration and stores a key at the same time,
-and both take effect immediately; a credential name typed into the form is allowed to store
-a value in that same save; 清除 removes the entry from the file; and a name supplied by the
-environment shows its state with no input box. Then 0.2.0-rc.1 and the desktop app were
-each walked through too: the plugin clears the 0.2.0-rc.1 compatibility gate on the
-strength of that `>=0.1.7-rc.2 <0.3.0-0` declaration (no `disabling profile plugin`
-line in `--dump-config`); its index injections are still rebuilt per request there, so
-the token the page receives is the one the tool's route accepts, and a request without
-it is still refused with 403; the desktop install went through the app's own 添加插件
-with the tarball's absolute path, and after an application restart the boot payload
-contains `global/__JEV_ULTRAFAST_TOKEN__` and the page reports live state with no token
-error; and editing 调试端口 on the desktop and saving writes that row into the profile's
-patch layer, clearing it writes the cleared value, and the page stays usable across both
-saves — which is what it looks like when a configuration field really is one that needs
-no reload. A `dsh-plugin-dev check` passed at the time,
-but that CLI ships with the plugin-development skill and is not on this machine's PATH
-anymore, so that item was not re-run. 0.2.8 moved the model back into its own block, and that change
-was checked in an instance with the real package installed: the decision model sits under its
-supplier with a placeholder that follows it (TypeSafe shows `jev-latest`, OpenRouter
-`~typesafe/jev-latest`), 高级设置 is left holding six items, and the note line under each
-supplier read correctly in both states — OpenRouter's names its alpha channel and the tilde —
-while picking DSH built-in no longer repeats what the hint above and the key row below already
-say. The same version settled the wording of the 现在 line in the decision block: it now reports
-the saved route, model **and credential name** together — the key box below keeps following the
-draft, because a value has to be pasted before it can be saved, and a sentence mixing the saved
-route with a draft key name described a state that never existed (seen live: with the supplier
-switched but unsaved, the line still read `TypeSafe 官方直连 · jev-latest · 密钥 TYPESAFE_API_KEY
-还没有值。` while the key row had already become `OPENROUTER_API_KEY`). 0.2.9 gave the two
-service blocks their own save buttons and was checked the same way: with one unsaved edit
-typed into each block, pressing the decision block's own 保存 stored that block's change
-alone — the patch layer gained `decisionModel` and no `textModel` — while the text block
-still reported one unsaved change and kept the value in its box. 0.2.12's 「启动并连接」 was
-run for real against the same tarball-installed instance, twice: the dropdown opened on the
-**Edge** stored the time before (so the choice survives a process restart); one press started
-and connected **Chrome** (port 60856 — a random port, because the browser picks it rather
-than 9222 being hard-coded); switching to Edge and pressing again connected **Edge**
-(`Edg/154.0.4258.37`, port 60376) *while Chrome was still running*. That second round is
-where the ordering fix shows: in the first implementation the state line still pointed at
-Chrome, because discovery had not put the chosen browser first. Screenshot:
-`scratch/review-0212-browser-block.png`; probe: `scratch/probe-0212c.js`. **No real decision
-call has been made with a real key** — this machine has neither. The stage plan and its acceptance
-criteria live in [`tasks/todo.md`](tasks/todo.md).
-
-**0.2.13 is the first end-to-end run** (2026-09-29, asked for as 「用插件搜 DeepSeek DSH 桌面版的
-下载页」). The browser half works: the tool really opened Bing and read back the page text and 20
-actionable elements. The decision half stopped at **HTTP 401**, and the cause was not in the
-plugin: the machine's two decision credentials (`OPENROUTER_API_KEY` and `TYPESAFE_API_KEY`) are
-**the same 35-character value** (pasted into both fields), and neither service accepts it — sent
-to OpenRouter it answers "Missing Authentication header" (it does not even recognize the shape;
-a well-formed bogus key gets "User not found.", so it is genuinely reading the key), and sent to
-TypeSafe's own endpoint it answers "Cannot authenticate with the server". Two facts came out of
-the same investigation: `openrouter.ai`'s public endpoint answers 200 without a key (so the
-network path is fine) and OpenRouter's alpha channel **does** take a bearer key (so the plugin's
-OpenRouter door is viable — it just needs a real key). The run also exposed a real defect in the
-plugin, fixed in this version: a refusal said only "HTTP 401", which cannot tell "this key is not
-recognized" from "this request is not to the endpoint's taste". The service's own words now ride
-along on one line, cut at 240 characters, with the key itself scrubbed to `***` first — pinned by
-a unit test. Installed into the daily web profile, both artifacts byte-identical to the repo,
-`--dump-config` exit 0.
-
-**0.2.14 follows the tab a click opens** (the same day, later). The 0.2.13 run left a
-revealing scene: three Bing result tabs really were open, while the run reported "the
-page did not change for 3 steps" — every click had worked, the site had opened each
-result in a new tab, and the run was watching only the tab it had attached to. Two
-things changed. First, a step that leaves this tab on the same address while bringing a
-new page into being now moves the run onto that page and says so, so the next decision
-sees what the click did; a step where this tab's address *did* move stays put, and the
-step line reports the new window instead of pretending nothing happened. The address is
-the test rather than the whole page, because a search result turning "visited" redraws
-the page it sits on — under the fingerprint rule this plugin first used, the live run
-refused to follow on Bing for exactly that reason. Second, a run now closes only the tab
-it created: the page it moved onto stays open, so what the task went looking for is still
-there when it finishes. Seven new tests (three in the loop, two for the one line the user
-reads, one real-browser integration test that clicks a `target="_blank"` link and asserts
-the second page was read), plus one live run against the real decision service — Bing →
-冯时 → the 百度百科 article: one step, followed, final page the article itself, where the
-same goal took four steps and ended on Baike's own search page before the fix. Installed
-into the daily web profile, both artifacts byte-identical to the repo, `--dump-config`
-exit 0.
-
-**0.2.15 has a task start the browser itself** (same day, later). The question was whether
-the main model, calling this plugin from the conversation page, could start and connect
-rather than sending the reader to the settings page first. It can: starting a browser is
-entirely mechanical here (find the executable, hand it a profile directory, let it pick a
-port, wait for the port to answer), and 0.2.12's button runs that same code. "A model has
-no hands" meant a model cannot start a process by itself — a tool call is the plugin's own
-hand, which is why the boundary moves rather than breaks. So a run now looks for a browser
-first, and when nothing is reachable *and* nothing was pinned it starts the browser the
-settings page names — same executable lookup, same profile directory, same port-file trick
-— and says so in its result. Two edges are kept deliberately. A pinned `cdpUrl` or
-`userDataDir` is an instruction rather than a hint: when one of those is set and dead, the
-run reports that instead of starting a different browser, because starting a browser nobody
-asked for is a worse answer than saying the address does not answer. And the model never
-names an executable or a port: the executable comes from the settings, the port from the
-browser itself. Verified: 7 new unit tests (`ensureBrowser` pinning when a browser is
-started, which one, and when nothing is; `launchNote` pinning the one line the user reads),
-126 passing in all; two live runs — one with the plugin's profile directory pointed at a
-throwaway directory so that nothing was reachable, which really started Edge
-(`Edg/154.0.4258.37`) and connected to it, after which that instance was asked to quit so
-no window stayed behind; and one with a browser already running, which started nothing at
-all. Installed into the daily web profile, both artifacts byte-identical, `--dump-config`
-exit 0.
-
-**Known limits, told plainly**: the desktop profile is still on 0.2.1 and the daily `dsh web`
-on 3080 still runs the old artifacts until it is restarted, so updating the desktop app means
-installing the tarball there again. The inspector page itself only picks up a new build after
-one restart of `dsh web`, and its own click surface has not been clicked through in a real
-browser yet — what a real browser has checked is the *semantics* of pause / step / stop (a
-pause really does hold the click back, releasing really does click, stopping for good really
-does not click). "Recording" means the frames replayed at the pace they were taken; no video
-file is produced. The trace lands in the system temporary directory, contains page text, and
-nothing cleans it up automatically.
+目前的验证情况：168 个单测通过（15 个文件）；14 个浏览器集成测试通过，本机在 Edge 上全过（更早那 11 条是在 Chrome 153.0.8010.53 与 Edge 154.0.4258.37 上各跑的一次全绿）；`pnpm pack` 出来的包装进一个干净的临时 profile 后能正常加载。设置页的密钥那一节在一个一次性实例里实测过十六项：填值、保存、状态当场变成「来自凭据文件」、重启进程后仍在、清除后回到未配置；被启动环境遮住的名字拒写并说明原因；清单外的名字（403）、空值、没带令牌的请求各被拒；全程八个响应体里一次都没有出现过那个值。改版后的页面另在一个装成正式包的一次性实例里走了一遍：一次「保存」同时改配置和存密钥、当场生效；新填的「密钥名」在同一次保存里就被允许写值；「清除」后那一项从文件里消失；被环境变量占住的名字只显示状态、不给输入框。0.2.0-rc.1 与桌面端又各走了一遍：插件凭 `>=0.1.7-rc.2 <0.3.0-0` 这行声明通过了 0.2.0-rc.1 的版本门（`--dump-config` 里没有「disabling profile plugin」这类行）；首页注入清单在 0.2.0 上仍是每次请求现渲染，页面拿到的令牌与工具路由认的令牌是同一个，不带令牌照旧 403；桌面端是在应用自己的「添加插件」里装进去的（填 tarball 绝对路径），重启应用后启动负载里出现 `global/__JEV_ULTRAFAST_TOKEN__`，插件页面正常出状态、不再报令牌错；在桌面端改一次「调试端口」并保存，profile 的补丁层里如实多出那一行，清空后再存也照做，且保存前后页面一直可用（说明配置字段确实是「改后不用重载」的那种）。当时那一项 `dsh-plugin-dev check` 是通的，但这个 CLI 随插件开发技能分发、现在不在本机 PATH 上，所以这一项没有重跑。0.2.8 做到的另一样也在这台实例上验过——决策那块「现在」那行的口径统一到已存状态：那行报的路线、模型、密钥名三样全来自已存配置，它下面的密钥框仍跟着草稿走（那行写着「现在」，混一半草稿会读成一个从来没存在过的状态；文本那一半一直就是这么做的）。实测：草稿把供应商切到 OpenRouter 而还没保存时，那行仍是「TypeSafe 官方直连 · jev-latest · 密钥 TYPESAFE_API_KEY 还没有值」，密钥行已换成 `OPENROUTER_API_KEY：还没有值。`、模型框灰字换成 `~typesafe/jev-latest`，切回去就复原。0.2.8 把模型放回各自的块里，也在装成正式包的实例里看过：决策服务的模型就在供应商下面，灰字跟着走（TypeSafe 是 `jev-latest`，OpenRouter 是 `~typesafe/jev-latest`），「高级设置」只剩 6 项；每个供应商下面那行说明在两种选择下都读对了——选 OpenRouter 会说它的 alpha 通道和模型名前那个波浪号，选 TypeSafe 会说密钥去哪申请；选 DSH 内置那条路时，这句话不再和上面提示、下面密钥行重复。0.2.9 给两块各配了自己的「保存」，也在同一台实例上验过：两块里各打一处没保存的改动，按决策块自己那个「保存」，只有决策块落的盘——该 profile 的补丁层里多出 `decisionModel` 那一行、没有 `textModel`——而文本块下面仍写着「这一块有 1 处改动还没保存。」、框里的值也还在。0.2.12 加的「启动并连接」在同一台装成正式包的实例里真跑过两轮：页面打开时下拉里已经是**上一次存下的 Edge**（说明这个选择确实存下去了、跨进程重启还在）；按一次，起来并连上的是 **Chrome**（端口 60856 这种随机值——端口由浏览器自己挑，不是写死的 9222）；再切成 Edge 按一次，**在 Chrome 仍开着的情况下**连上的是 **Edge**（`Edg/154.0.4258.37`，端口 60376）。第二轮正是那条顺序改动的现场：第一版实现里「现在」那行还指着 Chrome，因为发现顺序没把选中的那台排到前面。截图见 `scratch/review-0212-browser-block.png`，探针 `scratch/probe-0212c.js`。**0.2.13：第一次真跑端到端**（2026-09-29，你要求「用插件搜 DeepSeek DSH 桌面版的下载页」）——浏览器那一半是通的：工具真的打开了必应，读回了页面正文和 20 个可操作元素；卡在决策那一半，服务端回 **HTTP 401**。查下来根因不在插件：本机两把决策钥匙（`OPENROUTER_API_KEY` 与 `TYPESAFE_API_KEY`）是**同一个 35 位值**（填进了两个框），两家都不认它——用这把钥匙打 OpenRouter，它回「Missing Authentication header」（连格式都不认；换成一把格式正确的假钥匙它会说「User not found.」，说明它确实在读钥匙）；打 TypeSafe 官方直连回「Cannot authenticate with the server」。顺带确认两件事实：`openrouter.ai` 的公开端点在不去钥匙时回 200（网络通道没问题），OpenRouter 的 alpha 通道**认 Bearer 钥匙**（所以插件的 OpenRouter 那条路本身可行，只缺一把真钥匙）。这次还暴露出插件自身的一个真缺陷并当版修掉：被拒时只报「HTTP 401」，看不出是「钥匙不认」还是「请求不合口味」——现在会把服务端原话折成一行附在后面（超过 240 字截断，先把钥匙本身抹成 `***`，这条由单测钉住）。装进日常 web profile 后两个产物与仓库逐字节相同、`--dump-config` exit 0。**0.2.14：点开的新标签页会跟过去**（同日晚些）。0.2.13 那次留下的现场很说明问题：三个必应结果标签页真的开着，运行却报「连续 3 步页面没有任何变化」——点击全都成功，是站点把结果开在**新标签页**里，而插件只盯着自己连上的那一页。这一版改了两处。其一，某一步让本标签页的**地址没动**、却多出一个新页面时，运行就搬到那一页并如实报出来，下一次决策因此看得到这一步的结果；地址动了的那种情形原地不动，步骤里写明那次点击发生在别处，新开的窗口仍会被报出来。判据取**地址**而不是整页指纹，是因为搜索结果变「已访问」会重画它所在的那一页——第一版按指纹判断时，必应这一步会被压住不跟，这正是第一次活体跑才暴露出来的。其二，运行结束时只关掉插件自己开的那个标签页，跟过去的那一页留着，任务要找的东西因此还在浏览器里给你看。新增七个测试：循环里三条、用户读到的那一行两条、真浏览器一条（点一个 `target="_blank"` 链接，断言真的读到了第二个页面）；另在真决策服务上跑了一次活体（必应 → 冯时 → 百度百科条目：一步、跟过去、最终页就是那篇条目；改动前同一个目标要 4 步，且落在百度百科自己的搜索页上）。**0.2.15：任务自己会起浏览器**（同日再晚些）。他的问题是：「插件里一开始没有填调试端口，需要用户点启动并连接……能不能让对话页面的主模型调用该插件时直接启动连接」。能——启动本来就是纯机械的一段（找程序、给数据目录、让浏览器自己挑端口、等端口回话），0.2.12 那个按钮和这次走的是同一段代码；「模型没有手」说的是模型自己起不了进程，而工具就是插件的手。于是这一版把这条界线改掉：任务开始前先找浏览器，**一个都找不到**、而且配置里没有钉死地址（`cdpUrl`）或数据目录（`userDataDir`）时，就按设置页选的那台起一个并连上，结果里如实写一行「本来没有可连的浏览器，已按设置启动 Edge 并连上」。**收的那道边**：钉过地址或数据目录的不自动起——那是用户的指令而不是线索，起一台别的浏览器等于答非所问，这种情况照旧报「没有找到可用的浏览器调试端口」；起的时候用设置页里那个选择，模型既看不到也传不进可执行文件路径或端口。按钮保留，它的用处变成「需要登录的站点，先按它开窗口登一次」。验证：单测 119 → **126**（新增 7 条：`ensureBrowser` 5 条守「什么时候该起、起哪一台、钉过的不起」，`launchNote` 2 条守那一行话），真浏览器集成 10 条不变；另做了两次活体——把插件的数据目录指到临时目录来制造「什么都连不上」，它真的起了 Edge（`Edg/154.0.4258.37`、临时数据目录）并连上，随后我让那台自己退出、桌面不留窗口；已有浏览器在跑时走的是另一条路，一台也不多起。**已知限制，照实说**：桌面端 profile 仍停在 0.2.1，日常 3080 那个 `dsh web` 还跑着旧产物（重启才生效），所以要更新桌面端就得在桌面应用里再装一次。检查器页面本身也要等用户重启一次 `dsh web` 才会用上新产物；它自己的页面交互（点按钮那一层）**还没有在真浏览器里点过**——被真浏览器验过的是「暂停 / 单步 / 停止」的语义（停住时确实没点、放开后确实点了、停掉后确实没点）。检查器里的「录屏」是**逐帧画面按真实节奏回放**，不生成视频文件。留痕落在系统临时目录、包含页面正文，目前**不做自动清理**。阶段计划与验收标准在 [`tasks/todo.md`](tasks/todo.md)。
 
 ## License
 
-MIT. Portions are derived from jev-ultrafast (MIT, © 2026 Browser Use). The derived
-files and their provenance are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the upstream notice is reproduced in
-[LICENSE](LICENSE).
+MIT。部分内容移植自 jev-ultrafast（MIT，© 2026 Browser Use）；具体移植了哪些文件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，上游版权声明抄录在 [LICENSE](LICENSE)。

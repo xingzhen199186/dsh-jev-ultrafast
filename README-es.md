@@ -1,6 +1,6 @@
 # dsh-jev-ultrafast
 
-[English](README.md) | [中文](README-zh.md) | Español | [Português](README-pt.md) | [हिन्दी](README-hi.md)
+[English](README-en.md) | [中文](README.md) | Español | [Português](README-pt.md) | [हिन्दी](README-hi.md)
 
 > **Un objetivo de entrada, una llamada de herramienta por paso.** Dale a DeepSeek Harness
 > un objetivo en lenguaje natural y deja que **Jev** (TypeSafe) conduzca el navegador. La

@@ -1,6 +1,6 @@
 # dsh-jev-ultrafast
 
-English | [中文](README-zh.md) | [Español](README-es.md) | [Português](README-pt.md) | **हिन्दी**
+[English](README-en.md) | [中文](README.md) | [Español](README-es.md) | [Português](README-pt.md) | **हिन्दी**
 
 > **एक लक्ष्य अंदर, हर चरण पर एक टूल कॉल।** DeepSeek Harness को एक प्राकृतिक-भाषा लक्ष्य दें, और **Jev** (TypeSafe) ब्राउज़र चलाए।
 > पेज को नियंत्रणों की एक क्रमांकित तालिका में बदला जाता है, और एक ही अनुरोध तय करता है
