@@ -54,7 +54,7 @@ export async function closeBrowser(kind: BrowserKind, options: CloseOptions): Pr
   const platform = options.platform ?? process.platform
   const locked = options.locked ?? storeIsLocked
   const run = options.run ?? ((file: string, args: string[]) => execFileAsync(file, args))
-  const waitMs = options.waitMs ?? 6000
+  const waitMs = options.waitMs ?? 10_000
   const store = join(options.profileDir, 'Default', 'Network', 'Cookies')
 
   if (platform !== 'win32') {
