@@ -7,7 +7,7 @@
 [![stars](https://img.shields.io/github/stars/xingzhen199186/dsh-jev-ultrafast?label=%E2%98%85&style=flat)](https://github.com/xingzhen199186/dsh-jev-ultrafast/stargazers)
 ![dsh plugin](https://img.shields.io/badge/dsh-plugin-000000?style=flat)
 
-> **一句话进去，一步一次调用。** 给 DeepSeek Harness 一句自然语言目标，浏览器里的事交给 TypeSafe 的 Jev 去决策：页面先压成一张带编号的控件表，一次请求同时定「做什么操作」和「对哪个元素」。
+> 给 DeepSeek Harness 一句自然语言目标，浏览器里的事交给 TypeSafe 的 Jev 去决策：页面先压成一张带编号的控件表，一次请求同时定「做什么操作」和「对哪个元素」。
 
 **它到底省下什么。** 常规做法是模型看页面、想一步、点一下，每个点击占一轮往返。这里把「看和想」交给决策服务，主模型只出目标、最后读结果——多步任务在对话里只花一次工具调用。
 
