@@ -1,12 +1,18 @@
 /**
  * Close the reader's own browser, so the cookie store it holds exclusively can be read.
  *
- * The polite way first. On Windows, `taskkill /PID` without `/F` asks the window to close,
- * which is what lets Edge save its session and offer the tabs back afterwards; a forced kill
- * would not. A browser that keeps a background process alive anyway — Edge's startup boost
- * does exactly that — still holds the cookie store, so the same processes get a second and
- * forceful pass, but only if the store is still locked and only for the profile being
- * adopted, so no other browser window is touched.
+ * Finding that browser is the whole difficulty, and the first attempt here got it wrong. The
+ * profile directory looks like the obvious handle to match on, but a browser started on its
+ * *default* profile says nothing about where its data is: listing the processes on the machine
+ * this was written against shows the plugin's own windows naming their directory and the
+ * reader's windows naming none at all. What does separate the two is exactly that difference,
+ * so the rule runs the other way — every window process of that browser, except this plugin's.
+ *
+ * The polite way comes first. On Windows, `taskkill /PID` without `/F` asks the window to
+ * close, which is what lets Edge save its session and offer the tabs back afterwards; a forced
+ * kill would not. A browser that keeps a background process alive anyway — Edge's startup
+ * boost does exactly that — still holds the cookie store, so what is left gets a second and
+ * forceful pass.
  *
  * Whether this worked is not "did something get killed" but "can the store be read now". The
  * call reports the store, and the caller copies only when it says yes.
@@ -25,15 +31,44 @@ export function browserProcessName(kind: BrowserKind, platform: NodeJS.Platform 
   return kind === 'edge' ? 'msedge' : 'chrome'
 }
 
+/**
+ * The script that finds that browser's window processes.
+ *
+ * Three details are deliberate, and each one comes from something that went wrong once.
+ *
+ * It reads its two inputs from environment variables instead of having them pasted into the
+ * script text, because a command string carrying quotes does not survive the trip through a
+ * Windows command line — one attempt at that arrived as a syntax error instead of a list.
+ *
+ * It filters inside PowerShell, because echoing whole command lines back through a pipe means
+ * PowerShell's own output formatter rewraps them at its own width, and a rewrapped line no
+ * longer contains the path it was about.
+ *
+ * And it prints nothing but pids, so there is nothing long to wrap in the first place.
+ */
+export const LIST_WINDOW_PROCESSES = [
+  "$filter = 'Name=' + [char]39 + $env:JEV_PROCESS + [char]39",
+  '$own = $env:JEV_OWN',
+  'Get-CimInstance Win32_Process -Filter $filter |',
+  '  Where-Object {',
+  '    $c = $_.CommandLine',
+  "    $c -ne $null -and $c.IndexOf('--type=', [System.StringComparison]::Ordinal) -lt 0 -and" +
+    " ($own -eq $null -or $own -eq '' -or $c.IndexOf($own, [System.StringComparison]::OrdinalIgnoreCase) -lt 0)",
+  '  } |',
+  '  ForEach-Object { [Console]::Out.WriteLine($_.ProcessId) }',
+].join('\n')
+
 export interface CloseOptions {
-  /** The profile directory whose processes may be closed; every other profile is left alone. */
+  /** The profile directory whose logins are wanted. */
   profileDir: string
+  /** This plugin's own data root: its browser windows must survive, so they are excluded. */
+  ownRoot?: string
   /** How long to wait for a polite close, and then for a forced one, in milliseconds. */
   waitMs?: number
   /** Injectable for tests: the lock check that decides whether to try once more. */
   locked?: (path: string) => Promise<boolean>
   /** Injectable for tests: running one external command. */
-  run?: (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>
+  run?: (file: string, args: string[], env?: NodeJS.ProcessEnv) => Promise<{ stdout: string; stderr: string }>
   /** Injectable for tests: the platform to pretend to be. */
   platform?: NodeJS.Platform
 }
@@ -53,9 +88,12 @@ export interface CloseReport {
 export async function closeBrowser(kind: BrowserKind, options: CloseOptions): Promise<CloseReport> {
   const platform = options.platform ?? process.platform
   const locked = options.locked ?? storeIsLocked
-  const run = options.run ?? ((file: string, args: string[]) => execFileAsync(file, args))
+  const run =
+    options.run ??
+    ((file: string, args: string[], env?: NodeJS.ProcessEnv) => execFileAsync(file, args, { env }))
   const waitMs = options.waitMs ?? 10_000
   const store = join(options.profileDir, 'Default', 'Network', 'Cookies')
+  const name = browserProcessName(kind, platform)
 
   if (platform !== 'win32') {
     return {
@@ -66,22 +104,12 @@ export async function closeBrowser(kind: BrowserKind, options: CloseOptions): Pr
     }
   }
 
-  const name = browserProcessName(kind, platform)
+  const env: NodeJS.ProcessEnv = { ...process.env, JEV_PROCESS: name, JEV_OWN: options.ownRoot ?? '' }
   const list = async (): Promise<number[]> => {
-    const script =
-      `Get-CimInstance Win32_Process -Filter "Name='${name}'" | ` +
-      'ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }'
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script])
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', LIST_WINDOW_PROCESSES], env)
     return stdout
       .split(/\r?\n/)
-      .map((line) => line.split('\t'))
-      .filter(([pid, command]) => {
-        if (!pid || !command) return false
-        // Only the browser process of the profile being adopted. Killing a renderer would just
-        // make the browser start another one, and another profile is none of our business.
-        return command.includes(options.profileDir) && !command.includes('--type=')
-      })
-      .map(([pid]) => Number(pid))
+      .map((line) => Number(line.trim()))
       .filter((pid) => Number.isInteger(pid) && pid > 0)
   }
 
@@ -111,9 +139,7 @@ export async function closeBrowser(kind: BrowserKind, options: CloseOptions): Pr
     forced: left.length,
     note: ok
       ? undefined
-      : first.length + left.length === 0
-        ? `没有找到用着 ${options.profileDir} 的进程，但登录数据还是读不了。`
-        : `${name} 还占着登录数据，没能让它退出。`,
+      : `没能让 ${name} 退出：找到 ${first.length + left.length} 个窗口进程，登录数据仍被占着。`,
   }
 }
 

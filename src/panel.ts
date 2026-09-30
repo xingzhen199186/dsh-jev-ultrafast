@@ -18,7 +18,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { adoptProfile, dailyProfileDir, dropAdoptedProfile, hasAdoptedProfile } from './browser/adopt'
+import { adoptProfile, dailyProfileDir, dropAdoptedProfile, hasAdoptedProfile, pluginRoot } from './browser/adopt'
 import { createAdoptRun, type AdoptRun } from './browser/adopt-run'
 import { closeBrowser } from './browser/close'
 import { discoverBrowser } from './browser/discover'
@@ -122,7 +122,7 @@ export function registerPanel(ctx: Context, config: ConfigShape): void {
         close: async (kind, label) => {
           const dir = dailyProfileDir(kind)
           if (!dir) return { ok: false, note: `没有找到 ${label} 的档案目录，没法自动关它。` }
-          return closeBrowser(kind, { profileDir: dir })
+          return closeBrowser(kind, { profileDir: dir, ownRoot: pluginRoot() })
         },
         adopt: (kind, label) => adoptProfile(kind, { label }),
         startPluginBrowser: async (kind) => {
@@ -247,11 +247,12 @@ async function handle(
       const body = await readJson(req)
       const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
       const host = req.headers.host
-      send(
-        res,
-        200,
-        adoptRun.start({ kind, label: BROWSER_LABELS[kind], page: host ? `http://${host}/` : undefined }),
-      )
+      // Back to the screen they were on, and only within this harness: the page sends its own
+      // address, and anything that is not this origin falls back to the harness home.
+      const asked = typeof body.page === 'string' ? body.page : ''
+      const sameOrigin = host !== undefined && (asked.startsWith(`http://${host}/`) || asked.startsWith(`https://${host}/`))
+      const page = sameOrigin ? asked : host ? `http://${host}/` : undefined
+      send(res, 200, adoptRun.start({ kind, label: BROWSER_LABELS[kind], page }))
       return
     }
     if (path === '/adopt-run/cancel') {

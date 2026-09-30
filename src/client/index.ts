@@ -517,11 +517,14 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
     try {
       const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
       await save('browser')
+      // Where they are right now, so the browser comes back on this very screen instead of the
+      // harness home page. Read through a cast: this client has no DOM types available.
+      const here = (globalThis as { location?: { href?: string } }).location?.href
       setAdoptRun(
         await ask<AdoptRunStatus>('/adopt-run', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ kind }),
+          body: JSON.stringify({ kind, page: here }),
         }),
       )
       for (;;) {
@@ -1028,6 +1031,13 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
               { style: S.actionsHint },
               '会打开一个插件自己的浏览器窗口（端口它自己挑，不用你填）。它和你日常那个互相独立，需要登录的网站就在这个窗口里登录一次，登录会保留。',
             ),
+          )
+        : null,
+      group.id === 'browser'
+        ? createElement(
+            'span',
+            { style: S.actionsHint },
+            `当前浏览器数据：${status?.browser?.adopted ? '从你日常浏览器搬过来的那份' : '插件自己的档案，还没有登录数据'}`,
           )
         : null,
       group.id === 'browser'

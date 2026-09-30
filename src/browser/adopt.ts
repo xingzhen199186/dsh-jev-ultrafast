@@ -18,8 +18,8 @@
  *      copied into a fresh directory, and the cookie read back there.
  *
  * What this cannot do is read the cookie store while that browser is running: it holds the
- * file exclusively. That case comes back as `locked`, and the page asks the reader to close
- * the browser, then carries on by itself.
+ * file exclusively. That case comes back as `locked`; the host then closes that browser, which
+ * is the reader's own, copies the logins over, and puts the browser back where it was.
  */
 import { existsSync } from 'node:fs'
 import { copyFile, cp, mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
@@ -52,6 +52,12 @@ export function dailyProfileDir(
   return candidates.find((dir) => existsSync(dir)) ?? null
 }
 
+/** This plugin's own data root: both its browser profiles and its adopted copies live under it. */
+export function pluginRoot(): string {
+  const home = process.env.DSH_HOME?.trim()
+  return join(home && home.length > 0 ? home : join(homedir(), '.dsh'), 'jev-ultrafast')
+}
+
 /**
  * Where an adopted profile lives.
  *
@@ -60,8 +66,7 @@ export function dailyProfileDir(
  * the first one over the same files.
  */
 export function adoptedProfileDir(kind: BrowserKind): string {
-  const home = process.env.DSH_HOME?.trim()
-  return join(home && home.length > 0 ? home : join(homedir(), '.dsh'), 'jev-ultrafast', 'shared', kind)
+  return join(pluginRoot(), 'shared', kind)
 }
 
 /** Is there an adopted profile for this browser? */
