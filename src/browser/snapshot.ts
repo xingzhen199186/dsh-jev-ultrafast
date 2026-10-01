@@ -10,7 +10,8 @@
  * property, so a future edit to the copy cannot silently break it.
  *
  * It runs as one expression and returns the whole page state: the indexed
- * element table, the visible text, the freshness marker, and the per-node guards.
+ * element table, the visible text, the freshness marker, the per-node guards, and the
+ * count of structures it could not reach into (see `./nested.ts`).
  *
  * The text it returns is deliberately viewport-only: the geometry test in the walker
  * drops every line that is off screen, and 6000 characters is the ceiling. Reading a
@@ -100,6 +101,20 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
       if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
     }
   }
+  // Structures every query above cannot reach into: a visible frame, and an open shadow
+  // root with something in it. Counted here and turned into a sentence in TypeScript
+  // (browser/nested.ts) — this script only reports what it saw. The element count is taken
+  // before the synthetic scroll/wait actions are added, because the question the sentence
+  // answers is whether the page itself offered anything to work with.
+  const frames=[...document.querySelectorAll('iframe')].filter(e => {
+    if (!visible(e)) return false;
+    const r=e.getBoundingClientRect();
+    return r.width>0 && r.height>0 && r.bottom>0 && r.top<innerHeight && r.right>0 && r.left<innerWidth;
+  });
+  let shadow_roots=0, hosts=document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT), host;
+  while ((host=hosts.nextNode())) if (host.shadowRoot && host.shadowRoot.childElementCount>0) { shadow_roots=1; break; }
+  const nested={frames:frames.length,frame_url:frames.map(f=>f.getAttribute('src')).find(s=>!!s)||'',
+    shadow_roots,elements:actions.length};
   const words=[], walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
   const range=document.createRange(); let node,length=0;
   while ((node=walker.nextNode()) && length<6000) {
@@ -124,5 +139,5 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
   if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
   actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions,nested};
 })()`

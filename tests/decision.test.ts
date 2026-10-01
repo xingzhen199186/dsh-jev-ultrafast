@@ -85,6 +85,15 @@ describe('questionnaire', () => {
     expect(JSON.stringify(state)).not.toContain('rect')
     expect(JSON.stringify(state)).not.toContain('"node"')
   })
+
+  it('carries the run\'s one-off sentence into the request, and nothing when there is none', () => {
+    const note = '你上次选的编号在页面里已经找不到了，页面可能自己刷新过，请重新选'
+    const said = buildQuestionnaire(space, { ...context, note }, 'jev-latest').request.state as { note?: string }
+    expect(said.note).toBe(note)
+
+    const quiet = buildQuestionnaire(space, context, 'jev-latest').request.state as { note?: string }
+    expect(quiet.note).toBeUndefined()
+  })
 })
 
 describe('answer validation', () => {

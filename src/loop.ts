@@ -16,6 +16,9 @@
  *  - the budget is bounded twice, once in actions and once in model calls;
  *  - a page a click opened in a new tab is where that step's effect is, so the run
  *    moves onto it and says so, instead of reading "nothing happened";
+ *  - a decision that names an element this observation does not have is not the run's
+ *    failure: the page is observed again and the model is asked again, with one plain
+ *    sentence saying why, and only a run of them stops the run;
  *  - three consecutive steps that left the page unchanged stop the run.
  */
 import type { ActionSpace, ElementEntry } from './decision/action-space'
@@ -27,6 +30,7 @@ import { choose } from './decision/typesafe'
 import { MAX_STEPS } from './prompts'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage } from './browser/session'
+import { nestedNote } from './browser/nested'
 import type { ActResult } from './browser/act'
 import { act } from './browser/act'
 import type { DiscoverOptions } from './browser/discover'
@@ -139,6 +143,17 @@ const REAL_DEPS: TaskDeps = {
   execute: act,
 }
 
+/**
+ * How many decisions in a row may name an element the observation they were given does not
+ * have, before the run gives up. One is the ordinary case — the page redrew between the
+ * snapshot and the answer (a banner, a popup, a countdown) — and looking again is all it
+ * takes; the answer after a fresh observation that still names a missing element is the
+ * first of the two. Two in a row, with a fresh observation in between each time, means the
+ * answer and the page are out of step by construction rather than by a repaint, and every
+ * further round spends another decision out of the run's own budget.
+ */
+const MAX_LOST_TARGETS = 2
+
 export interface TaskResult {
   goal: string
   status: RunStatus
@@ -153,6 +168,11 @@ export interface TaskResult {
   follows: FollowRecord[]
   /** The independent check of the run's own claim, always present and never assumed. */
   verification: Verification
+  /**
+   * Why the page the run stopped on could not be worked further, when it could not — its
+   * content sits in a frame or a shadow root the snapshot cannot reach into. Empty usually.
+   */
+  pageNote: string
   /** Element actions the snapshot dropped because the page offered more than 250. */
   omittedActions: number
   /** The final page's screenshot, base64, and only when the caller asked for screenshots. */
@@ -194,6 +214,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let reason = ''
   // A generated value, reused only when the whole field context is identical.
   let pendingText: { context: FieldContext; text: string; helper: TextResult } | null = null
+  // The sentence the next decision request carries, when there is one: cleared the moment
+  // it has been sent, so an ordinary step is an ordinary step.
+  let hint = ''
+  // Consecutive decisions that named an element their own observation did not have.
+  let lostTargets = 0
 
   try {
     session = await deps.open(options.startUrl, options.browser)
@@ -224,11 +249,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // would spin forever on a page that never settles.
       if (!(await session.fresh(page))) page = await session.observe({ screenshot: screenshots })
       const space = actionSpace(page.actions)
+      // What the service is told about a page the snapshot could only partly see, plus the
+      // one-off sentence the last answer earned. Nothing at all on an ordinary step.
+      const note = [nestedNote(page.nested), hint].filter(Boolean).join(' ')
       const decision = await deps.decide({ ...decisionSource, signal: options.signal }, space, {
         goal: options.goal,
         page,
         history,
+        ...(note ? { note } : {}),
       })
+      hint = ''
       decisions.push({ ...decision, fingerprint: page.fingerprint, elapsed_ms: elapsedMs() })
       emit({
         type: 'decided',
@@ -262,10 +292,23 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       }
       const action = page.actions.find((candidate) => candidate.id === chosen)
       if (!action) {
-        status = 'failed'
-        reason = `决策指向了一个本次观察里不存在的动作：${chosen}`
-        break
+        // The number the decision chose is not in the observation it was given. In practice
+        // that is the page redrawing under the answer — a banner, a popup, a countdown —
+        // and it is the page's doing, not evidence that the task cannot be done: the page is
+        // observed again and the model is asked again, told in one sentence what happened.
+        // Each round costs a decision from the same budget the run already has, so it is
+        // bounded here as well: a run of them is the run's stop, not an extra allowance.
+        lostTargets += 1
+        if (lostTargets > MAX_LOST_TARGETS) {
+          status = 'failed'
+          reason = `页面在你选的元素前后自己刷新了，连续 ${MAX_LOST_TARGETS + 1} 次都没对上，这次先停下`
+          break
+        }
+        hint = '你上次选的编号在页面里已经找不到了，页面可能自己刷新过，请重新选'
+        page = await session.observe({ screenshot: screenshots })
+        continue
       }
+      lostTargets = 0
       if (history.length >= maxSteps) {
         status = 'blocked'
         reason = `达到本次运行的动作上限（${maxSteps} 步），已停止`
@@ -443,6 +486,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     textCalls,
     follows,
     verification,
+    // Read off the page the run actually stopped on, so the sentence is about what the
+    // reader is looking at rather than about a page seen three steps ago.
+    pageNote: page ? nestedNote(page.nested) : '',
     omittedActions: page?.omitted_actions ?? 0,
     screenshot: page?.screenshot ?? null,
     recordDir: artifacts?.dir ?? '',

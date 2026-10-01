@@ -63,6 +63,7 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
     textCalls: [],
     follows: [],
     verification: verification(),
+    pageNote: '',
     omittedActions: 0,
     screenshot: null,
     recordDir: 'C:\\Temp\\dsh-jev-ultrafast\\run-1-abcd',
@@ -309,6 +310,15 @@ describe('what the reader is told afterwards', () => {
     expect(summaryText(result(), 'https://example.test')).toContain('没有逐帧画面')
     const withPicture = summaryText(result({ screenshot: 'aGVsbG8=' }), 'https://example.test')
     expect(withPicture).not.toContain('没有逐帧画面')
+  })
+
+  it('passes on the run\'s own note about a page it could only partly see', () => {
+    const note = '这个页面的主要内容在嵌套的框架里（1 个 iframe），插件看不到里面的内容，所以这里推不动。'
+    const text = summaryText(result({ pageNote: note }), 'https://example.test')
+
+    expect(text).toContain(note)
+    // Nothing to say about an ordinary page: the line does not appear at all.
+    expect(summaryText(result(), 'https://example.test')).not.toContain('嵌套的框架')
   })
 
   it('says what the run was stopped by, and where it stopped', () => {

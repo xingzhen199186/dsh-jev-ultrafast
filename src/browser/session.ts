@@ -12,6 +12,7 @@
 import { createHash } from 'node:crypto'
 import { CdpConnection } from './cdp'
 import { discoverBrowser, type DiscoverOptions } from './discover'
+import type { NestedFacts } from './nested'
 import { SNAPSHOT_SOURCE } from './snapshot'
 
 /** A decision no longer refers to the page it was made for. */
@@ -53,6 +54,12 @@ export interface PageState {
   omitted_actions: number
   fingerprint: string
   screenshot?: string
+  /**
+   * What this snapshot could not reach into: visible frames, open shadow roots with content,
+   * and how many controls the top document itself offered. Optional, and absent from a
+   * snapshot that did not count them (a test double, or a page built before this was added).
+   */
+  nested?: NestedFacts
 }
 
 interface VersionResult {

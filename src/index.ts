@@ -156,7 +156,9 @@ export function apply(ctx: Context, config: ConfigShape): void {
           record: true,
         })
         const result = await runTask({ ...base, goal: args.goal, startUrl: args.url, expect: args.expect })
-        const output = toOutput(result, note)
+        // The run's own note about a page it could only partly see rides the note the caller
+        // already reads, so the sentence reaches the user through the channel that exists.
+        const output = toOutput(result, [note, result.pageNote].filter(Boolean).join('\n'))
         // Screenshots are off unless the settings page turns them on. When they are on, the
         // picture the last observation took is written out instead of being thrown away, so
         // the caller can look at the page it was told about.

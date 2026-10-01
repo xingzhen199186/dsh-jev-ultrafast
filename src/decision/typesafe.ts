@@ -19,7 +19,7 @@
  * offered, probabilities that do not sum to one, a winner that is not the most
  * probable choice — is a malformed answer, and the caller must execute nothing.
  */
-import { recordable, type TraceSink } from '../artifacts'
+import { recordable, redactUrl, type TraceSink } from '../artifacts'
 import type { SnapshotAction } from '../browser/session'
 import { requestSignal } from '../net'
 import { NEXT_ACTION, TARGET } from '../prompts'
@@ -62,6 +62,13 @@ export interface DecisionContext {
   goal: string
   page: { url: string; title: string; text: string }
   history: HistoryEntry[]
+  /**
+   * One plain sentence for this request only, when the run has something to say that page
+   * state cannot: the element the last answer named is no longer on the page (see
+   * `loop.ts`), or the page's content sits where the snapshot cannot reach (see
+   * `browser/nested.ts`). Absent on an ordinary step.
+   */
+  note?: string
 }
 
 /** Where decisions come from, and with whose credential. */
@@ -169,6 +176,9 @@ export function buildQuestionnaire(space: ActionSpace, context: DecisionContext,
     model,
     state: {
       page: { url: context.page.url, title: context.page.title, text: context.page.text },
+      // Sits with the page it is about, and only when there is something to say: an empty
+      // field would be one more thing for the service to read on every step.
+      ...(context.note ? { note: context.note } : {}),
       elements: space.elements,
       recent_actions: context.history.slice(-10).map((entry) => pick(entry, ['action', 'kind', 'text', 'page_changed'])),
     },
@@ -322,7 +332,7 @@ async function postJson(
         signal: requestSignal(timeoutMs, signal),
       })
     } catch {
-      trace?.write({ at: Date.now(), kind: 'decision', url, wrapped, error: '连接决策服务失败' })
+      trace?.write({ at: Date.now(), kind: 'decision', url: redactUrl(url), wrapped, error: '连接决策服务失败' })
       throw new Error('连接决策服务失败，没有执行任何动作')
     }
     // The body is read once: the retry rule, the refusal detail and the trace all want it.
@@ -337,7 +347,7 @@ async function postJson(
     trace?.write({
       at: Date.now(),
       kind: 'decision',
-      url,
+      url: redactUrl(url),
       wrapped,
       attempt: transient,
       status: response.status,

@@ -12,8 +12,9 @@
  * appear on disk.
  *
  * Nothing here may break a run: every write is best-effort. And no credential is ever
- * written — the callers hand their key in so it is scrubbed out of anything recorded,
- * which is the one promise this plugin makes about secrets.
+ * written — the callers hand their key in so it is scrubbed out of anything recorded, and
+ * the values a login callback leaves in an address are blanked out by `redactUrl` — which
+ * is the one promise this plugin makes about secrets.
  */
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -97,14 +98,80 @@ export function openArtifacts(frames: boolean): RunArtifacts {
 }
 
 /**
- * Make a value safe to write into a trace: JSON-shaped, scrubbed of one credential, and
- * cut off if it is enormous. The credential is passed rather than found here so that this
- * module never needs to know where a key comes from.
+ * Parameter names whose value is a credential wearing a different hat. A login callback
+ * arrives with one of these in the address bar — `?code=…` is an authorization code — and
+ * the address is what a trace keeps for every step, so these are the names `redactUrl`
+ * blanks out.
+ */
+const SECRET_PARAMETERS = new Set([
+  'code',
+  'access_token',
+  'id_token',
+  'refresh_token',
+  'token',
+  'assertion',
+  'client_secret',
+  'session_state',
+  'api_key',
+  'apikey',
+  'sig',
+  'signature',
+  'auth',
+  'authorization',
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+])
+
+/**
+ * Blank out the value of every credential-carrying parameter in `text`, in the query
+ * string and in the fragment alike. Pure, and deliberately narrow: a parameter only
+ * counts when it follows `?`, `&` or `#` and is followed by `=`, and only the exact
+ * names above match — `score`, `codex` and `key` are not touched. The name's own case is
+ * ignored (`?CODE=` is blanked, and keeps its spelling); a parameter written without a
+ * value (`?code`) has nothing to blank and comes back as it was.
+ */
+export function redactUrl(text: string): string {
+  return text.replace(/([?&#])([A-Za-z0-9_.-]+)=([^&#\s"'<>]*)/g, (whole, separator: string, name: string) =>
+    SECRET_PARAMETERS.has(name.toLowerCase()) ? `${separator}${name}=REDACTED` : whole,
+  )
+}
+
+/**
+ * Every string inside a recorded body, through `redactUrl`.
+ *
+ * The address a step was on is not a field of its own in a trace: the decision request
+ * carries it inside `state.page.url`, and a service's own answer can carry addresses of
+ * its own, so blanking "the url field" would miss both. Walking the body is what makes
+ * the promise true for every address, wherever it sits. Values that are not plain
+ * objects or arrays are handed back untouched, so `JSON.stringify` still sees the dates
+ * and buffers it already knew what to do with.
+ */
+function redactDeep(value: unknown): unknown {
+  if (typeof value === 'string') return redactUrl(value)
+  if (Array.isArray(value)) return value.map(redactDeep)
+  if (value !== null && typeof value === 'object') {
+    const proto: unknown = Object.getPrototypeOf(value)
+    if (proto === Object.prototype || proto === null) {
+      const walked: Record<string, unknown> = {}
+      for (const [key, item] of Object.entries(value)) walked[key] = redactDeep(item)
+      return walked
+    }
+  }
+  return value
+}
+
+/**
+ * Make a value safe to write into a trace: JSON-shaped, every address in it stripped of
+ * the credentials a login callback leaves in the URL, scrubbed of one key, and cut off if
+ * it is enormous. The credential is passed rather than found here so that this module
+ * never needs to know where a key comes from.
  */
 export function recordable(value: unknown, secret?: string): unknown {
   let text: string
   try {
-    text = JSON.stringify(value) ?? 'null'
+    text = JSON.stringify(redactDeep(value)) ?? 'null'
   } catch {
     return '[无法序列化的内容]'
   }

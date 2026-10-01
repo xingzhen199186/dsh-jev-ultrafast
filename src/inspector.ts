@@ -215,7 +215,9 @@ export function createInspector(
         : result
           ? `结束：${STATUS_LABEL[result.status]}${result.reason ? `（${result.reason}）` : ''} — ${result.steps} 步、${
               result.decisions
-            } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}`
+            } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
+              result.pageNote ? `；${result.pageNote}` : ''
+            }`
           : '已停止'
     const manifest = run.dir ? frameManifest(join(ARTIFACTS_ROOT, run.dir)) : { frames: [] }
     const newest = manifest.frames[manifest.frames.length - 1]

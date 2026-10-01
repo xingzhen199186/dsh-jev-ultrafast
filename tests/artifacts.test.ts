@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openArtifacts, recordable } from '../src/artifacts'
+import { openArtifacts, recordable, redactUrl } from '../src/artifacts'
 
 // Every directory a test opens is removed afterwards: the point of the module is that a
 // run leaves evidence behind, and the tests are not allowed to leave a pile of their own.
@@ -74,5 +74,73 @@ describe('what a run leaves behind', () => {
     artifacts.finish(40)
 
     expect(JSON.parse(readFileSync(join(artifacts.dir, 'frames.json'), 'utf8')).frames).toEqual([])
+  })
+})
+
+/**
+ * The address a step was on is what a trace keeps for every step, and a login callback puts
+ * a credential in that address. These are the pure rules; the write points that use them are
+ * covered where they are written (`decision.test.ts`, and the body case below).
+ */
+describe('the address in a trace', () => {
+  it('blanks the value of a callback parameter in the query string', () => {
+    expect(redactUrl('https://example.test/cb?code=abc123&state=keep')).toBe(
+      'https://example.test/cb?code=REDACTED&state=keep',
+    )
+  })
+
+  it('blanks it in the fragment too', () => {
+    expect(redactUrl('https://example.test/cb#code=abc123')).toBe('https://example.test/cb#code=REDACTED')
+    expect(redactUrl('https://example.test/cb#/done?access_token=abc123')).toBe(
+      'https://example.test/cb#/done?access_token=REDACTED',
+    )
+  })
+
+  it('knows the name whatever its case, and keeps the spelling it was written in', () => {
+    expect(redactUrl('https://example.test/cb?CODE=abc123')).toBe('https://example.test/cb?CODE=REDACTED')
+    expect(redactUrl('https://example.test/cb?Access_Token=abc123')).toBe(
+      'https://example.test/cb?Access_Token=REDACTED',
+    )
+  })
+
+  it('leaves a parameter that has no value alone', () => {
+    expect(redactUrl('https://example.test/cb?code&state=1')).toBe('https://example.test/cb?code&state=1')
+  })
+
+  it('does not touch names that only look like the sensitive ones', () => {
+    const address = 'https://example.test/?score=7&codex=9&key=k&codes=1&signed=yes'
+    expect(redactUrl(address)).toBe(address)
+  })
+
+  it('leaves ordinary text alone', () => {
+    const text = '这只是一句话，没有地址，也没有 score 这种东西'
+    expect(redactUrl(text)).toBe(text)
+  })
+
+  it('blanks every sensitive parameter of one address', () => {
+    expect(redactUrl('https://example.test/cb?code=a&access_token=b#refresh_token=c')).toBe(
+      'https://example.test/cb?code=REDACTED&access_token=REDACTED#refresh_token=REDACTED',
+    )
+  })
+
+  it('reaches an address wherever it sits in a recorded body', () => {
+    // The step's address is not a field of the trace record: the request carries it inside
+    // `state.page.url`, which is why the whole body goes through the same rule.
+    expect(
+      recordable({
+        state: { page: { url: 'https://example.test/cb?code=abc123', title: 'Callback' } },
+        recent: ['https://example.test/next?id_token=xyz'],
+      }),
+    ).toEqual({
+      state: { page: { url: 'https://example.test/cb?code=REDACTED', title: 'Callback' } },
+      recent: ['https://example.test/next?id_token=REDACTED'],
+    })
+  })
+
+  it('leaves a body without an address as it was', () => {
+    expect(recordable({ model: 'jev-latest', state: { note: '没有地址' } })).toEqual({
+      model: 'jev-latest',
+      state: { note: '没有地址' },
+    })
   })
 })

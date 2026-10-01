@@ -113,6 +113,9 @@ export function summaryText(result: TaskResult, url: string): string {
     const excerpt = pageExcerpt(result.page.text)
     if (excerpt) lines.push(excerpt)
   } else lines.push(`没能读到页面（起点：${url}）`)
+  // Said here as well as in the snapshot: the model's sentence about a page it cannot read
+  // is worth no more than the reader's chance to act on it.
+  if (result.pageNote) lines.push(result.pageNote)
   if (result.status === 'blocked') lines.push(LOGIN_HINT)
   if (result.recordDir) {
     lines.push(`这次运行的原始往返留痕（开着截图时还有逐帧画面）在这个目录里：${result.recordDir}`)

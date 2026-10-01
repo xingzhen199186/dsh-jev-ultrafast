@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
-import type { Decision } from '../src/decision/typesafe'
+import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { type TaskDeps, runTask } from '../src/loop'
 
 /**
@@ -67,6 +67,8 @@ interface Harness {
     typedFields: FieldContext[]
     closed: boolean
     decisions: number
+    /** Every context a decision was asked with, in order. */
+    contexts: DecisionContext[]
     /** What the loop told the browser about the page it was on when it looked for new tabs. */
     adoptOptions: Array<{ onlyIfSameUrl?: boolean } | undefined>
     /** The browser calls in the order they arrived, so a test can assert on their sequence. */
@@ -92,6 +94,7 @@ function harness(config: {
     typedFields: [] as FieldContext[],
     closed: false,
     decisions: 0,
+    contexts: [] as DecisionContext[],
     adoptOptions: [] as Array<{ onlyIfSameUrl?: boolean } | undefined>,
     calls: [] as string[],
   }
@@ -133,8 +136,9 @@ function harness(config: {
 
   const deps: TaskDeps = {
     open: async () => browser,
-    decide: async () => {
+    decide: async (_source, _space, context) => {
       seen.decisions += 1
+      seen.contexts.push(context)
       return decisionFor(config.choices.shift() ?? 'DONE')
     },
     typeText: async (_source, context) => {
@@ -362,13 +366,61 @@ describe('run loop', () => {
     expect(result.elements).toEqual([])
   })
 
-  it('refuses a decision that points at an action it never observed', async () => {
-    const h = harness({ pages: [pageState('f0')], choices: ['e99'] })
+  it('observes the page again and asks again when the chosen number is not in it', async () => {
+    // The page redrew under the answer — a banner, a popup, a countdown — so the number the
+    // model named is gone. That is the page's doing, not evidence that the task cannot be
+    // done: the run looks again, says so in one sentence, and lets the model choose again.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      choices: ['e99', 'e1', 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // The retry costs a decision like any other: no extra allowance was invented for it.
+    expect(result.decisions).toBe(3)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    // The sentence rides exactly one request: the one asked after the miss.
+    expect(h.seen.contexts[1]?.note).toBe('你上次选的编号在页面里已经找不到了，页面可能自己刷新过，请重新选')
+    expect(h.seen.contexts[0]?.note).toBeUndefined()
+    expect(h.seen.contexts[2]?.note).toBeUndefined()
+  })
+
+  it('stops with a sentence the reader can understand when the number keeps missing', async () => {
+    // Two in a row, with a fresh observation in between each time, means the answer and the
+    // page are out of step by construction; further rounds would only spend the budget.
+    const h = harness({ pages: [pageState('f0')], choices: ['e99', 'e99', 'e99', 'e99'] })
     const result = await run(h.deps)
 
     expect(result.status).toBe('failed')
-    expect(result.reason).toMatch(/不存在的动作/)
+    expect(result.reason).toBe('页面在你选的元素前后自己刷新了，连续 3 次都没对上，这次先停下')
+    expect(result.decisions).toBe(3)
     expect(h.seen.executed).toHaveLength(0)
+    expect(h.seen.closed).toBe(true)
+  })
+
+  it('tells the model when the page content sits where the snapshot cannot reach', async () => {
+    // The top document offered nothing and holds one frame: the sentence is what keeps the
+    // model from reading the page as simply empty.
+    const nested = { frames: 1, frame_url: 'https://inside.test/app', shadow_roots: 0, elements: 0 }
+    const h = harness({ pages: [pageState('f0', { nested })], choices: ['DONE'] })
+    const result = await run(h.deps)
+
+    expect(h.seen.contexts[0]?.note).toBe(
+      '这个页面的主要内容在嵌套的框架里（1 个 iframe），插件看不到里面的内容，所以这里推不动。' +
+        '可以试试直接打开里面的地址：https://inside.test/app',
+    )
+    // And the same sentence is on the result, which is where the reader reads it.
+    expect(result.pageNote).toBe(h.seen.contexts[0]?.note)
+  })
+
+  it('says nothing about a page the snapshot could see in full', async () => {
+    const h = harness({ pages: [pageState('f0')], choices: ['DONE'] })
+    const result = await run(h.deps)
+
+    expect(result.pageNote).toBe('')
+    expect(h.seen.contexts[0]?.note).toBeUndefined()
   })
 
   it('stops before spending anything when the caller has already cancelled', async () => {

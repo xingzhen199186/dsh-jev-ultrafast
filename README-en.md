@@ -28,7 +28,7 @@ Page text (excerpt): about 12,300 results; season 1 episodes (S1 E5–E9); Douba
 - **It waits for content to actually paint.** After an action it waits until the page text stops changing before judging, so "the shell loaded" is not mistaken for "the content arrived".
 - **"Done" is verified.** Write what must be on the page when the task succeeds into `expect`; if it is not there the run reports `blocked` instead of trusting the model's own verdict.
 - **Long documents are read in full.** The second tool scrolls screen by screen and stitches the text back together, spending no decision requests.
-- **Every run keeps its raw log.** Each run writes `trace.jsonl` in a temp directory (requests and responses, credentials masked to `***`), and the result tells you where.
+- **Every run keeps its raw log.** Each run writes `trace.jsonl` in a temp directory (requests and responses; credentials are masked to `***`, and login callback parameters such as `code` or `token` in page addresses become `REDACTED`), and the result tells you where.
 - **You can drive it without a model.** Typing `/jev-ultrafast` in the prompt box works too, and a URL in the sentence skips the model entirely.
 
 ## Install
@@ -81,6 +81,7 @@ Under **Advanced** you can set the decision output cap (default `393216`; when a
 - File uploads and drag-and-drop, and anything inside Shadow DOM, iframes or a canvas, have never been in the action space.
 - "Content arrived" is judged from page text, not from the network: a page that only swaps images takes the no-change branch.
 - Frame-by-frame screenshots are off by default; when on, the trace directory holds `frames/NNNNNN.jpg`.
+- Content inside page frames (iframes) or shadow DOM is invisible to the plugin, and it says so instead of guessing; it also tries to give you the address of the page inside.
 - Logins from your everyday browser cannot move into the plugin's own browser — on Windows the credential key is bound to the profile's location, so a copy cannot unwrap it. Log in once there and the login stays.
 - With your own browser chosen, you cannot use it while the plugin is working, and while that debugging switch is on any local program could in principle connect to it.
 
