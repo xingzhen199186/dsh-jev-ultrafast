@@ -25,3 +25,5 @@ tasks/
 .idea/
 .DS_Store
 Thumbs.db
+
+*.tgz.bak-*
