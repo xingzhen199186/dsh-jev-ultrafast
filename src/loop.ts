@@ -28,7 +28,7 @@
  *    before the next request is built is the `excludeDeadEndElements` setting's business — off by
  *    default, and while it is off the run judges the dead ends, reports them, and takes nothing away.
  */
-import type { ActionSpace, ElementEntry } from './decision/action-space'
+import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
 import { actionSpace, trimActionSpace, withoutElements } from './decision/action-space'
 import { nextDeadEnds, type DeadEndRecord } from './dead-ends'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
@@ -39,8 +39,8 @@ import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage, type SnapshotOptions } from './browser/session'
 import { nestedNote } from './browser/nested'
-import type { ActResult } from './browser/act'
-import { TargetCovered, act } from './browser/act'
+import type { ActResult, CoverRecord } from './browser/act'
+import { TargetCovered, act, coverAfter, withCoverActions, withCoverCandidates } from './browser/act'
 import type { DiscoverOptions } from './browser/discover'
 import { frameAction, openArtifacts, recordable, type TraceSink } from './artifacts'
 import { verify, type Verification } from './verify'
@@ -156,6 +156,16 @@ export interface TaskOptions {
    * the reading every page had before the deep scan existed (see `browser/snapshot.ts`).
    */
   guessClickableElements?: boolean
+  /**
+   * Whether a target the page would not be clicked through becomes something the model can choose,
+   * instead of only something it is told. On unless this says otherwise, because the fact alone does
+   * not move a choice: the side-by-side comparison run against this option space (2026-10) found the
+   * answer unchanged in 15 of 15 requests when the fact was written into the state, and changed in 10
+   * of 10 when a candidate was added to or taken out of the question instead. Off is the old
+   * behaviour outright — the refusal reaches the next request as the sentence it always was, and no
+   * candidate is added to the table (see `browser/act.ts`).
+   */
+  dismissCoveredTarget?: boolean
   /**
    * Whether a step that opened new windows moves onto the one it was aiming at, when the look finds
    * more than one page it could move onto. On unless this says otherwise: the run then tells the
@@ -377,6 +387,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // relevance, or whether the browser keeps making that choice on its own. On unless it is refused,
   // because the choice it replaces was "the last page the browser lists" — the bug it is here for.
   const aimAtRelevantTab = options.preferRelevantTab !== false
+  // Whether a cover the page put over a target is answered as a candidate or only as a sentence. On
+  // unless it is refused, for the reason on the option above.
+  const dismissCover = options.dismissCoveredTarget !== false
   const artifacts = options.record ? openArtifacts(screenshots) : null
   // The trace sink rides along on the sources the caller already built, so recording
   // needs no second plumbing path into the decision or text layers.
@@ -412,6 +425,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // three paths that do that and cleared by the first step that is recorded. See
   // `MAX_STALE_RETRIES` for what it is bounded at, and why.
   let staleRetries = 0
+  // The element that stood over a target the run could not click through, for as long as the run has
+  // not moved on from that screen. The refusal is a fact the next request is told (`hint`); this is
+  // the same fact in the shape a model can choose, and it is spent with `staleRetries` — the first
+  // step that lands means the cover is either gone or no longer in the way.
+  let cover: CoverRecord | null = null
 
   // Every screen the repeated-action rule has shown so far — the address and the element table, as
   // `repeatedActionState` reads them — and the last few steps with the target each one acted on and
@@ -505,7 +523,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // 2026-10 audit grew it from 14 elements to 97 inside one run — so what is sent is a
       // selection. The selection is said out loud rather than passed off as the whole page.
       const note = [nestedNote(page.nested), hint].filter(Boolean).join(' ')
-      const full = actionSpace(page.actions)
+      // What the model is shown, as opposed to what the run judges itself by: the page's own table,
+      // plus the element that stood over a target it could not click through and the one press that
+      // gets rid of it, while that cover is still the thing in the way (see `withCoverActions`). A
+      // page with nothing to add is the very object the browser returned, so the switch's "off" is
+      // the behaviour this loop had before any of it existed, byte for byte. Fixed here rather than
+      // read again below, so the table the request is measured on is the table it is sent with.
+      const viewed = dismissCover ? withCoverActions(page, cover) : page
+      const full = actionSpace(viewed.actions)
       // ---- what is already a dead end? ----
       // Asked here, about the state this request is about to carry: the last step acted on an element
       // and its own honest reading says the screen did not move for it, so that element is a dead end,
@@ -535,12 +560,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // that decides whether the number is chosen (see `withoutElements`). Which elements they are is
       // never said — they are simply not offered — and they are not counted as left out either: the
       // table still carries every element the page had, so the count below is the cap's own arithmetic
-      // and `sentElements + omittedElements` is still the page's own element count. With the removal
-      // off, nothing is taken away at all and the request is the page's own table.
+      // and `sentElements + omittedElements` is still the table's own element count — the table the
+      // cut was handed, which is the page's own plus the cover's row where a cover added one. With the
+      // removal off, nothing is taken away at all and the request is the page's own table.
       const live = excludeDeadEnds ? withoutElements(full, deadEnds) : full
       const recent = history.map((entry) => entry.target)
-      // Fixed while the table is cut, so the request measured below is the request that is sent.
-      const viewed = page
       // What the service is told about a page the snapshot could only partly see, plus the one-off
       // sentence the last answer earned. Built from the count because the table may still be cut
       // again below; nothing at all on an ordinary step.
@@ -552,7 +576,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         ...(omitted > 0 ? { omittedElements: omitted } : {}),
       })
       let limit = MAX_ELEMENTS
-      let trimmed = trimActionSpace(live, options.goal, recent, limit)
+      // The one thing the cut is not allowed to take: the cover's own two candidates. They sit at the
+      // end of the page's own table — the run appended them — so a table that reaches the cap is the
+      // table that loses them, and it is exactly the table they are for. They go back in after the cut
+      // rather than before it (see `withCoverCandidates`), which is also why the measurement below is
+      // made on the table that is really sent: the cap the request body is held to has to see them.
+      const fitted = (cut: TrimmedSpace): TrimmedSpace => withCoverCandidates(cut, live)
+      let trimmed = fitted(trimActionSpace(live, options.goal, recent, limit))
       // Counting elements is arithmetic, and arithmetic cannot see how long the page's own labels
       // are. What has to fit is the body the service receives, so it is measured and the table is
       // cut again — in the same order, a few entries at a time — until it does. A page light enough
@@ -563,7 +593,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         requestChars(trimmed.space, contextFor(trimmed.omitted), decisionSource.model) > MAX_REQUEST_CHARS
       ) {
         limit -= 4
-        trimmed = trimActionSpace(live, options.goal, recent, limit)
+        trimmed = fitted(trimActionSpace(live, options.goal, recent, limit))
       }
       const { space, omitted } = trimmed
       // Kept for the run's own report, so a reader can see that the last page the run decided on was
@@ -715,7 +745,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         reason = chosen === 'DONE' ? '' : '模型判断页面上已没有可以推进目标的操作'
         break
       }
-      const action = page.actions.find((candidate) => candidate.id === chosen)
+      // Looked up in the table the answer was given, not in the observation alone: a candidate the
+      // run added itself (`viewed` above) is a choice like any other, and one that could be answered
+      // and then not found would be the "number it chose is not in the table" failure instead.
+      const action = viewed.actions.find((candidate) => candidate.id === chosen)
       if (!action) {
         // The number the decision chose is not in the observation it was given. In practice
         // that is the page redrawing under the answer — a banner, a popup, a countdown —
@@ -790,15 +823,20 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             })
           }
         }
-        await deps.execute(session, page, action, text ?? undefined, artifacts?.trace)
+        // The page the decision was shown, which is the observation plus any candidate the run added
+        // to it: a freshness check compares the target's own guard, and the guard of an element the
+        // snapshot did not offer is only in the copy (see `withCoverActions`).
+        await deps.execute(session, viewed, action, text ?? undefined, artifacts?.trace)
       } catch (error) {
         if (error instanceof StalePage) {
           // A target something else is standing over is the one refusal a fresh look cannot explain:
           // the next screen has the same element, the same number and the same hit test, so the
           // sentence the refusal carries is the only new fact the model can be given. It goes into
-          // the existing one-off hint, which is what the next request carries as its note, and it is
-          // a fact rather than a step: nothing here presses Escape, clicks the gap or scrolls, and
-          // what to do about the cover stays the model's decision to make from the next screen.
+          // the existing one-off hint, which is what the next request carries as its note — and, for
+          // as long as the run has not moved on from that screen, the same fact goes into the next
+          // request as a choice as well (see `cover` below and `withCoverActions`). Nothing here
+          // presses Escape or clicks anything: what is added is a candidate, and picking it stays the
+          // model's decision to make from the next screen.
           const covered = error instanceof TargetCovered ? error : null
           const stopped = staleRetryStop(
             decision.operation,
@@ -811,7 +849,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             reason = stopped
             break
           }
-          if (covered) hint = covered.message
+          if (covered) {
+            hint = covered.message
+            // The same target refused the same way again is the run this is here for; a refusal of a
+            // different target starts the count over, and a step that lands clears the whole record.
+            cover = coverAfter(cover, covered.covering, decision.target ?? '')
+          }
           // Reset and re-observe. The paid value is kept: the same field, the same
           // goal, so the same text is still the right answer.
           emit({ type: 'executed', step: history.length + 1, action: action.label, elapsedMs: elapsedMs(), pageChanged: true })
@@ -861,8 +904,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       })
       const record = history[history.length - 1]!
       // The step is recorded, so the retry count starts over: what `MAX_STALE_RETRIES` bounds is
-      // retries that bought no step, not retries in a run.
+      // retries that bought no step, not retries in a run. The cover goes with it, for the same
+      // reason: a step that landed is a screen the run has moved on from, and an element that stood
+      // over a target two steps ago is not something the next question should still offer.
       staleRetries = 0
+      cover = null
       // The step has landed, but the page it landed on may still be painting. A site that fetches
       // its results reaches `readyState: complete` while the body is still an empty shell, and a
       // decision taken there sees nothing to satisfy — that is how a run once answered with a search

@@ -71,6 +71,18 @@ export interface Config {
    */
   guessClickableElements: VolatileValue<boolean>
   /**
+   * Whether a target the page will not be clicked through — something else is standing over it —
+   * becomes a candidate the model can choose, rather than only a sentence it is told. On, and
+   * deliberately so: the run this was built from was told what stood over its target on all seven of
+   * its attempts and clicked that target on every one of them, while the side-by-side comparison
+   * found the answer unchanged whenever the fact went into the state (15 of 15) and changed whenever
+   * a candidate went into the question instead (10 of 10). So the covering element and one press of
+   * Escape aimed at it go into the candidates (see src/browser/act.ts). Off is the old behaviour
+   * outright: the refusal reaches the next request as the sentence it always was, and no candidate is
+   * added.
+   */
+  dismissCoveredTarget: VolatileValue<boolean>
+  /**
    * Whether a step that opened new windows moves onto the one it was aiming at, when a look finds
    * more than one page it could move onto. On, and deliberately so: the alternative is the last page
    * the browser lists, which is the newest rather than the right one, and on 携程 (2026-10) that was
@@ -187,6 +199,14 @@ export const Config = Schema.object({
     .default(true)
     .volatile()
     .description('把用脚本挂了点击的普通元素（很多网站的 div/span 按钮）也列为候选；关掉就只认原生控件。'),
+
+  dismissCoveredTarget: Schema.boolean()
+    .default(true)
+    .volatile()
+    .description(
+      '目标被浮层挡住、点不下去时，把挡着它的那个元素和「按 Esc 关掉浮层」一起放进候选，让模型能关掉这一层；' +
+        '关掉就退回旧行为，只在提示里说明被挡住了。',
+    ),
 
   preferRelevantTab: Schema.boolean()
     .default(true)

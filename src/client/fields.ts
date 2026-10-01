@@ -249,6 +249,15 @@ export const FIELDS: readonly FieldSpec[] = [
     group: 'run',
   },
   {
+    key: 'dismissCoveredTarget',
+    label: '挡住时给出关闭动作',
+    hint:
+      '目标被浮层挡住、点不下去时，把挡着它的那个元素和「按 Esc 关掉浮层」一起放进候选，让模型能关掉这一层；' +
+      '关掉就退回旧行为，只在提示里说明被挡住了。',
+    kind: 'switch',
+    group: 'run',
+  },
+  {
     key: 'preferRelevantTab',
     label: '只跟相关的那个',
     hint:

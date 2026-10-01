@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction, SnapshotOptions } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
-import { TargetCovered } from '../src/browser/act'
+import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import { actionSpace, type ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
@@ -11,6 +11,7 @@ import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
 import { type TaskDeps, runTask } from '../src/loop'
+import { MAX_ELEMENTS } from '../src/prompts'
 import { readSettings } from '../src/run-setup'
 
 /**
@@ -82,6 +83,16 @@ function decisionFor(choice: string, target = '1', confidence = 0.9): Decision {
     model: 'fake',
     latencyMs: 5,
   }
+}
+
+/**
+ * The target keys one request offered a press of Escape under: the extra action a covered refusal
+ * puts in the options, read off the question rather than off the action list behind it.
+ */
+function escapeTargets(space: ActionSpace): string[] {
+  return Object.entries(space.targets.PRESS_KEY ?? {})
+    .filter(([, action]) => String(action.key).toLowerCase() === 'escape')
+    .map(([key]) => key)
 }
 
 interface Harness {
@@ -212,6 +223,8 @@ function run(
     excludeDeadEndElements?: boolean
     /** Whether a script-made clickable is offered as a candidate. On, as the settings page ships it. */
     guessClickableElements?: boolean
+    /** Whether a cover is answered as a candidate rather than only as a sentence. On, as it ships. */
+    dismissCoveredTarget?: boolean
     /** Whether a step that opened new windows is told what it was aiming at. On, as the page ships it. */
     preferRelevantTab?: boolean
   } = {},
@@ -2118,6 +2131,219 @@ describe('retries that buy no step', () => {
     expect(new TargetCovered({ tag: 'SPAN', role: '', label: '' }).message).toBe(
       '目标被SPAN盖住了，点击落不到它身上，请重新观察',
     )
+  })
+
+  it('offers the element standing in the way as a candidate, and one press aimed at it', async () => {
+    // The fact the sentence above carries, in the form the model can act on: an element it can click
+    // and one key it can press, both in the question's own options. The refusal is what puts them
+    // there — the same refusal that used to spend seven decisions on the same blocked target — and
+    // the first one is enough, because the hit test behind it is the browser's own answer.
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 9, guard: ['g'] })
+    const h = harness({
+      pages: [pageState('f0'), pageState('f0'), pageState('f0', { url: 'https://example.test/after' })],
+      choices: ['e1', 'cover_escape', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw blocked
+      },
+    })
+    const result = await run(h.deps)
+
+    // The first request is the page's own table: nothing has been refused yet.
+    expect(h.seen.spaces[0]!.elements.map((element) => element.label)).toEqual(['Search', 'Where from?'])
+    expect(escapeTargets(h.seen.spaces[0]!)).toEqual([])
+    // The second is that same table plus the way out: the element the hit test found, numbered where
+    // the table ends, and one press of Escape aimed at it.
+    const second = h.seen.spaces[1]!
+    expect(second.elements.map((element) => element.label)).toEqual(['Search', 'Where from?', '位置'])
+    expect(second.targets.CLICK!['3']).toMatchObject({ kind: 'click', node: 9, label: '位置' })
+    expect(escapeTargets(second)).toEqual(['3:escape'])
+    expect(second.targets.PRESS_KEY!['3:escape']!.label).toBe(COVER_ESCAPE_LABEL)
+    // The sentence is not replaced by the choice: the next request still carries it as its one note.
+    expect(h.seen.contexts[1]?.note).toBe(blocked.message)
+    // And the choice is executable, not a number the run cannot find: it is looked up in the table
+    // the answer was given, so a model that picks the way out gets it pressed.
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1', 'cover_escape'])
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+  })
+
+  it('offers a covering element the page already listed, once, with the press beside it', async () => {
+    // The other half of the same rule: an element the snapshot could name is already a candidate, so
+    // what is added is the half the page would not have offered. One element, one number — a second
+    // entry for the same node would be two rows the model could choose between for one thing.
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 9, guard: ['g'] })
+    const same = (): PageState => pageState('f0', { actions: [...actions, button('e9', 9, '关闭')] })
+    const h = harness({
+      pages: [same(), same(), pageState('f1', { url: 'https://example.test/after' })],
+      choices: ['e1', 'e9', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw blocked
+      },
+    })
+    const result = await run(h.deps)
+
+    const second = h.seen.spaces[1]!
+    expect(second.elements.map((element) => element.label)).toEqual(['Search', 'Where from?', '关闭'])
+    // The candidate is the page's own action for that element, not a second one of ours.
+    expect(second.targets.CLICK!['3']).toMatchObject({ id: 'e9', kind: 'click', node: 9, label: '关闭' })
+    expect(escapeTargets(second)).toEqual(['3:escape'])
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1', 'e9'])
+    expect(result.status).toBe('done')
+  })
+
+  it('does not let the way out of a cover count as the page changing', async () => {
+    // The screen after the step is the screen before it, to the address and the element table. Were a
+    // candidate the run added on its own account part of what `repeatedActionState` reads, the two
+    // would differ and this step would report a change the page never made — the judgement the
+    // "three steps changed nothing" brake and the dead-end rule both rest on.
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 9, guard: ['g'] })
+    const same = (): PageState => pageState('f0', { actions: [...actions] })
+    const h = harness({
+      pages: [same(), same(), same()],
+      choices: ['e1', 'e1', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw blocked
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(h.seen.spaces[1]!.elements).toHaveLength(3)
+    expect(result.history).toHaveLength(1)
+    expect(result.history[0]).toMatchObject({ page_changed: false, choice: 'e1', action: 'Search' })
+  })
+
+  it('is one switch away from the behaviour it replaced, wording and all', async () => {
+    // The same scripted refusal with the switch off has to read exactly as it read before any of this
+    // existed: the page's own table — compared whole, not field by field — and the sentence, and no
+    // candidate of the run's own anywhere in the request.
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 9, guard: ['g'] })
+    const same = (): PageState => pageState('f0', { actions: [...actions] })
+    const h = harness({
+      pages: [same(), same(), same()],
+      choices: ['e1', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw blocked
+      },
+    })
+    const result = await run(h.deps, { dismissCoveredTarget: false })
+
+    expect(JSON.stringify(h.seen.spaces[1])).toBe(JSON.stringify(actionSpace(same().actions)))
+    expect(h.seen.contexts[1]?.note).toBe(blocked.message)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.status).toBe('done')
+    expect(result.reason).toBe('')
+  })
+
+  it('carries the cover switch from the settings read into the run it starts', async () => {
+    // The same wire the two switches above are tested on: the config field as the settings page saves
+    // it, `readSettings` as the tool and the inspector read it, and the run's own option.
+    const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
+      (Config as unknown as (data: unknown) => ConfigShape)(input)
+    expect(readSettings(resolveConfig({})).dismissCoveredTarget).toBe(true)
+    expect(readSettings(resolveConfig({ dismissCoveredTarget: false })).dismissCoveredTarget).toBe(false)
+
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 9, guard: ['g'] })
+    const same = (): PageState => pageState('f0', { actions: [...actions] })
+    const scripted = (): Harness =>
+      harness({
+        pages: [same(), same(), same()],
+        choices: ['e1', 'DONE'],
+        execute: (index) => {
+          if (index === 0) throw blocked
+        },
+      })
+
+    const off = scripted()
+    await run(off.deps, { dismissCoveredTarget: readSettings(resolveConfig({ dismissCoveredTarget: false })).dismissCoveredTarget })
+    const shipped = scripted()
+    await run(shipped.deps, { dismissCoveredTarget: readSettings(resolveConfig({})).dismissCoveredTarget })
+
+    expect(escapeTargets(off.seen.spaces[1]!)).toEqual([])
+    expect(escapeTargets(shipped.seen.spaces[1]!)).toEqual(['3:escape'])
+  })
+
+  it('offers the way out of a cover on a page whose table is already cut to its cap', async () => {
+    // The page this mechanism exists for is also the page that reaches the cap: the hotel list of the
+    // 2026-10 run offered 49 entries and the cut sent 44 of them. The two candidates are appended to the
+    // page's own table, so on a table like that they were what the cut took first — on the one page the
+    // run cannot get through without them. They are put back after the cut (see `withCoverCandidates`),
+    // and what that costs the cap is one row.
+    const crowd = Array.from({ length: 60 }, (_unused, at) => button(`e${at + 1}`, at + 1, `Option ${at + 1}`))
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 99, guard: ['g'] })
+    const scripted = (choices: string[]): Harness =>
+      harness({
+        pages: [pageState('f0', { actions: crowd }), pageState('f0', { actions: crowd }), pageState('f0', { actions: crowd })],
+        choices,
+        execute: (index) => {
+          if (index === 0) throw blocked
+        },
+      })
+
+    const shipped = scripted(['e1', 'cover_escape', 'DONE'])
+    const result = await run(shipped.deps)
+    const second = shipped.seen.spaces[1]!
+    // The page's own 60 controls fill a table of MAX_ELEMENTS, and the covering element joins them: the
+    // cap, plus the one row the exception is worth. Its number is the frame's own, not the table's.
+    const at = String(crowd.length + 1)
+    expect(second.elements).toHaveLength(MAX_ELEMENTS + 1)
+    expect(second.elements.at(-1)).toMatchObject({ index: at, label: '位置', operations: ['CLICK', 'PRESS_KEY'], role: 'dialog' })
+    expect(second.targets.CLICK![at]).toMatchObject({ kind: 'click', node: 99, label: '位置' })
+    expect(escapeTargets(second)).toEqual([`${at}:escape`])
+    // The service is told what it is reading: 61 entries were there, 49 of them are in front of it.
+    // (`sentElements` in the run's own report is the last request's, and the run has moved on by then.)
+    expect(shipped.seen.contexts[1]!.omittedElements).toBe(crowd.length - MAX_ELEMENTS)
+    // The cap on the body holds with the two extra lines inside it, measured from exactly what the run
+    // handed the decision layer.
+    expect(requestChars(second, shipped.seen.contexts[1]!, decision.model)).toBeLessThanOrEqual(20_000)
+    // And it is a choice the run can execute, on a screen it has not moved on from: the table gained a
+    // row of the run's own, which is not the page changing.
+    expect(shipped.seen.executed.map((action) => action.id)).toEqual(['e1', 'cover_escape'])
+    expect(result.history[0]).toMatchObject({ page_changed: false, choice: 'cover_escape', action: COVER_ESCAPE_LABEL })
+    expect(result.status).toBe('done')
+
+    // One switch away from the behaviour it replaced, on the same page and with the same refusal: the
+    // table the cap cut, nothing of the run's own in it, and the very table the first request carried.
+    const off = scripted(['e1', 'DONE'])
+    await run(off.deps, { dismissCoveredTarget: false })
+    expect(off.seen.spaces[0]!.elements).toHaveLength(MAX_ELEMENTS)
+    expect(JSON.stringify(off.seen.spaces[1])).toBe(JSON.stringify(off.seen.spaces[0]))
+    expect(escapeTargets(off.seen.spaces[1]!)).toEqual([])
+  })
+
+  it('cuts the table a few entries further rather than let a cover eat the request budget', async () => {
+    // Long labels are the shape counting cannot see: 97 such controls measured 26,650 characters once
+    // the table was cut to the cap, which is why the body itself is measured and the table cut again.
+    // The cover's two lines are part of that measurement, so what gives is the table and not the cap.
+    const heavy = Array.from({ length: 97 }, (_unused, at) => ({
+      id: `e${at + 1}`,
+      kind: 'click' as const,
+      node: at + 1,
+      role: 'button',
+      label:
+        `Open the settings page for repository number ${at + 1} and then select the branch called ` +
+        `feature/very-long-branch-name-${at + 1}`,
+      value: `repository-${at + 1}-current-value-that-the-page-reports`,
+    }))
+    const blocked = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置', node: 999, guard: ['g'] })
+    const h = harness({
+      pages: [pageState('f0', { actions: heavy }), pageState('f0', { actions: heavy }), pageState('f0', { actions: heavy })],
+      choices: ['e1', 'cover_escape', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw blocked
+      },
+    })
+    const result = await run(h.deps)
+
+    const [space, asked] = [h.seen.spaces[1]!, h.seen.contexts[1]!]
+    expect(result.status).toBe('done')
+    // The cut had already gone below the cap for the page's own labels, and both ways out are in the
+    // table it settled on — one row above that cut, and never more than the cap plus one.
+    expect(space.elements.length).toBeLessThan(MAX_ELEMENTS + 1)
+    expect(space.elements.at(-1)).toMatchObject({ index: String(heavy.length + 1), label: '位置' })
+    expect(space.targets.CLICK![String(heavy.length + 1)]).toMatchObject({ node: 999, label: '位置' })
+    expect(escapeTargets(space)).toEqual([`${heavy.length + 1}:escape`])
+    // Measured from exactly what the run handed the decision layer.
+    expect(requestChars(space, asked, decision.model)).toBeLessThanOrEqual(20_000)
   })
 
   it('counts a terminal answer refused by a moved page and an action refused by the page in one count', async () => {

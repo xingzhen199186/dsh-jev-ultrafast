@@ -38,6 +38,7 @@ export interface RunSettings {
   screenshots: boolean
   excludeDeadEndElements: boolean
   guessClickableElements: boolean
+  dismissCoveredTarget: boolean
   preferRelevantTab: boolean
 }
 
@@ -62,6 +63,7 @@ export function readSettings(config: ConfigShape): RunSettings {
     screenshots: config.screenshots.get(),
     excludeDeadEndElements: config.excludeDeadEndElements.get(),
     guessClickableElements: config.guessClickableElements.get(),
+    dismissCoveredTarget: config.dismissCoveredTarget.get(),
     preferRelevantTab: config.preferRelevantTab.get(),
   }
 }
@@ -166,6 +168,7 @@ export async function prepareRun(
       screenshots: overrides.screenshots ?? settings.screenshots,
       excludeDeadEndElements: settings.excludeDeadEndElements,
       guessClickableElements: settings.guessClickableElements,
+      dismissCoveredTarget: settings.dismissCoveredTarget,
       preferRelevantTab: settings.preferRelevantTab,
       record: overrides.record ?? false,
       signal: overrides.signal,

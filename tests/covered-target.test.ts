@@ -71,10 +71,20 @@ function nodes(contains: (hit: unknown) => boolean): Map<number, unknown> {
  * Run the expression `act` sent the way the page would. `window`, `document`, `innerWidth` and
  * `innerHeight` are the only globals the expression names, and the document's hit test is the only
  * one whose answer is supplied rather than computed.
+ *
+ * A page keeps one cache object for as long as it lives — the id map, the counter and the guard
+ * function are all on it — so a test that is about those passes the whole object, and the expression
+ * reads and writes it by reference as it would in a browser. Without one the node table is all the
+ * expression may find, which is how every other test in this file reads a page.
  */
-function evaluate(expression: string, held: Map<number, unknown>, hit: unknown): unknown {
+function evaluate(
+  expression: string,
+  held: Map<number, unknown>,
+  hit: unknown,
+  cache?: Record<string, unknown>,
+): unknown {
   const document = { elementFromPoint: () => hit }
-  const window = { __jevFast: { nodes: held } }
+  const window = { __jevFast: cache ?? { nodes: held } }
   const run = new Function('window', 'document', 'innerWidth', 'innerHeight', `return (${expression})`)
   return run(window, document, 1120, 780)
 }
@@ -83,6 +93,7 @@ function evaluate(expression: string, held: Map<number, unknown>, hit: unknown):
 function sessionOver(
   held: Map<number, unknown>,
   hit: unknown,
+  cache?: Record<string, unknown>,
 ): { port: BrowserPort; dispatched: Array<Record<string, unknown>> } {
   const dispatched: Array<Record<string, unknown>> = []
   const port: BrowserPort = {
@@ -91,7 +102,7 @@ function sessionOver(
         dispatched.push({ method, ...(params ?? {}) })
         return {} as T
       }
-      return { result: { value: evaluate(String(params?.expression ?? ''), held, hit) } } as T
+      return { result: { value: evaluate(String(params?.expression ?? ''), held, hit, cache) } } as T
     },
     async observe(): Promise<PageState> {
       throw new Error('这个替身不观察页面')
@@ -106,8 +117,12 @@ function sessionOver(
 }
 
 /** The refusal `act` makes, or `null` when it made none. */
-async function refusal(held: Map<number, unknown>, hit: unknown): Promise<unknown> {
-  const { port } = sessionOver(held, hit)
+async function refusal(
+  held: Map<number, unknown>,
+  hit: unknown,
+  cache?: Record<string, unknown>,
+): Promise<unknown> {
+  const { port } = sessionOver(held, hit, cache)
   return act(port, page, ACTION).then(
     () => null,
     (error: unknown) => error,
@@ -149,6 +164,43 @@ describe('a target something else is standing over', () => {
     expect(taken).toBeInstanceOf(StalePage)
     expect(taken).not.toBeInstanceOf(TargetCovered)
     expect((taken as Error).message).toBe('目标已经变化或被遮挡，请重新观察')
+  })
+
+  it('carries the number the page gave the element in the way, and its guard', async () => {
+    // The two fields that turn the sentence into a choice: the element's own number, minted the way
+    // the snapshot mints one, and the guard a freshness check compares (see `withCoverActions`).
+    const held = nodes(() => false)
+    const cache: Record<string, unknown> = {
+      nodes: held,
+      ids: new WeakMap(),
+      next: 1,
+      guard: (element: unknown) => ['guard', element],
+    }
+    const first = (await refusal(held, layer, cache)) as TargetCovered
+
+    expect(first.covering.node).toBe(1)
+    expect(first.covering.guard).toEqual(['guard', layer])
+    // Minted into the page's own maps, so a later observation of the same element finds the same
+    // number rather than a second one — a fresh number every time would name nothing else knows.
+    expect((cache.ids as WeakMap<object, number>).get(layer)).toBe(1)
+    expect(held.get(1)).toBe(layer)
+    expect(((await refusal(held, layer, cache)) as TargetCovered).covering.node).toBe(1)
+    // A different element in the way is a different number, and takes the page's next one.
+    const other = { tagName: 'SPAN', getAttribute: () => null, innerText: '其它', textContent: '其它' }
+    expect(((await refusal(held, other, cache)) as TargetCovered).covering.node).toBe(2)
+    expect(held.get(2)).toBe(other)
+  })
+
+  it('invents no number for a page that has no table to ask', async () => {
+    // The stand-in document every other test in this file uses has no id map and no guard function,
+    // and the refusal must not make one up: with no number there is nothing to offer as a candidate,
+    // so a run meeting this page keeps the sentence and nothing else.
+    const covered = (await refusal(nodes(() => false), layer)) as TargetCovered
+
+    expect(covered.covering.node).toBeUndefined()
+    expect('node' in covered.covering).toBe(false)
+    expect('guard' in covered.covering).toBe(false)
+    expect(covered.coverNote).toBe('DIV(role=dialog)「位置」')
   })
 
   it('names what it can and nothing more', async () => {

@@ -13,6 +13,8 @@
  *  3. The action is logged by the caller before the result is observed.
  */
 import type { TraceSink } from '../artifacts'
+import type { ActionSpace, TrimmedSpace } from '../decision/action-space'
+import { elementIndexOf } from '../decision/action-space'
 import type { BrowserPort, PageState, SnapshotAction } from './session'
 import { StalePage } from './session'
 
@@ -36,6 +38,16 @@ export interface Covering {
   tag: string
   role: string
   label: string
+  /**
+   * The page's own number for that element, and the guard it gave it, when the page could be asked.
+   *
+   * Absent together rather than guessed at, and the absence has a meaning: a page read before any
+   * snapshot (a stand-in document) has no node table to mint a number from, and an element with no
+   * number cannot be offered as a candidate to click — so a run meeting one keeps the sentence and
+   * nothing else, which is what this did before the two fields existed (see `withCoverActions`).
+   */
+  node?: number
+  guard?: unknown
 }
 
 /**
@@ -62,11 +74,18 @@ export interface CoveredTarget {
 export class TargetCovered extends StalePage {
   /** What stood over the target, as one short phrase: `DIV(role=dialog)「位置」`. */
   readonly coverNote: string
+  /**
+   * The element itself, as the hit test found it — the fact `coverNote` only spells out, kept
+   * because a run that wants to offer a way out of the cover needs the number the page gave that
+   * element and the guard that goes with it (see `Covering` and `withCoverActions`).
+   */
+  readonly covering: Covering
   constructor(covering: Covering) {
     const note = coverNote(covering)
     super(`目标被${note}盖住了，点击落不到它身上，请重新观察`)
     this.name = 'TargetCovered'
     this.coverNote = note
+    this.covering = covering
   }
 }
 
@@ -78,6 +97,187 @@ function coverNote(covering: Covering): string {
   const named = covering.tag || '页面上的其它元素'
   const what = covering.role ? `${named}(role=${covering.role})` : named
   return covering.label ? `${what}「${covering.label}」` : what
+}
+
+/**
+ * What the run keeps about one cover: the element that did it as the page named it, the target it
+ * stood over, and how many such refusals that same target has cost since the last step that landed.
+ *
+ * Kept as its own record rather than left inside the sentence the refusal carries, because the two
+ * are used for different things: the sentence is a fact the next request is told (`loop.ts` puts it
+ * in `state.note`) and the record is the same fact in the form the model can act on — a candidate.
+ * The run this was built from (携程 排序, 2026-10) was told what stood over its target on all seven
+ * of its attempts and clicked that target on every one of them.
+ */
+export interface CoverRecord {
+  covering: Covering
+  /** The target the run could not click through, as the refusal named it. */
+  target: string
+  /** Covered refusals of that same target since the last step that landed; the first one is `1`. */
+  times: number
+}
+
+/**
+ * How many covered refusals of one target the run waits through before offering the way out.
+ *
+ * One, the first refusal, because the hit test that produced it is the browser's own answer about
+ * the geometry the model was just shown: a cover the page shows there is already evidence, and
+ * waiting for a second one would spend one of the seven attempts `MAX_STALE_RETRIES` allows on the
+ * very case those attempts exist for. Two would also be two decisions paid for a fact the run
+ * already has.
+ */
+export const COVER_ESCAPE_AFTER = 1
+
+/** What the extra action says it does, in the words the model reads as a candidate. */
+export const COVER_ESCAPE_LABEL = '按 Esc 关掉盖在目标上的浮层'
+
+/**
+ * The record one covered refusal leaves behind, given what the run already had.
+ *
+ * The count follows the target rather than the run's steps: the same target refused by the same
+ * element again is one target the run cannot get past, while a refusal of a different target — or an
+ * element of its own — is a new cover and starts again at one. That is what `times` is for, and
+ * `withCoverActions` is the only reader of it.
+ */
+export function coverAfter(previous: CoverRecord | null, covering: Covering, target: string): CoverRecord {
+  const same =
+    previous !== null && previous.target === target && previous.covering.node === covering.node
+  return { covering, target, times: previous !== null && same ? previous.times + 1 : 1 }
+}
+
+/**
+ * The page's own table plus, while a cover is still in the way, the two ways out of it: the element
+ * the hit test found, offered as a candidate to click, and one press of Escape aimed at that same
+ * element.
+ *
+ * Both are built the way this project already builds them — a click, and the `PRESS_KEY` action the
+ * snapshot mints for a key — rather than as a mechanism of their own, so the option space, the
+ * question and the executor read them exactly as they read the page's own controls.
+ *
+ * An element the page already listed is not listed again: only the halves that are missing are
+ * added, so a cover the snapshot could name either way is one element with one number. The result
+ * is a copy rather than the observation itself, and that is load-bearing: `repeatedActionState` in
+ * `../loop.ts` reads the address and the element table of the page the browser returned, so a
+ * candidate the run added on its own account must not enter "has this screen changed" — nor the
+ * guards a freshness check compares, which is why the cover's own guard is carried across
+ * (`Covering.guard`). Nothing to add returns the very object it was given.
+ */
+export function withCoverActions(page: PageState, cover: CoverRecord | null): PageState {
+  const node = cover?.covering.node
+  if (!cover || typeof node !== 'number' || cover.times < COVER_ESCAPE_AFTER) return page
+  const listed = page.actions.filter((action) => action.node === node)
+  const extra: SnapshotAction[] = []
+  if (!listed.some((action) => action.kind === 'click')) extra.push(coverClick(cover, node))
+  if (!listed.some((action) => action.kind === 'press_key' && String(action.key ?? '').toLowerCase() === 'escape')) {
+    extra.push(coverEscape(cover, node))
+  }
+  if (extra.length === 0) return page
+  return {
+    ...page,
+    actions: [...page.actions, ...extra],
+    // The page's own guard for that element wins where the snapshot has one: it was read later than
+    // the refusal that carried this one, and it is the state the freshness check must compare.
+    guards: { [String(node)]: cover.covering.guard ?? null, ...page.guards },
+  }
+}
+
+/**
+ * The ids the two candidates are minted under — `cover_click` in `coverClick` and `cover_escape` in
+ * `coverEscape` below — as the one thing about them a reader outside this module can name them by
+ * (see `withCoverCandidates`). No action taken off a page carries one.
+ */
+const COVER_ACTION_IDS = new Set(['cover_click', 'cover_escape'])
+
+/**
+ * The request's table with a cover's own candidates put back, when the cut has just taken them away.
+ *
+ * `before` is the table the cut was made from: the page's own elements with those two appended to the
+ * end of them. That they are appended is the whole reason this exists — the cut runs over the whole
+ * table and keeps the head of its own ordering, so an entry at the end loses every tie it cannot win
+ * on a label, and the page where a cover matters most is exactly the page whose table is over the cap.
+ * The two candidates this mechanism was built for were therefore the first thing a full table threw
+ * away, on the one page the run cannot get through without them.
+ *
+ * So they go back in after the cut rather than before it, and only they: at the number the frame gave
+ * that element, so a candidate's number does not depend on whether the cut kept it; with the element's
+ * own row when that went with it, because a number the table does not list is a number the model
+ * cannot read; and with the count charged for it. That is the deliberate exception — one row above the
+ * cap, and much more than the two criteria lines it was expected to cost, which is worth stating
+ * plainly: on a table of 48 the exception measured 2,203 characters in the request body rather than
+ * ~140, because the escape is what puts the whole `PRESS_KEY` question — its own criterion and the
+ * next-step rules that go with every question — into a request that had no press-key candidate at all.
+ * Its size being measured rather than assumed is also why `../loop.ts` measures the body with these
+ * already in it: a page whose table is already being cut for its own labels gives up a few more
+ * entries, instead of a cap that everything else in the run is held to being quietly exceeded.
+ *
+ * Nothing else comes back. `before` is the table after the earlier rules have had their say, so a
+ * candidate the run itself took out (a dead end, see `../dead-ends.ts`) stays out; and with the switch
+ * off the run's own candidates were never in the table, so this answers with the table it was given.
+ */
+export function withCoverCandidates(cut: TrimmedSpace, before: ActionSpace): TrimmedSpace {
+  // Read off `before` rather than rebuilt from the cover record: what belongs here is the very half
+  // that was missing — `withCoverActions` adds a click only where the page listed none — and the
+  // operation a target key belongs to is the table's own arrangement rather than something to restate.
+  const back: Array<{ operation: string; target: string; action: SnapshotAction }> = []
+  for (const [operation, group] of Object.entries(before.targets)) {
+    for (const [target, action] of Object.entries(group)) {
+      if (!COVER_ACTION_IDS.has(action.id)) continue
+      // The very object, not an equal one: the cut keeps the actions it was handed.
+      if (cut.space.targets[operation]?.[target] === action) continue
+      back.push({ operation, target, action })
+    }
+  }
+  if (back.length === 0) return cut
+
+  const index = elementIndexOf(back[0].target)
+  const elements = [...cut.space.elements]
+  let restored = 0
+  if (!elements.some((element) => element.index === index)) {
+    // A candidate whose element the frame cannot name is one the model cannot be given: the number
+    // would be a number the table does not list, so nothing is invented to fill it.
+    const row = before.elements.find((element) => element.index === index)
+    if (!row) return cut
+    elements.push(row)
+    // Back where the frame had it: the table reads in its own order, whatever the cut took out of it.
+    elements.sort((left, right) => Number(left.index) - Number(right.index))
+    restored = 1
+  }
+  // A copy of the table rather than the table itself: the space a caller measured, reported or kept is
+  // not written through by this.
+  const targets: Record<string, Record<string, SnapshotAction>> = {}
+  for (const [operation, group] of Object.entries(cut.space.targets)) targets[operation] = { ...group }
+  for (const entry of back) (targets[entry.operation] ??= {})[entry.target] = entry.action
+  // An element that comes back is one the table no longer leaves out.
+  return { space: { elements, targets, controls: cut.space.controls }, omitted: cut.omitted - restored }
+}
+
+/** The element that stood over the target, as one more click the model may choose. */
+function coverClick(cover: CoverRecord, node: number): SnapshotAction {
+  return {
+    id: 'cover_click',
+    kind: 'click',
+    node,
+    // The page's own words for it, and nothing where the page gave none — the same rule the
+    // sentence follows, so an element with no name is offered as one with no name.
+    label: cover.covering.label,
+    ...(cover.covering.role ? { role: cover.covering.role } : {}),
+  }
+}
+
+/**
+ * One press of Escape aimed at that element, which is how a page's own overlay listens: the key
+ * goes to the page after the click into the element it hangs off, exactly as every other press in
+ * this project does (`execute` below).
+ */
+function coverEscape(cover: CoverRecord, node: number): SnapshotAction {
+  return {
+    id: 'cover_escape',
+    kind: 'press_key',
+    key: 'escape',
+    node,
+    label: COVER_ESCAPE_LABEL,
+    ...(cover.covering.role ? { role: cover.covering.role } : {}),
+  }
 }
 
 export interface ActResult {
@@ -354,8 +554,17 @@ function targetSource(action: SnapshotAction): string {
   if (!hit) return null;
   if (!e.contains(hit)) {
     const seen=(hit?.innerText||hit?.textContent||'').replace(/\\s+/g,' ').trim();
+    // The number and the guard of the element in the way, minted the way the snapshot mints them:
+    // the same counter and the same two maps it keeps on the page, so the element the run names
+    // here is the same element a later observation gives the same number to, and the guard is the
+    // one a freshness check will compare against. A page with no such table (a stand-in document)
+    // answers with neither field rather than with an invented number.
+    const c=window.__jevFast;
+    let node=null;
+    if (c?.ids) { if (!c.ids.has(hit)) c.ids.set(hit,c.next++); node=c.ids.get(hit); c.nodes.set(node,hit); }
     return {reason:'covered',covering:{tag:hit?.tagName||'',role:hit?.getAttribute('role')||'',
-      label:(seen||hit?.getAttribute('aria-label')||'').slice(0,40)}};
+      label:(seen||hit?.getAttribute('aria-label')||'').slice(0,40),
+      ...(node===null ? {} : {node,guard:typeof c?.guard==='function' ? c.guard(hit) : null})}};
   }
   if (action.kind==='select') {
     if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
