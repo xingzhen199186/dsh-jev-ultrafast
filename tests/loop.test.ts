@@ -46,11 +46,18 @@ function pageState(fingerprint: string, overrides: Partial<PageState> = {}): Pag
 }
 
 /**
- * A page whose fingerprint keeps cycling, the way a site that redraws itself looks from here:
- * the states come back round instead of the page ever sitting still or going somewhere new.
+ * A page whose element table keeps cycling, the way a site that redraws itself looks from here:
+ * the states come back round instead of the page ever sitting still or going somewhere new. What
+ * tells one of these states from another is the table — the state's own control standing among the
+ * page's own — because that is what the repeated-action rule reads; the page's text is not what
+ * tells these states apart.
  */
+function statePage(state: string): PageState {
+  return pageState(state, { actions: [...actions, button('e9', 9, state)] })
+}
+
 function wheel(count: number, states: string[]): PageState[] {
-  return Array.from({ length: count }, (_unused, index) => pageState(states[index % states.length]!))
+  return Array.from({ length: count }, (_unused, index) => statePage(states[index % states.length]!))
 }
 
 function decisionFor(choice: string, target = '1', confidence = 0.9): Decision {
@@ -358,7 +365,7 @@ describe('run loop', () => {
   it('does not stop when a state the run has never shown turns up inside the window', async () => {
     const h = harness({
       // The wheel runs seven steps, then one state nothing has shown before, then the wheel again.
-      pages: [pageState('f0'), ...wheel(7, ['f1', 'f2', 'f3']), pageState('f4'), ...wheel(6, ['f1', 'f2', 'f3'])],
+      pages: [pageState('f0'), ...wheel(7, ['f1', 'f2', 'f3']), statePage('f4'), ...wheel(6, ['f1', 'f2', 'f3'])],
       choices: Array.from({ length: 20 }, () => 'e1'),
     })
     const result = await run(h.deps)
@@ -411,6 +418,124 @@ describe('run loop', () => {
     } finally {
       rmSync(result.recordDir, { recursive: true, force: true })
     }
+  })
+
+  it('stops a repeated action even when the page text changes on every step', async () => {
+    // The 携程 home page of 2026-10: the banner carousel rewrote the body on every paint, so the
+    // page's text — and with it the whole-page fingerprint — was a different string on every step,
+    // while the screen a reader would call "the same screen" never moved: the controls and the
+    // address stayed put. Judged on the text, the run came back to a state it had never shown 31
+    // times in a row and this rule never fired. Judged on the element table and the address, the
+    // window closes on the sixth step, which is what it was written to stop on.
+    const frames = Array.from({ length: 12 }, (_unused, index) =>
+      pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧` }),
+    )
+    const h = harness({
+      pages: [pageState('t0'), ...frames],
+      choices: Array.from({ length: 12 }, () => 'e1'),
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.steps).toBe(6)
+    expect(result.reason).toBe(
+      '同一个动作连着做了 6 次、页面只是在几个老样子之间打转，先停下——它卡在这个动作上了：CLICK 目标 1「Search」',
+    )
+    // The step's own report is untouched by the narrower state: the whole-page fingerprint really
+    // did move, and that is still what `page_changed` says.
+    expect(result.history[0]).toMatchObject({ page_changed: true })
+  })
+
+  it('does not stop when the element table keeps producing a state the run has not shown', async () => {
+    // A list really being worked through: every step brings a table the run has not seen, so
+    // nothing is a replay and the window never closes, though the same control is used each time.
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        ...Array.from({ length: 9 }, (_unused, index) =>
+          pageState(`f${index + 1}`, { actions: [...actions, button('e9', 9, `Option ${index + 1}`)] }),
+        ),
+      ],
+      choices: [...Array.from({ length: 9 }, () => 'e1'), 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(9)
+  })
+
+  it('does not stop when only the address keeps changing', async () => {
+    // The same controls on every screen, but a different address each time: the run is moving
+    // through pages a reader would also call different screens, so nothing is a replay.
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        ...Array.from({ length: 9 }, (_unused, index) =>
+          pageState(`f${index + 1}`, { url: `https://example.test/page-${index + 1}` }),
+        ),
+      ],
+      choices: [...Array.from({ length: 9 }, () => 'e1'), 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(9)
+  })
+
+  it('stops on the sixth repeat and not on the fifth', async () => {
+    // The threshold, pinned where it has always been: five repeats are still allowed to be a slow
+    // run, the sixth is the run going round in circles. The screens are the carousel's — only the
+    // text moves — which is exactly the page that used to hold this rule off for good.
+    const frames = (count: number): PageState[] =>
+      Array.from({ length: count }, (_unused, index) =>
+        pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧` }),
+      )
+
+    const five = await run(
+      harness({
+        pages: [pageState('t0'), ...frames(5)],
+        choices: [...Array.from({ length: 5 }, () => 'e1'), 'DONE'],
+      }).deps,
+    )
+    expect(five.status).toBe('done')
+    expect(five.reason).toBe('')
+    expect(five.steps).toBe(5)
+
+    const six = await run(
+      harness({ pages: [pageState('t0'), ...frames(6)], choices: Array.from({ length: 6 }, () => 'e1') }).deps,
+    )
+    expect(six.status).toBe('blocked')
+    expect(six.steps).toBe(6)
+    expect(six.reason).toContain('同一个动作连着做了 6 次')
+  })
+
+  it('leaves the other stopping reasons alone on a screen that looks the same on every look', async () => {
+    // Two looks whose text differs and whose element table and address do not: the repeated-action
+    // rule reads that as one state from the first look on, which is where it could have swallowed a
+    // reason that is not its own. Neither an unsure answer nor a pair of disagreeing ones is that
+    // rule's business, so each still gets the sentence it always got.
+    const looks = (): PageState[] => [pageState('t0'), pageState('t1', { text: '广告轮播的另一帧' })]
+
+    const disagreeing = await run(harness({ pages: looks(), choices: ['e1', 'e2'], confidences: [0.2, 0.6] }).deps)
+    expect(disagreeing.status).toBe('blocked')
+    expect(disagreeing.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+    expect(disagreeing.steps).toBe(0)
+    expect(disagreeing.reasks).toHaveLength(1)
+
+    const unsure = await run(
+      harness({ pages: looks(), choices: ['e1', 'e1', 'DONE'], confidences: [0.3, 0.42, 0.9] }).deps,
+    )
+    expect(unsure.status).toBe('done')
+    expect(unsure.steps).toBe(1)
+    expect(unsure.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'low-confidence',
+        agreed: true,
+        first: { choice: 'e1', confidence: 0.3, probabilities: { e1: 0.3 } },
+        second: { choice: 'e1', confidence: 0.42, probabilities: { e1: 0.42 } },
+      },
+    ])
   })
 
   it('stops at the action budget without asking for another decision to act on', async () => {

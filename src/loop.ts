@@ -264,6 +264,24 @@ export interface TaskResult {
 }
 
 /**
+ * One screen, as the repeated-action rule below tells two of them apart: the address, plus the
+ * element table reduced to where each element sits, the role it plays and the name it carries.
+ *
+ * The page's own text is deliberately not in here. A site whose banner carousel rewrites the body
+ * on every paint hands the run a different text on every step, and a state keyed on that text
+ * therefore looks new every time — on a real hotel-search home page (携程, 2026-10) the run clicked
+ * one and the same field 31 times before the rule could see the page come round again, where six
+ * was the number it was written to stop on. What a reader would call "the same screen" is the
+ * controls standing on it and the address it is at, not the words inside the ads.
+ */
+function repeatedActionState(page: PageState): string {
+  return JSON.stringify({
+    url: page.url,
+    elements: page.actions.map((action) => [action.id, action.role ?? '', action.label]),
+  })
+}
+
+/**
  * Run one task to a stop. It never throws for a run that merely failed: a browser
  * that will not start, a decision service that will not answer and a task that ran
  * out of budget all come back as a result with a reason.
@@ -306,9 +324,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let hint = ''
   // Consecutive decisions that named an element their own observation did not have.
   let lostTargets = 0
-  // Every page state the run has shown so far, and the last few steps with the target each one
-  // acted on and whether its state was a replay of an earlier one. Together these are what tells
-  // a page that keeps producing something new apart from one that is going round in circles.
+  // Every screen the repeated-action rule has shown so far — the address and the element table, as
+  // `repeatedActionState` reads them — and the last few steps with the target each one acted on and
+  // whether its state was a replay of an earlier one. Together these are what tells a page that
+  // keeps producing something new apart from one that is going round in circles.
   const seenStates = new Set<string>()
   const recentSteps: Array<{ replayed: boolean; target: string | null }> = []
   // The action the run stopped on because it kept repeating it, when it stopped that way. It
@@ -337,7 +356,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     page = await session.observe({ screenshot: screenshots })
     emit({ type: 'observed', step: 0, url: page.url, elements: page.actions.length })
     // The page the run started on is a state it has now shown, like every state after a step.
-    seenStates.add(page.fingerprint)
+    seenStates.add(repeatedActionState(page))
     // The starting frame: without it a replay begins at the first action's aftermath. Step 0,
     // named as such, so the first picture is never read as the first step's result.
     artifacts?.frame(page.screenshot, 0, 'start', 0)
@@ -671,9 +690,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // click reopens the same layer and the page is a different state on nearly every step, so
       // no three steps in a row are untouched and that rule never fires. What such a page cannot
       // hide is that it keeps coming back to states it has already shown — the state is judged
-      // against everything the run has shown so far, not against the step before it.
-      const replayed = seenStates.has(page.fingerprint)
-      seenStates.add(page.fingerprint)
+      // against everything the run has shown so far, not against the step before it. The state is
+      // the address and the element table rather than the whole page, so a page whose text churns
+      // under a carousel is still judged by the controls standing on it.
+      const seen = repeatedActionState(page)
+      const replayed = seenStates.has(seen)
+      seenStates.add(seen)
       recentSteps.push({ replayed, target: record.target })
       if (recentSteps.length > MAX_REPEATED_STEPS) recentSteps.shift()
       if (
