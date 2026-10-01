@@ -1464,3 +1464,137 @@ describe('run loop', () => {
     }
   })
 })
+
+/**
+ * The bound on retries that bought no step.
+ *
+ * Three things re-observe the page and ask again without recording a step: a terminal answer the
+ * page has moved out from under, a field that is stale the moment before it is typed into, and an
+ * action the page refused to execute (`StalePage`, thrown by `browser/act.ts`). Each pays for a
+ * fresh decision from the run's own budget, so what these check is that the three of them are one
+ * bounded count rather than an unbounded one, that the bound does not kill the legitimate retries
+ * the 2026-10 run was full of, and that it clears the moment a step really is recorded.
+ */
+describe('retries that buy no step', () => {
+  it('retries a step the page refused four times without stopping, as a page repainting under it does', async () => {
+    // The first step of the run this bound was written for was refused four times before its input
+    // went through. That is an ordinary page repainting under a live run, and it has to stay
+    // allowed: a bound of two would have killed it, which is why the number is six.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: [...Array.from({ length: 5 }, () => 'e1'), 'DONE'],
+      execute: (index) => {
+        if (index < 4) throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.reason).toBe('')
+    expect(result.steps).toBe(1)
+    expect(result.decisions).toBe(6)
+    // Four refusals and the attempt that landed: five calls went to the executor, and only the
+    // last of them recorded a step.
+    expect(h.seen.executed).toHaveLength(5)
+  })
+
+  it('allows six refusals on one target, and starts the count over after a step is recorded', async () => {
+    // Ten refusals in one run and the run still moves: four before the first step goes through and
+    // six before the second, both inside the allowance. What is bounded is refusals that bought no
+    // step, not refusals in a run — so the recorded step clears the count, and without that the
+    // seventh refusal overall would have stopped a run that was in fact making progress.
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        pageState('f1', { url: 'https://example.test/one' }),
+        pageState('f2', { url: 'https://example.test/two' }),
+      ],
+      choices: [...Array.from({ length: 12 }, () => 'e1'), 'DONE'],
+      execute: (index) => {
+        // Four refusals before the first step lands and six before the second: the attempts that go
+        // through are the fifth and the twelfth.
+        if (index !== 4 && index !== 11) throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.reason).toBe('')
+    expect(result.steps).toBe(2)
+    expect(result.decisions).toBe(13)
+    expect(h.seen.executed).toHaveLength(12)
+  })
+
+  it('stops on the seventh refusal that bought no step, and names the target it could not get past', async () => {
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: Array.from({ length: 10 }, () => 'e1'),
+      execute: () => {
+        throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    // The element the run could not get past, named the way the repeated-action stop names the
+    // action it was stuck on: the operation, the number the decision chose, and the page's label
+    // for it. Six refusals were allowed and the seventh is the stop.
+    expect(result.reason).toBe(
+      '页面在你要执行的目标上连着变了 7 次，每次重新看过都没能执行，先停下——' +
+        '它卡在这个目标上了：CLICK 目标 1「Search」',
+    )
+    // Seven decisions and nothing recorded: the run stops on its own rule, not on the model-call
+    // budget the diagnosis found the old unbounded retry burning through.
+    expect(result.decisions).toBe(7)
+    expect(result.steps).toBe(0)
+  })
+
+  it('counts a terminal answer refused by a moved page and an action refused by the page in one count', async () => {
+    // The two paths that re-observe without a step, alternating: a terminal answer the page has
+    // moved out from under (`DONE` before it is believed) and an action the page will not execute.
+    // Three of one path and four of the other make seven refusals, and the run stops on the seventh.
+    // That is the point of the test: with a count per path, neither side would have reached six and
+    // this run would have gone on burning decisions until the budget, which is the bug.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['DONE', 'e1', 'DONE', 'e1', 'DONE', 'e1', 'e1'],
+      // One freshness check before each decision, plus one before each terminal answer. The `false`
+      // entries are the three moved pages those terminal answers came back on; every other check
+      // passes, so the run never gets lost on a target it was never given.
+      fresh: [true, false, true, true, false, true, true, false, true, true],
+      execute: () => {
+        throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toContain('连着变了 7 次')
+    // The seventh refusal is one of the action's, so the target it names is that action's own.
+    expect(result.reason).toContain('目标 1「Search」')
+    expect(result.decisions).toBe(7)
+    expect(result.steps).toBe(0)
+    expect(h.seen.executed).toHaveLength(4)
+  })
+
+  it('leaves the runs that never get refused exactly as they were, wording included', async () => {
+    // The rule only ever fires on a retry, so a run that never retries has to read exactly as it
+    // did before the rule existed: the same numbers, the same empty sentence for DONE, and the same
+    // neighbouring blocked sentence, which is not this rule's to rewrite.
+    const ordinary = await run(
+      harness({
+        pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/one' })],
+        choices: ['e1', 'DONE'],
+      }).deps,
+    )
+    expect(ordinary.status).toBe('done')
+    expect(ordinary.reason).toBe('')
+    expect(ordinary.steps).toBe(1)
+    expect(ordinary.decisions).toBe(2)
+
+    const still = await run(harness({ pages: [pageState('same')], choices: ['e1', 'e1', 'e1', 'e1'] }).deps)
+    expect(still.status).toBe('blocked')
+    expect(still.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
+    expect(still.steps).toBe(3)
+  })
+})

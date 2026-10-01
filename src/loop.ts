@@ -235,6 +235,26 @@ const MAX_LOST_TARGETS = 2
  */
 const MAX_REPEATED_STEPS = 6
 
+/**
+ * How many retries that bought no step may happen in a row before the run stops and names the
+ * target it could not get past.
+ *
+ * Three places re-observe the page and go round again without recording a step: a terminal answer
+ * (`DONE` / `BLOCKED`) that the page has moved out from under before it is believed, a field that
+ * is stale the moment before it is typed into, and an action `act` refused to execute because the
+ * page no longer matched it — a repaint, or a target that cannot be found or is covered. Each of
+ * them pays for a fresh decision out of the same budget an ordinary step spends, and none of them
+ * was bounded on its own before this count. They share one count rather than three separate limits,
+ * which is what lets the sentence below name the one target that kept the run from moving.
+ *
+ * Six, and not two, is the number because the first step of the run this was written for was
+ * refused four times before its input went through — an ordinary page repainting under a live run —
+ * and a bound of two would have killed it. This is not a rule saying that a page which moves should
+ * not be retried: it should be, and it is. It is a rule saying that a retry has to end somewhere,
+ * and that where it ended has to be sayable.
+ */
+const MAX_STALE_RETRIES = 6
+
 export interface TaskResult {
   goal: string
   status: RunStatus
@@ -349,6 +369,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let hint = ''
   // Consecutive decisions that named an element their own observation did not have.
   let lostTargets = 0
+  // Retries that re-observed the page and asked again without recording a step, counted across all
+  // three paths that do that and cleared by the first step that is recorded. See
+  // `MAX_STALE_RETRIES` for what it is bounded at, and why.
+  let staleRetries = 0
+
   // Every screen the repeated-action rule has shown so far — the address and the element table, as
   // `repeatedActionState` reads them — and the last few steps with the target each one acted on and
   // whether its state was a replay of an earlier one. Together these are what tells a page that
@@ -382,6 +407,22 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     } catch {
       // Nothing to write; the run's own failure is the story.
     }
+  }
+
+  /**
+   * Count one retry that re-observed the page and asked again without recording a step, and say why
+   * the run stops once there have been too many. See `MAX_STALE_RETRIES` for why the three paths
+   * that do this share this one count, and for the number itself. The sentence names the target the
+   * run could not get past, the way the repeated-action rule names the action it was stuck on.
+   */
+  const staleRetryStop = (operation: string, target: string | null, label: string): string | null => {
+    staleRetries += 1
+    if (staleRetries <= MAX_STALE_RETRIES) return null
+    const what = `${operation}${target ? ` 目标 ${target}` : ''}${label ? `「${label}」` : ''}`
+    return (
+      `页面在你要执行的目标上连着变了 ${MAX_STALE_RETRIES + 1} 次，每次重新看过都没能执行，先停下——` +
+      `它卡在这个目标上了：${what}`
+    )
   }
 
   try {
@@ -591,6 +632,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       if (chosen === 'DONE' || chosen === 'BLOCKED') {
         // A terminal answer is only trustworthy if the page has not moved since.
         if (!(await session.fresh(page))) {
+          // A terminal answer names no element of its own, so a stop here can only say which
+          // operation the run kept answering with.
+          const stopped = staleRetryStop(decision.operation, decision.target, '')
+          if (stopped) {
+            status = 'blocked'
+            reason = stopped
+            break
+          }
           page = await session.observe({ screenshot: screenshots })
           continue
         }
@@ -641,6 +690,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       try {
         if (action.kind === 'fill') {
           if (!(await session.fresh(page))) {
+            const stopped = staleRetryStop(decision.operation, decision.target, action.label)
+            if (stopped) {
+              status = 'blocked'
+              reason = stopped
+              break
+            }
             page = await session.observe({ screenshot: screenshots })
             continue
           }
@@ -666,6 +721,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         await deps.execute(session, page, action, text ?? undefined, artifacts?.trace)
       } catch (error) {
         if (error instanceof StalePage) {
+          const stopped = staleRetryStop(decision.operation, decision.target, action.label)
+          if (stopped) {
+            status = 'blocked'
+            reason = stopped
+            break
+          }
           // Reset and re-observe. The paid value is kept: the same field, the same
           // goal, so the same text is still the right answer.
           emit({ type: 'executed', step: history.length + 1, action: action.label, elapsedMs: elapsedMs(), pageChanged: true })
@@ -709,6 +770,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         elapsed_ms: elapsedMs(),
       })
       const record = history[history.length - 1]!
+      // The step is recorded, so the retry count starts over: what `MAX_STALE_RETRIES` bounds is
+      // retries that bought no step, not retries in a run.
+      staleRetries = 0
       // The step has landed, but the page it landed on may still be painting. A site that fetches
       // its results reaches `readyState: complete` while the body is still an empty shell, and a
       // decision taken there sees nothing to satisfy — that is how a run once answered with a search
