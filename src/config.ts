@@ -70,6 +70,15 @@ export interface Config {
    * it is what makes the rows of a modern page reachable at all (see src/browser/snapshot.ts).
    */
   guessClickableElements: VolatileValue<boolean>
+  /**
+   * Whether a step that opened new windows moves onto the one it was aiming at, when a look finds
+   * more than one page it could move onto. On, and deliberately so: the alternative is the last page
+   * the browser lists, which is the newest rather than the right one, and on 携程 (2026-10) that was
+   * an ad page instead of the hotel list the step had been sent to (see src/browser/session.ts).
+   * Off is the old behaviour outright: with this off the run says nothing about what it was aiming
+   * at, and the choice is made exactly as it was before this existed.
+   */
+  preferRelevantTab: VolatileValue<boolean>
 }
 
 // A Schemastery Schema, never a plain object: the harness validates it when the
@@ -178,4 +187,12 @@ export const Config = Schema.object({
     .default(true)
     .volatile()
     .description('把用脚本挂了点击的普通元素（很多网站的 div/span 按钮）也列为候选；关掉就只认原生控件。'),
+
+  preferRelevantTab: Schema.boolean()
+    .default(true)
+    .volatile()
+    .description(
+      '一步点开后冒出多个新页面时，只跟地址或标题跟这一步目标对得上的那一个；一个都对不上、或有几个一样像就不跟，留在原页。' +
+        '关掉就退回旧行为：跟最后冒出来的那个。',
+    ),
 })

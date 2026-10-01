@@ -248,6 +248,15 @@ export const FIELDS: readonly FieldSpec[] = [
     kind: 'switch',
     group: 'run',
   },
+  {
+    key: 'preferRelevantTab',
+    label: '只跟相关的那个',
+    hint:
+      '一步点开后冒出多个新页面时，只跟地址或标题跟这一步目标对得上的那一个；一个都对不上、或有几个一样像就不跟，留在原页。' +
+      '关掉就退回旧行为：跟最后冒出来的那个。',
+    kind: 'switch',
+    group: 'run',
+  },
 ]
 
 /**

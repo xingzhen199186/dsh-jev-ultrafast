@@ -115,7 +115,7 @@ export interface BrowserPort {
   fresh(page: PageState, action?: SnapshotAction): Promise<boolean>
   noteInput(action: SnapshotAction): void
   /**
-   * Look for pages that appeared since the last look, and move onto the newest one.
+   * Look for pages that appeared since the last look, and move onto the one worth moving onto.
    *
    * A site that answers a click by opening a new tab leaves the page this session is
    * on untouched, so without this the run reads "nothing happened" while the effect
@@ -125,9 +125,14 @@ export interface BrowserPort {
    * rather than the whole page because a site may well redraw the page it stays on —
    * a search result turning "visited", say — and that is still not where the click went.
    *
+   * `aimedAt` is what the step that just ran was aiming at — the label of the element it acted on,
+   * and the goal — and it is read only when the look finds more than one page it could move onto
+   * (see `chosenToFollow`). Absent is the old behaviour exactly, which is how the setting that
+   * decides whether to say it turns this off.
+   *
    * Optional because a browser that cannot open tabs (a test double) simply has none.
    */
-  adoptNewPage?(options?: { onlyIfSameUrl?: boolean }): Promise<AdoptResult | null>
+  adoptNewPage?(options?: { onlyIfSameUrl?: boolean; aimedAt?: string }): Promise<AdoptResult | null>
   /**
    * Wait for the page a step just changed to finish painting, before it is observed again.
    *
@@ -301,7 +306,7 @@ export class BrowserSession implements BrowserPort {
   }
 
   /**
-   * Move onto the newest page that appeared since the last look.
+   * Move onto the page that appeared and is worth moving onto.
    *
    * A tab the site has only just opened often still reads as `about:blank`, and its
    * URL is what decides whether it is worth following, so a blank newcomer is given
@@ -309,8 +314,11 @@ export class BrowserSession implements BrowserPort {
    * either way, so a page the run deliberately does not follow is not reported twice —
    * everything with an address, that is: a target that still has none is not remembered,
    * because a page that cannot be named yet is not a page this session has seen (below).
+   *
+   * Which one of them is moved onto, and what `aimedAt` decides about it, is
+   * `chosenToFollow`'s business below.
    */
-  async adoptNewPage(options: { onlyIfSameUrl?: boolean } = {}): Promise<AdoptResult | null> {
+  async adoptNewPage(options: { onlyIfSameUrl?: boolean; aimedAt?: string } = {}): Promise<AdoptResult | null> {
     let pages = await this.#pageTargets()
     let appeared = this.#unseen(pages)
     if (appeared.some((page) => page.url === 'about:blank')) {
@@ -337,7 +345,7 @@ export class BrowserSession implements BrowserPort {
     // One list of reportable pages, and `adopted` is the very object listed in it, so a
     // caller can tell which of them the session moved onto without comparing URLs.
     const listed = appeared.map(toNewPage)
-    const adopted = appeared.filter((page) => followable(page.url)).at(-1)
+    const adopted = chosenToFollow(appeared, options.aimedAt)
     if (options.onlyIfSameUrl === false || !adopted) return { adopted: null, appeared: listed }
     await this.#switchTo(adopted.targetId)
     return { adopted: listed[appeared.indexOf(adopted)]!, appeared: listed }
@@ -547,6 +555,110 @@ function toNewPage(info: TargetInfo): NewPage {
  */
 function followable(url: string): boolean {
   return /^(https?|file):/i.test(url)
+}
+
+/**
+ * Which of the pages that appeared a step should move onto.
+ *
+ * The ordinary answer is the last one the browser lists, which is the newest, and that is the right
+ * answer when a look sees one page: a page a click opens is what that click produced. It is the
+ * wrong answer when a look sees more than one, because what the look returns is every page target
+ * this session has not seen — not only the ones this click opened. A window that was left without an
+ * address is deliberately not remembered (`adoptNewPage` above), so it is a newcomer again on the
+ * first look that finds it with one, and a click that opens a window while an older one lands is
+ * then reported as two. "The newest" is a coin toss between them, and on 携程 (2026-10) the hotel
+ * list page the run had been sent to lost it to an ad page: `hotels.ctrip.com/hotels/list…`, opened
+ * by the step before, against `ct.ctrip.com/official…`, opened by the step that looked, both listed
+ * for the same look, and the second one moved onto.
+ *
+ * So when the caller says what the step was aiming at, and there is more than one page it could move
+ * onto, the choice is made on that instead: the page whose address and title share the most with the
+ * label of the element the step acted on and with the goal. Nothing in common on any of them, or two
+ * of them tied for the most, means no single page can be told apart as the one the step was aiming
+ * at, and the run stays where it is. Staying is the answer to prefer: a run that stayed is on a page
+ * it can read and can try again from, where a run that followed a page it cannot name has handed
+ * itself to something the step never asked for — the ad page here is exactly that, and it cost the
+ * whole run.
+ *
+ * A single candidate is followed as it always was, with nothing to choose between, and a caller that
+ * says nothing about what it was aiming at gets the old behaviour outright. That last case is the
+ * setting's own switch rather than an accident: the run only says what it was aiming at when the
+ * preference is on.
+ */
+function chosenToFollow(appeared: TargetInfo[], aimedAt: string | undefined): TargetInfo | undefined {
+  const reachable = appeared.filter((page) => followable(page.url))
+  if (aimedAt === undefined || reachable.length < 2) return reachable.at(-1)
+  return mostRelevant(reachable, aimedAt)
+}
+
+/**
+ * The one page of `pages` whose address and title share the most with `aimedAt`, or nothing.
+ *
+ * A count rather than a yes or no, because the two questions are not the same one. The goal names
+ * the site as well as the thing wanted — 携程 … 酒店 — and a page that merely carries the site's
+ * name is not the page the step was aiming at, which is exactly the case this run is: the hotel list
+ * page shared three tokens with the goal (北京, 酒店, 携程) where the ad page shared one (携程), so
+ * the count is what tells them apart and a bare "does it look related" is not.
+ *
+ * A tie is nothing: two pages as close to the goal as each other are two pages this cannot choose
+ * between, and guessing between them is the mistake being fixed.
+ */
+function mostRelevant(pages: TargetInfo[], aimedAt: string): TargetInfo | undefined {
+  const wanted = tokens(aimedAt)
+  if (wanted.size === 0) return undefined
+  let best: TargetInfo | undefined
+  let bestScore = 0
+  let tied = false
+  for (const page of pages) {
+    const score = sharedTokens(wanted, page)
+    if (score === 0) continue
+    if (score > bestScore) {
+      best = page
+      bestScore = score
+      tied = false
+    } else if (score === bestScore) {
+      tied = true
+    }
+  }
+  return tied ? undefined : best
+}
+
+/** How many of `wanted` a page's own address and title carry. */
+function sharedTokens(wanted: Set<string>, page: TargetInfo): number {
+  let count = 0
+  for (const token of tokens(`${page.url} ${page.title}`)) if (wanted.has(token)) count += 1
+  return count
+}
+
+/**
+ * What a piece of text is compared by: its whole words, and the two-character slices of its Chinese.
+ *
+ * Sliced rather than compared whole because the two sides of this are never worded the same way: what
+ * a reader would call "the hotel list page" is a sentence in the goal and an address ending
+ * `hotels/list` on the page, and neither is a substring of the other. A run of Chinese characters
+ * contributes every two-character slice of itself (酒店列表页 → 酒店, 店列, 列表, 表页) and a run of
+ * letters or digits contributes itself when it is at least three characters long. Two is the
+ * shortest slice that still carries meaning in Chinese — one character matches nearly every page —
+ * and three is long enough that an English address segment is a word rather than a fragment.
+ *
+ * The known cost, stated rather than hidden: a goal mentions its site by name, so an unrelated page
+ * on that same site shares a token with it. That is why the count decides and a tie does not, and
+ * why a page that shares more than the one the step was aiming at still wins — a case this rule
+ * cannot settle, and one that ends with the run staying put rather than moving somewhere it cannot
+ * justify. It is also blind to a page whose address and title are the only things it reads: a
+ * newcomer that is the right page but has not been given its title yet shares less than it will a
+ * moment later.
+ */
+function tokens(text: string): Set<string> {
+  const found = new Set<string>()
+  for (const word of text.toLowerCase().match(/[a-z0-9]+|[\u4e00-\u9fff]+/g) ?? []) {
+    if (/^[a-z0-9]+$/.test(word)) {
+      if (word.length >= 3) found.add(word)
+      continue
+    }
+    for (let i = 0; i + 2 <= word.length; i++) found.add(word.slice(i, i + 2))
+  }
+  return found
 }
 
 function delay(ms: number): Promise<void> {

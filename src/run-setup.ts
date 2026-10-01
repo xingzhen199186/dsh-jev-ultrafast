@@ -38,6 +38,7 @@ export interface RunSettings {
   screenshots: boolean
   excludeDeadEndElements: boolean
   guessClickableElements: boolean
+  preferRelevantTab: boolean
 }
 
 /** Read every live setting once, so one run cannot straddle two versions of the page. */
@@ -61,6 +62,7 @@ export function readSettings(config: ConfigShape): RunSettings {
     screenshots: config.screenshots.get(),
     excludeDeadEndElements: config.excludeDeadEndElements.get(),
     guessClickableElements: config.guessClickableElements.get(),
+    preferRelevantTab: config.preferRelevantTab.get(),
   }
 }
 
@@ -164,6 +166,7 @@ export async function prepareRun(
       screenshots: overrides.screenshots ?? settings.screenshots,
       excludeDeadEndElements: settings.excludeDeadEndElements,
       guessClickableElements: settings.guessClickableElements,
+      preferRelevantTab: settings.preferRelevantTab,
       record: overrides.record ?? false,
       signal: overrides.signal,
       onEvent: overrides.onEvent,

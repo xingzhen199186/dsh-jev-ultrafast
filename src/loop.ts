@@ -157,6 +157,15 @@ export interface TaskOptions {
    */
   guessClickableElements?: boolean
   /**
+   * Whether a step that opened new windows moves onto the one it was aiming at, when the look finds
+   * more than one page it could move onto. On unless this says otherwise: the run then tells the
+   * browser what the step was aiming at (the element's label and the goal), and the browser picks the
+   * newcomer that shares the most with it — staying put when nothing does, or when two are tied. Off
+   * is the old behaviour outright, because the run then says nothing to choose with (see
+   * `browser/session.ts`).
+   */
+  preferRelevantTab?: boolean
+  /**
    * Write this run's raw model exchanges into a directory under the system temp
    * directory, together with one frame per step when `screenshots` is on, and report
    * that directory in the result. Off by default: the loop stays free of side effects
@@ -364,6 +373,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // unless it is asked for: the judgement behind it is weaker than the removal it feeds (see
   // `./dead-ends.ts`), so the removal waits behind a switch while the judgement is always made.
   const excludeDeadEnds = options.excludeDeadEndElements === true
+  // Whether a step that opened new windows is told to the browser as something to choose among by
+  // relevance, or whether the browser keeps making that choice on its own. On unless it is refused,
+  // because the choice it replaces was "the last page the browser lists" — the bug it is here for.
+  const aimAtRelevantTab = options.preferRelevantTab !== false
   const artifacts = options.record ? openArtifacts(screenshots) : null
   // The trace sink rides along on the sources the caller already built, so recording
   // needs no second plumbing path into the decision or text layers.
@@ -868,7 +881,15 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // only reports what appeared. The address is the test rather than the whole
       // page, because a site may redraw the page it stays on: a search result turning
       // "visited" is not where the click went, but it does change the page.
-      const found = await session.adoptNewPage?.({ onlyIfSameUrl: page.url === observed })
+      //
+      // What the step was aiming at rides along for the case where the look finds more than one page
+      // it could move onto — the element it acted on, and the goal — and is left out entirely when
+      // the preference is off, which is what makes that switch the old behaviour rather than a second
+      // rule that has to agree with it (see `browser/session.ts`).
+      const found = await session.adoptNewPage?.({
+        onlyIfSameUrl: page.url === observed,
+        ...(aimAtRelevantTab ? { aimedAt: `${action.label} ${options.goal}` } : {}),
+      })
       if (found) {
         let adopted = found.adopted
         if (adopted) {

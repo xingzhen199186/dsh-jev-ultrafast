@@ -97,7 +97,7 @@ interface Harness {
     /** Every element table a decision was asked about, in order. */
     spaces: ActionSpace[]
     /** What the loop told the browser about the page it was on when it looked for new tabs. */
-    adoptOptions: Array<{ onlyIfSameUrl?: boolean } | undefined>
+    adoptOptions: Array<{ onlyIfSameUrl?: boolean; aimedAt?: string } | undefined>
     /** The browser calls in the order they arrived, so a test can assert on their sequence. */
     calls: string[]
   }
@@ -133,7 +133,7 @@ function harness(config: {
     decisions: 0,
     contexts: [] as DecisionContext[],
     spaces: [] as ActionSpace[],
-    adoptOptions: [] as Array<{ onlyIfSameUrl?: boolean } | undefined>,
+    adoptOptions: [] as Array<{ onlyIfSameUrl?: boolean; aimedAt?: string } | undefined>,
     calls: [] as string[],
   }
   const freshQueue = [...(config.fresh ?? [])]
@@ -161,7 +161,7 @@ function harness(config: {
     noteInput(): void {},
     ...(config.adopt
       ? {
-          async adoptNewPage(options?: { onlyIfSameUrl?: boolean }): Promise<AdoptResult | null> {
+          async adoptNewPage(options?: { onlyIfSameUrl?: boolean; aimedAt?: string }): Promise<AdoptResult | null> {
             seen.adoptOptions.push(options)
             return config.adopt!.shift() ?? null
           },
@@ -212,6 +212,8 @@ function run(
     excludeDeadEndElements?: boolean
     /** Whether a script-made clickable is offered as a candidate. On, as the settings page ships it. */
     guessClickableElements?: boolean
+    /** Whether a step that opened new windows is told what it was aiming at. On, as the page ships it. */
+    preferRelevantTab?: boolean
   } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
@@ -639,6 +641,31 @@ describe('run loop', () => {
     await run(deps, { guessClickableElements: readSettings(resolveConfig({})).guessClickableElements })
 
     expect(opened).toEqual([{ guessClickableElements: false }, { guessClickableElements: true }])
+  })
+
+  it('carries the tab-choice switch from the settings read into what the browser is told', async () => {
+    // The same wire as the two switches above, for the switch that decides how a step picks between
+    // the windows a click opened: the config field as the settings page saves it, `readSettings` as
+    // the tool and the inspector read it, and what `adoptNewPage` is actually handed. Off has to mean
+    // the browser is told nothing new — that, and not a second rule that agrees with the first, is
+    // what makes this switch the old behaviour on the dot.
+    const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
+      (Config as unknown as (data: unknown) => ConfigShape)(input)
+    // On by default: what it replaces is "the last page the browser lists", which is what handed a run
+    // to an ad page, so it works without anyone having to find the setting first.
+    expect(readSettings(resolveConfig({})).preferRelevantTab).toBe(true)
+    expect(readSettings(resolveConfig({ preferRelevantTab: false })).preferRelevantTab).toBe(false)
+
+    const pages = [pageState('f0'), pageState('f0')]
+    const off = harness({ pages, choices: ['e1', 'DONE'], adopt: [null] })
+    await run(off.deps, { preferRelevantTab: false })
+    expect(off.seen.adoptOptions).toEqual([{ onlyIfSameUrl: true }])
+
+    const on = harness({ pages, choices: ['e1', 'DONE'], adopt: [null] })
+    await run(on.deps, { preferRelevantTab: readSettings(resolveConfig({})).preferRelevantTab })
+    // The element the step acted on, and the goal: what the look is chosen by when it finds more than
+    // one page worth moving onto.
+    expect(on.seen.adoptOptions).toEqual([{ onlyIfSameUrl: true, aimedAt: 'Search Find a flight' }])
   })
 
   it('counts a step as a change when the element table moves, the text standing still', async () => {
@@ -1084,7 +1111,7 @@ describe('run loop', () => {
     const result = await run(h.deps)
 
     expect(result.status).toBe('done')
-    expect(h.seen.adoptOptions).toEqual([{ onlyIfSameUrl: true }])
+    expect(h.seen.adoptOptions).toEqual([{ onlyIfSameUrl: true, aimedAt: 'Search Find a flight' }])
     expect(result.follows).toEqual([
       { step: 1, adopted: { url: second.url, title: 'Second page' }, appeared: [{ url: second.url, title: '' }] },
     ])
@@ -1107,7 +1134,7 @@ describe('run loop', () => {
     const result = await run(h.deps)
 
     expect(result.status).toBe('done')
-    expect(h.seen.adoptOptions).toEqual([{ onlyIfSameUrl: false }])
+    expect(h.seen.adoptOptions).toEqual([{ onlyIfSameUrl: false, aimedAt: 'Search Find a flight' }])
     expect(result.follows).toEqual([{ step: 1, adopted: null, appeared: [popup] }])
     expect(result.page).toMatchObject({ url: 'https://example.test/next' })
   })
