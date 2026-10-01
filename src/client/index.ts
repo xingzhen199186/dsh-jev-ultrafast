@@ -28,11 +28,24 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { decisionProvider, resolveDecisionRoute } from '../decision/providers'
 import { TEXT_PROVIDERS, isDshRoute, resolveTextRoute, textProvider } from '../decision/text-providers'
-import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, inspectPageUrl, sourceLabel } from '../protocol'
+import {
+  ENTRY_ID,
+  HELD_LABELS,
+  ROUTE,
+  TOKEN_GLOBAL,
+  TOKEN_HEADER,
+  connectButtonLabel,
+  inspectPageUrl,
+  sourceLabel,
+} from '../protocol'
 import type {
+  BrowserHeldState,
+  BrowserLocalState,
+  ConnectReport,
   DecisionTestReport,
   KeyState,
   LaunchReport,
+  LoginCopyReport,
   LoginProbeReport,
   StatusReport,
   StorableKey,
@@ -157,6 +170,17 @@ function connectionLabel(connection?: 'plugin' | 'daily'): string {
   return (connection === undefined ? undefined : labels?.[connection]) ?? '浏览器'
 }
 
+/**
+ * Which browser the dropdown above has chosen, in the same words.
+ *
+ * Read from the page's own field table rather than from the launcher, because the launcher reads the
+ * disk and this bundle must stay free of node built-ins — the same reason `connectionLabel` and
+ * tests/client.test.ts exist.
+ */
+function browserKindLabel(kind: string): string {
+  return FIELDS.find((field) => field.key === 'browserKind')?.choiceLabels?.[kind] ?? kind
+}
+
 type Tone = 'ok' | 'bad' | 'idle'
 
 function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
@@ -185,6 +209,11 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   /** The browser block's login probe, and what it found in the reader's own browser. */
   const [probing, setProbing] = useState(false)
   const [loginProbe, setLoginProbe] = useState<LoginProbeReport>()
+  /** The same block's copy of those logins into the plugin's own browser, and what it wrote. */
+  const [copying, setCopying] = useState(false)
+  const [loginCopy, setLoginCopy] = useState<LoginCopyReport>()
+  /** The one press that opens (or reopens) the connection to the reader's own browser. */
+  const [connecting, setConnecting] = useState(false)
 
   const check = useCallback(async () => {
     setChecking(true)
@@ -455,7 +484,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       })
       setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
       setNotice(
-        `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是` +
+        `已按你选的 ${report.label} 启动，调试端口在 ${report.endpoint}。它用的是` +
           `插件自己的数据目录（${report.profileDir}），和你日常那个分开；` +
           `需要登录的网站，就在这个窗口里登录一次，登录会留在那里${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
       )
@@ -463,6 +492,38 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setError(message(failure))
     } finally {
       setLaunching(false)
+    }
+  }, [filled, save])
+
+  /**
+   * Connect to the browser the reader is already using — the one press that opens it.
+   *
+   * A connection is what puts 「允许远程调试？」 on screen, so it is never opened by drawing the page
+   * or by a status line: this button, and only this button, asks. What it opens is kept (the host
+   * holds it until it is restarted), which is why the label changes once it has gone away rather
+   * than opening a fresh one behind the reader's back. The browser block is saved first for the same
+   * reason the launch button saves it: the connection must go to the browser the dropdown names.
+   */
+  const connectBrowserFromPage = useCallback(async () => {
+    setConnecting(true)
+    setError('')
+    setNotice('')
+    try {
+      const saved = await save('browser')
+      const report = await ask<ConnectReport>('/connect-browser', { method: 'POST' })
+      setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
+      if (!report.ok) {
+        setError(report.message ?? '这次没连上。')
+        return
+      }
+      setNotice(
+        `已连上你正在用的 ${browserKindLabel(filled('browserKind'))}：这条连接会一直握着，` +
+          `之后跑任务、按这个块里的按钮都不会再弹「允许远程调试？」${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
+      )
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setConnecting(false)
     }
   }, [filled, save])
 
@@ -485,6 +546,28 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setError(message(failure))
     } finally {
       setProbing(false)
+    }
+  }, [])
+
+  /**
+   * Ask the host to carry those logins into the browser this plugin started itself.
+   *
+   * Both halves happen on the host: the reader's browser is read over a browser-level socket (the
+   * same 「允许远程调试？」 box as the probe), and the plugin's own browser is started if it is not
+   * running and written to there. It may take a while — starting a browser is part of it — and the
+   * button's own label says which half it is on.
+   */
+  const runLoginCopy = useCallback(async () => {
+    setCopying(true)
+    setError('')
+    setNotice('')
+    setLoginCopy(undefined)
+    try {
+      setLoginCopy(await ask<LoginCopyReport>('/login-copy', { method: 'POST' }))
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setCopying(false)
     }
   }, [])
 
@@ -789,25 +872,43 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       const browser = status?.browser
       if (status === undefined) return stateRow('现在', checking ? '正在检查' : '还没检查', 'idle')
       if (browser === undefined) return stateRow('现在', '这次没重新连', 'idle', '上面那句是上一次的结果。')
-      if (browser.ok) {
-        return stateRow(
-          '现在',
-          '连上了',
-          'ok',
-          `${browser.endpoint}（${browser.version}）· 连的是${connectionLabel(browser.connection)} · ` +
-            `当前标签页「${browser.title || '空白页'}」，能操作的元素 ${browser.elements} 个。`,
-        )
+      /**
+       * What each local state is called in one word, and whether it is something to fix.
+       *
+       * These five are the whole vocabulary: the host reads them off this machine's files and makes
+       * no connection to find them out, which is the point — a page that connected to draw this line
+       * asked 「允许远程调试？」 every time it was opened. `listening` is the good one; `pinned` is
+       * neither good nor bad, because whether a hand-written address answers is not knowable here.
+       * The one word under `listening` is not this table's: the port answering says nothing about the
+       * connection this host may be holding, so that band is named by `HELD_LABELS` instead.
+       */
+      const standing: Record<BrowserLocalState, { label: string; tone: Tone }> = {
+        'switch-off': { label: '还没打开远程调试', tone: 'bad' },
+        'no-port': { label: '还没有端口', tone: 'bad' },
+        'not-running': { label: '端口没在听', tone: 'bad' },
+        listening: { label: '端口在听', tone: 'ok' },
+        pinned: { label: '填了固定地址', tone: 'idle' },
       }
-      const text = browser.message ?? '连不上这个浏览器。'
+      const base = standing[browser.state]
+      const listening = browser.state === 'listening'
+      const held = browser.held.state
+      const label = listening ? HELD_LABELS[held] : base.label
+      // A connection that went away is the one thing in this band worth acting on, so it is the one
+      // that turns the line red; the other two are what the reader expects to see.
+      const tone: Tone = listening ? (held === 'disconnected' ? 'bad' : 'ok') : base.tone
+      const text = browser.message
       const stop = text.indexOf('。')
       const brief = stop === -1 ? text : text.slice(0, stop + 1)
       const rest = stop === -1 ? '' : text.slice(stop + 1).trim()
-      return stateRow(
-        '现在',
-        '连不上',
-        'bad',
-        rest.length === 0 ? brief : createElement('div', null, brief, more('browser-fix', '怎么弄 ▾', rest)),
-      )
+      const where = `（${connectionLabel(browser.connection)}）`
+      // The rest of a sentence about something to fix is worth keeping, but one click away: this
+      // line sits above five fields, and the reader who already knows the way does not need to read
+      // the whole instruction every time. A state that needs no fixing is shown in full.
+      const detail =
+        tone === 'bad' && rest.length > 0
+          ? createElement('div', null, brief, more('browser-fix', '怎么弄 ▾', rest))
+          : text
+      return stateRow('现在', label + where, tone, detail)
     }
     if (group.id === 'decision') {
       if (status === undefined) return stateRow('现在', '还没检查', 'idle')
@@ -875,7 +976,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
             createElement(
               'div',
               { key: 'line' },
-              `能带走 ${probe.sites} 个站、${probe.total} 条 cookie，其中 ${probe.sessionCookies} 条是关掉浏览器后可能失效的。`,
+              `能带走 ${probe.sites} 个域名、${probe.total} 条 cookie，其中 ${probe.sessionCookies} 条是关掉浏览器后可能失效的。`,
             ),
             probe.bySite.length > 0
               ? createElement(
@@ -893,6 +994,53 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         : probe.message ?? '这次没探测成。',
     )
 
+  /**
+   * What the copy wrote, in one sentence and — only when there is one — the list of differences.
+   *
+   * Counts again, and for the same reason: the cookies went from one browser to the other without
+   * passing through this page, so there is no name and no value here even if someone wanted one. The
+   * list below is deliberately only the domains that came up short; when every domain matched there
+   * is nothing under the sentence at all, which is what "全部对上" means.
+   */
+  const copyResult = (copy: LoginCopyReport): ReactNode => {
+    if (!copy.ok) return createElement('div', { style: S.stateDetail }, copy.message ?? '这次没灌成。')
+    const skipped = [
+      copy.skipped.expired > 0 ? `${copy.skipped.expired} 条已过期` : '',
+      copy.skipped.partitioned > 0 ? `${copy.skipped.partitioned} 条分区 cookie` : '',
+      copy.skipped.noDomain > 0 ? `${copy.skipped.noDomain} 条没有域名` : '',
+    ].filter((part) => part !== '')
+    const tail = skipped.length > 0 ? `；${skipped.join('、')}跳过。` : '。'
+    const head =
+      copy.domains.expected === 0 && copy.cookiesLanded === 0
+        ? // Nothing to write at all is not a tally worth "全部对上": it is the one case a reader will
+          // wonder about, so it gets a sentence that answers the wonder instead of "0 个域名".
+          '写入完成：你正在用的浏览器里没有可写的 cookie'
+        : copy.mismatched.length === 0
+          ? `写入完成：${copy.domains.expected} 个域名全部对上，共 ${copy.cookiesLanded} 条`
+          : `写入完成：${copy.domains.landed} 个域名全部对上，${copy.mismatched.length} 个有差额，共 ${copy.cookiesLanded} 条`
+    return createElement(
+      'div',
+      { style: S.stateDetail },
+      [
+        createElement('div', { key: 'line' }, head + tail),
+        copy.mismatched.length > 0
+          ? createElement(
+              'div',
+              { key: 'short' },
+              ['有差额的域名：']
+                .concat(copy.mismatched.map((entry) => `${entry.domain}（期望 ${entry.expected} / 实际 ${entry.landed}）`))
+                .join('\n'),
+            )
+          : null,
+        createElement(
+          'div',
+          { key: 'honest' },
+          '数量对得上，不等于每个站都免登录：有些站换浏览器后还要再验一次。',
+        ),
+      ],
+    )
+  }
+
   const visibleGroups = FIELD_GROUPS.filter((group) => group.id !== 'advanced')
   const advancedGroup = FIELD_GROUPS.find((group) => group.id === 'advanced')
   const advancedFields = FIELDS.filter((field) => field.group === 'advanced')
@@ -900,6 +1048,13 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const advancedOpen = open.advanced === true
   /** Whether the browser block is drawn for the reader's own browser, which it may not start. */
   const dailyConnection = filled('browserConnection') === 'daily'
+  /**
+   * What the host is holding for the route this page is showing.
+   *
+   * From the last report rather than from the boxes: whether a connection is held is a fact about
+   * the host, and the page cannot make one to find it out.
+   */
+  const heldState: BrowserHeldState = status?.browser?.held?.state ?? 'idle'
   /** Inside 高级设置 a field keeps the name of the block it came from. */
   const blockOf = (id: SectionId): FieldGroup =>
     visibleGroups.find((group) => group.id === id) ?? visibleGroups[0]
@@ -946,13 +1101,39 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
             'div',
             { style: S.actions },
             // The two routes need different things here. On 「你正在用的浏览器」 the plugin may not
-            // start, close or write to that browser, so the only control is the probe — a read —
-            // and the sentences say what to do in the browser itself. On 「插件自己的浏览器」 the
-            // button starts it, and only the launch itself blocks it: the page's own check opens a
-            // tab and can take a while, and letting that disable this would make a press do nothing
-            // at all.
+            // start, close or write to that browser, so the controls are a read (the probe) and a
+            // copy that writes somewhere else, and the sentences say what to do in the browser
+            // itself. On 「插件自己的浏览器」 the button starts it, and only the launch itself blocks
+            // it: the page's own check is a look at the files and cannot get in the way.
             ...(dailyConnection
               ? [
+                  // The one control that opens a connection to the reader's own browser. It is a
+                  // press because a connection is what puts 「允许远程调试？」 on screen, and it is
+                  // drawn only when there is nothing to press it for: once connected, the connection
+                  // is already held and every later task goes through it without asking. The label
+                  // changes rather than the behaviour, so a connection that went away is visibly the
+                  // reader's to reopen — the host will not do it behind their back.
+                  heldState === 'connected'
+                    ? null
+                    : createElement(
+                        'button',
+                        {
+                          key: 'connect',
+                          type: 'button',
+                          onClick: () => void connectBrowserFromPage(),
+                          disabled: connecting,
+                        },
+                        connecting ? '正在连接…' : connectButtonLabel(heldState),
+                      ),
+                  heldState === 'connected'
+                    ? null
+                    : createElement(
+                        'span',
+                        { key: 'connect-hint', style: S.actionsHint },
+                        heldState === 'disconnected'
+                          ? '连接断了以后插件不会自己重连（免得在你没看屏幕的时候弹框），点这个重新连一次。'
+                          : '连一次以后插件会一直握着这条连接，之后跑任务不会再弹「允许远程调试？」；宿主进程重启后才需要重新连。',
+                      ),
                   // A read of the reader's own browser: it counts what is already there and opens
                   // nothing. The host does the connecting, so this button is the only control on the
                   // page that touches a browser the plugin does not own — which is exactly why it
@@ -970,13 +1151,35 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
                   createElement(
                     'span',
                     { key: 'probe-hint', style: S.actionsHint },
-                    '浏览器里会弹出「允许远程调试？」的框，要在框上点「允许」，不点它就会一直等。',
+                    heldState === 'connected'
+                      ? '用的是已经握着的那条连接，不会再弹「允许远程调试？」。'
+                      : '浏览器里会弹出「允许远程调试？」的框，要在框上点「允许」，不点它就会一直等。',
                   ),
                   createElement(
                     'span',
                     { key: 'how', style: S.actionsHint },
                     `连不上时：在 ${inspectPageUrl(filled('browserKind') === 'chrome' ? 'chrome' : 'edge')} 里勾上` +
-                      '「允许远程调试」，再在弹出的「允许远程调试？」框上点「允许」——插件会一直等这个框，不超时、也不重试。',
+                      '「允许远程调试」，再在弹出的「允许远程调试？」框上点「允许」。',
+                  ),
+                  // The copy, which is the other half of the same idea: read from the reader's own
+                  // browser, and write into the one this plugin owns. It is the only control here
+                  // that takes a while, because starting the other browser is part of it.
+                  createElement(
+                    'button',
+                    {
+                      key: 'copy',
+                      type: 'button',
+                      onClick: () => void runLoginCopy(),
+                      disabled: copying,
+                    },
+                    copying ? '正在灌入…' : '把登录灌进插件自己的浏览器',
+                  ),
+                  createElement(
+                    'span',
+                    { key: 'copy-hint', style: S.actionsHint },
+                    heldState === 'connected'
+                      ? '用的是已经握着的那条连接读你正在用的浏览器，不会再弹「允许远程调试？」；然后启动插件自己那个浏览器，把 cookie 写进去；写的是全部站点，不筛选。'
+                      : '会先连你正在用的浏览器（它会再弹一次「允许远程调试？」，要点「允许」），然后启动插件自己那个浏览器，把 cookie 写进去；写的是全部站点，不筛选。',
                   ),
                 ]
               : [
@@ -1001,6 +1204,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       // Only where its own button is: a result with no button above it would be a number the
       // reader cannot ask for again, and one from a route the page is no longer showing.
       group.id === 'browser' && dailyConnection && loginProbe !== undefined ? probeResult(loginProbe) : null,
+      group.id === 'browser' && dailyConnection && loginCopy !== undefined ? copyResult(loginCopy) : null,
       group.id === 'decision'
         ? createElement(
             'div',

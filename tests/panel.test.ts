@@ -25,7 +25,7 @@ interface FakeRoute {
   handler: (req: unknown, res: unknown) => void | Promise<void>
 }
 
-function panelHarness() {
+function panelHarness(settings: Record<string, unknown> = {}) {
   const routes: FakeRoute[] = []
   const listeners: Array<(table: Row[]) => void> = []
   let tapIndexCalls = 0
@@ -49,7 +49,7 @@ function panelHarness() {
     inject: (_keys: string[], callback: (scope: unknown) => void) => callback(inner),
     effect: () => () => {},
   } as unknown as Context
-  registerPanel(ctx, (Config as unknown as (data: unknown) => ConfigShape)({}))
+  registerPanel(ctx, (Config as unknown as (data: unknown) => ConfigShape)(settings))
   return { routes, listeners, tapIndexCalls: () => tapIndexCalls }
 }
 
@@ -62,9 +62,13 @@ function handedToPage(listeners: Array<(table: Row[]) => void>): Row[] {
 async function ask(
   handler: FakeRoute['handler'],
   headers: Record<string, string>,
+  options: { url?: string; method?: string } = {},
 ): Promise<{ statusCode: number; body: string }> {
   const res = { statusCode: 0, body: '', setHeader: () => {}, end: (body: string) => void (res.body = body) }
-  await handler({ url: `${ROUTE}/nope`, method: 'GET', headers }, res)
+  await handler(
+    { url: options.url ?? `${ROUTE}/nope`, method: options.method ?? 'GET', headers },
+    res,
+  )
   return res
 }
 
@@ -103,5 +107,26 @@ describe('settings page token', () => {
     const first = handedToPage(panelHarness().listeners)[0]!.value
     const second = handedToPage(panelHarness().listeners)[0]!.value
     expect(first).not.toBe(second)
+  })
+})
+
+describe('连接你的浏览器 belongs to the reader’s own browser', () => {
+  /**
+   * The button on the page is drawn for 「你正在用的浏览器」 only, and the route says the same thing:
+   * on 「插件自己的浏览器」 there is nothing to connect to until 「启动并连接」 has started one, so a
+   * press is refused with a sentence rather than answered by reading profiles and opening a socket.
+   */
+  it('is refused, before anything is read or opened, on the plugin’s own route', async () => {
+    const harness = panelHarness({ browserConnection: 'plugin' })
+    const route = harness.routes.find((entry) => entry.path === ROUTE)
+    expect(route).toBeDefined()
+    const token = handedToPage(harness.listeners)[0]!.value as string
+
+    const refused = await ask(route!.handler, { [TOKEN_HEADER]: token }, {
+      url: `${ROUTE}/connect-browser`,
+      method: 'POST',
+    })
+    expect(refused.statusCode).toBe(409)
+    expect(refused.body).toContain('连接方式')
   })
 })

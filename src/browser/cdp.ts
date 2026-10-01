@@ -34,8 +34,11 @@ export class CdpConnection {
   readonly #socket: WebSocket
   readonly #pending = new Map<number, Pending>()
   readonly #listeners = new Set<CdpEventListener>()
+  /** Whoever is holding this socket open, told once when it goes away and why. */
+  readonly #closers = new Set<(reason: Error) => void>()
   #nextId = 1
   #closed = false
+  #notified = false
 
   private constructor(socket: WebSocket) {
     this.#socket = socket
@@ -109,6 +112,55 @@ export class CdpConnection {
     }
   }
 
+  /**
+   * Be told when this socket goes away, and why — once, however it went.
+   *
+   * This is what a long-held connection needs and nothing before it did: a socket that outlives
+   * the request that opened it may die while nobody is asking it anything, and the only moment
+   * that is knowable is when the browser's own `close`/`error` arrives. The reason is the same
+   * sentence the in-flight commands were rejected with.
+   */
+  onClose(listener: (reason: Error) => void): () => void {
+    this.#closers.add(listener)
+    return () => {
+      this.#closers.delete(listener)
+    }
+  }
+
+  /**
+   * Ask the browser, every so often, whether this connection is still there.
+   *
+   * A connection held across tasks sits idle for minutes at a time, and an idle socket that has
+   * quietly died is indistinguishable from a live one until the next command fails — which, for a
+   * task, is the middle of the work. The interval only asks; it never closes anything, because the
+   * policy for a connection that has gone is the holder's (see ./held.ts).
+   *
+   * Returns the way to stop asking. `timer` is unref'd: a keepalive must never be the reason a
+   * host process stays alive.
+   */
+  keepalive(intervalMs: number): () => void {
+    const timer = setInterval(() => this.#ping(), intervalMs)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    return () => clearInterval(timer)
+  }
+
+  #ping(): void {
+    // The WHATWG `WebSocket` Node ships has no `ping()`, so when the transport offers one it is
+    // sent; otherwise the same question is asked over the protocol this plugin actually speaks,
+    // which proves the browser is answering rather than merely that the socket is open. Either way
+    // a failure is not reported here: `close`/`error` is what reports it, through `onClose`.
+    const socket = this.#socket as unknown as { ping?: () => void }
+    if (typeof socket.ping === 'function') {
+      try {
+        socket.ping()
+        return
+      } catch {
+        // The socket is already gone; the close handler is on its way.
+      }
+    }
+    void this.send('Browser.getVersion').catch(() => {})
+  }
+
   /** Close the socket and reject everything still in flight. */
   close(): void {
     if (this.#closed) return
@@ -143,6 +195,11 @@ export class CdpConnection {
     this.#closed = true
     for (const pending of this.#pending.values()) pending.reject(error)
     this.#pending.clear()
+    // Once, and only once: `close`, `error` and a closing socket all arrive at this method, and a
+    // holder that heard "it died" three times would be told nothing new.
+    if (this.#notified) return
+    this.#notified = true
+    for (const listener of this.#closers) listener(error)
   }
 }
 

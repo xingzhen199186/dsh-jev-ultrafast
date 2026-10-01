@@ -16,7 +16,7 @@ import { readFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { inspectPageUrl } from '../protocol'
+import { inspectPageUrl, type BrowserLocalState } from '../protocol'
 
 /** One working browser DevTools endpoint, plus where it came from. */
 export interface BrowserEndpoint {
@@ -270,13 +270,20 @@ export function wsUrlFromActivePort(active: ActivePort): string | null {
   return active.path.startsWith('/') ? `ws://127.0.0.1:${active.port}${active.path}` : null
 }
 
-/** Which of the four things is wrong when the reader's own browser cannot be reached. */
-export type DailyBrowserProblem = 'switch-off' | 'no-port' | 'not-running' | 'not-authorized'
+/**
+ * Which of the five things is wrong when the reader's own browser cannot be reached.
+ *
+ * `disconnected` is the odd one of the five: nothing is wrong with the browser, and the host knows
+ * the answer without reading a single file — it was holding that connection and it went away. It
+ * carries the same class because it is fixed in the same place as the others (the reader acts, and
+ * the plugin waits), and because every route that can hit it already reports a `DailyBrowserError`.
+ */
+export type DailyBrowserProblem = 'switch-off' | 'no-port' | 'not-running' | 'not-authorized' | 'disconnected'
 
 /**
- * The reader's own browser could not be reached, and which of the four things is wrong.
+ * The reader's own browser could not be reached, and which of the five things is wrong.
  *
- * Four, because they are fixed in four different places, and one sentence for all of them would
+ * Five, because they are fixed in five different places, and one sentence for all of them would
  * send the reader to check something that is not the problem. See `dailyFailure` for the wording.
  */
 export class DailyBrowserError extends Error {
@@ -352,6 +359,155 @@ export async function discoverDailyBrowser(
 }
 
 /**
+ * What the files say about a browser, with no connection made to find out.
+ *
+ * `BrowserLocalState` itself is declared in ../protocol, because the page switches on the same five
+ * words: one vocabulary, so "listening" cannot come to mean two things on the two sides.
+ */
+export interface LocalBrowserStatus {
+  state: BrowserLocalState
+  /** The address something named, when something did. */
+  endpoint?: string
+  /** Where that address came from, in the wording the page quotes. */
+  source?: string
+  /** The state in words, as one or more sentences with no connected-only claim in them. */
+  message: string
+}
+
+/**
+ * Read what this machine already knows about a browser, and connect to nothing.
+ *
+ * This is what the settings page asks on open, and the reason it exists is the whole point: a
+ * connection is what makes Chrome/Edge 144+ ask 「允许远程调试？」, and a page that connects just to
+ * draw a status line asks on every single open. Everything here is a file read or a loopback
+ * `connect()`, so the page can say where the browser stands without putting a box on screen —
+ * and without opening a tab in a browser it does not own.
+ *
+ * A named address is answered as `pinned` rather than checked, because a `cdpUrl` may point at
+ * another machine and "is it up?" is exactly the question only a connection answers.
+ *
+ * The two conventional debugging ports are a parameter for the same reason `findBrowserExecutable`
+ * takes an `exists`: a test that says "nothing is running here" has to be able to say what counts as
+ * running, instead of depending on a browser someone left on 9222 on this machine.
+ */
+export async function localBrowserStatus(
+  options: DiscoverOptions = {},
+  ports: readonly number[] = CONVENTIONAL_PORTS,
+): Promise<LocalBrowserStatus> {
+  const pinned = pinnedAddress(options)
+  if (pinned !== null) {
+    return {
+      state: 'pinned',
+      endpoint: pinned.endpoint,
+      source: pinned.source,
+      message: `配置里填了一个固定地址：${pinned.endpoint}（${pinned.source}）。这一页没有去连它——连不连得上，要按下面的按钮才知道。`,
+    }
+  }
+
+  const own = options.connection !== 'daily'
+  const kind = options.preferredKind ?? 'edge'
+  if (!own) {
+    const dir = options.userDataDir?.trim() || dailyProfileDir(kind)
+    // The browser's own record of the switch. A profile that records nothing counts as off.
+    if ((await remoteDebuggingEnabled(dir)) !== true) return localState('switch-off', kind, false)
+    const active = await readActivePort(dir)
+    if (active === null) return localState('no-port', kind, false)
+    return localState(
+      (await isPortListening(active.port)) ? 'listening' : 'not-running',
+      kind,
+      false,
+      `http://127.0.0.1:${active.port}`,
+      `你正在用的 ${BROWSER_LABELS[kind]}（${dir} 里的 DevToolsActivePort）`,
+    )
+  }
+
+  // The plugin's own browser: the same candidates `discoverOwnBrowser` would try, each asked the one
+  // question a file can answer. A port file that is there but dead is `not-running` rather than
+  // `no-port`, because those two are fixed in different places.
+  const candidates: Array<{ port: number; source: string; fileBacked: boolean }> = []
+  const seen = new Set<number>()
+  const add = (port: number, source: string, fileBacked: boolean): void => {
+    if (seen.has(port)) return
+    seen.add(port)
+    candidates.push({ port, source, fileBacked })
+  }
+  for (const dir of pluginUserDataDirs(options.userDataDir, options.preferredKind)) {
+    const active = await readActivePort(dir)
+    if (active !== null) add(active.port, `${dir} 里的 DevToolsActivePort`, true)
+  }
+  for (const port of ports) add(port, `常用的调试端口 ${port}`, false)
+
+  for (const candidate of candidates) {
+    if (await isPortListening(candidate.port)) {
+      return localState('listening', kind, true, `http://127.0.0.1:${candidate.port}`, candidate.source)
+    }
+  }
+  const first = candidates.find((candidate) => candidate.fileBacked)
+  return first === undefined
+    ? localState('no-port', kind, true)
+    : localState('not-running', kind, true, `http://127.0.0.1:${first.port}`, first.source)
+}
+
+/**
+ * The state in words, in the two voices the two routes need.
+ *
+ * The reader's own browser reuses the sentences `dailyFailure` already wrote for the three states a
+ * connection attempt shares with a look at the files, so the page says the same thing whether the
+ * state was noticed while drawing the page or while trying to reach it. The plugin's own browser has
+ * no switch to flick, so its words name the button that starts it instead.
+ */
+function localState(
+  state: BrowserLocalState,
+  kind: BrowserKind,
+  own: boolean,
+  endpoint?: string,
+  source?: string,
+): LocalBrowserStatus {
+  const label = BROWSER_LABELS[kind]
+  const where = endpoint === undefined ? '' : `${endpoint}${source === undefined ? '' : `（${source}）`}`
+  const sentences: string[] =
+    state === 'switch-off'
+      ? [dailyFailure(kind, 'switch-off').message]
+      : state === 'no-port'
+        ? [
+            own
+              ? `插件自己的${label}还没有起过：它自己的档案目录里没有 DevToolsActivePort。按下面的「启动并连接」起一个。`
+              : dailyFailure(kind, 'no-port').message,
+          ]
+        : state === 'not-running'
+          ? [
+              own
+                ? `端口文件还在，但没有人监听：插件自己的${label}现在没开着（或刚关过，这是上一次留下的）。按下面的「启动并连接」可以重新起一个。`
+                : dailyFailure(kind, 'not-running').message,
+            ]
+          : [
+              `调试端口在听：${where}。`,
+              own
+                ? '这一页没有去连它，所以不会在它里面开标签页。'
+                : '这一页没有去连它，所以现在不会再弹「允许远程调试？」；真要用它的时候（跑一次任务、或按下面的按钮），那一下才会弹。',
+            ]
+  return { state, message: sentences.join(''), ...(endpoint === undefined ? {} : { endpoint }), ...(source === undefined ? {} : { source }) }
+}
+
+/**
+ * The address a reader named by hand, in the order `discoverExplicit` uses.
+ *
+ * Only the naming is shared with that route; what differs is what happens next. Discovery resolves
+ * the address through `/json/version` to learn its socket, while this returns it as it stands —
+ * resolving it would be the connection this file exists to avoid.
+ */
+function pinnedAddress(options: DiscoverOptions): { endpoint: string; source: string } | null {
+  if (options.cdpUrl?.trim()) {
+    return { endpoint: asHttpUrl(options.cdpUrl) ?? options.cdpUrl.trim(), source: `配置里的 cdpUrl（${options.cdpUrl}）` }
+  }
+  for (const name of ['BU_CDP_WS', 'BU_CDP_URL'] as const) {
+    const value = process.env[name]?.trim()
+    if (value) return { endpoint: asHttpUrl(value) ?? value, source: `环境变量 ${name}` }
+  }
+  return null
+}
+
+/**
  * Where the reader's own browser keeps its profile.
  *
  * The same three platforms the launcher knows, and only the chosen browser of each: the reader
@@ -392,8 +548,8 @@ export async function remoteDebuggingEnabled(dir: string): Promise<boolean | nul
 /**
  * The one sentence that sends the reader to the place this failure is fixed in.
  *
- * Exported because the login probe hits the same four walls and must say the same four things:
- * one place for the wording, so a sentence fixed here is fixed on both routes.
+ * Exported because the login probe hits the same walls and must say the same things: one place for
+ * the wording, so a sentence fixed here is fixed on both routes.
  */
 export function dailyFailure(kind: BrowserKind, problem: DailyBrowserProblem): DailyBrowserError {
   const label = BROWSER_LABELS[kind]
@@ -409,6 +565,11 @@ export function dailyFailure(kind: BrowserKind, problem: DailyBrowserProblem): D
     'not-authorized':
       `${label} 在，端口也在，但这次连接没被允许：它弹了一个「允许远程调试？」的框，需要在上面点「允许」。` +
       '这个框每次连接都会出现，插件不会替你点，会一直等在那里。',
+    // Said after a connection the host was holding went away. The plugin does not reconnect on its
+    // own here — a reconnect raises that box again, and it would appear while the reader is somewhere
+    // else — so the one thing to do is press the button, and this sentence is what says so.
+    disconnected:
+      `和你的 ${label} 连接断了，请到设置页点「重新连接」——${label} 会再弹一次「允许远程调试？」。`,
   }
   return new DailyBrowserError(problem, messages[problem])
 }

@@ -3,15 +3,16 @@
  *
  * Ported from jev-ultrafast `jev_ultrafast/browser.py`
  * (https://github.com/browser-use/jev-ultrafast, MIT, Copyright (c) 2026 Browser
- * Use). The Python `browser-harness` transport is replaced by ./cdp.ts and
- * ./discover.ts; the rest follows the upstream behaviour deliberately: an owned
+ * Use). The Python `browser-harness` transport is replaced by ./cdp.ts, ./discover.ts
+ * and ./held.ts — the connection is the host's, held across tasks; what this file owns
+ * is one tab. The rest follows the upstream behaviour deliberately: an owned
  * background tab rather than the user's active tab, the same fixed viewport, the
  * same focus emulation, and the same two-layer freshness check (a cheap per-node
  * guard before a click or select, the full semantic marker otherwise).
  */
 import { createHash } from 'node:crypto'
-import { CdpConnection } from './cdp'
-import { discoverBrowser, type DiscoverOptions } from './discover'
+import type { DiscoverOptions } from './discover'
+import { acquireConnection, type HeldSocket } from './held'
 import type { NestedFacts } from './nested'
 import { SNAPSHOT_SOURCE } from './snapshot'
 
@@ -129,7 +130,11 @@ export interface BrowserPort {
 
 /** A single owned tab, with one CDP session attached to it. */
 export class BrowserSession implements BrowserPort {
-  readonly #connection: CdpConnection
+  /**
+   * The host's connection, not this session's. It is the one the reader allowed and the one the next
+   * task will reuse, so nothing here closes it; what this session owns is the tab below.
+   */
+  readonly #connection: HeldSocket
   /** The tab this session is attached to now; it changes when the run follows a new one. */
   #targetId: string
   #sessionId: string
@@ -141,47 +146,44 @@ export class BrowserSession implements BrowserPort {
   #afterInput: SnapshotAction | null = null
   #closed = false
 
-  private constructor(connection: CdpConnection, targetId: string, sessionId: string) {
+  private constructor(connection: HeldSocket, targetId: string, sessionId: string) {
     this.#connection = connection
     this.#targetId = targetId
     this.#sessionId = sessionId
     this.#originTargetId = targetId
   }
 
-  /** Discover a browser, open a background tab in it, and load `url`. */
+  /**
+   * Attach a background tab to the browser, and load `url` in it.
+   *
+   * The connection is not opened here. It is asked for, and the holder answers with the one that is
+   * already open when there is one — attaching to a tab is what a task does to a connection the
+   * reader allowed once. Only when there is none does this end in a new handshake, and the reader's
+   * own browser asks permission on every one of those.
+   */
   static async open(url: string, options: DiscoverOptions = {}): Promise<BrowserSession> {
-    const endpoint = await discoverBrowser(options)
-    // The reader's own browser asks permission on every connect, and that box stays on screen
-    // only while this handshake is parked on it, so this is the one route that passes no
-    // deadline. See `CdpConnection.connect`.
-    const connection = await CdpConnection.connect(
-      endpoint.wsUrl,
-      options.connection === 'daily' ? 0 : undefined,
-    )
+    const { connection } = await acquireConnection(options)
+    const { targetId } = await connection.send<{ targetId: string }>('Target.createTarget', {
+      url: 'about:blank',
+      background: true,
+    })
+    const { sessionId } = await connection.send<{ sessionId: string }>('Target.attachToTarget', {
+      targetId,
+      flatten: true,
+    })
+    const session = new BrowserSession(connection, targetId, sessionId)
     try {
-      const { targetId } = await connection.send<{ targetId: string }>('Target.createTarget', {
-        url: 'about:blank',
-        background: true,
-      })
-      const { sessionId } = await connection.send<{ sessionId: string }>('Target.attachToTarget', {
-        targetId,
-        flatten: true,
-      })
-      const session = new BrowserSession(connection, targetId, sessionId)
-      try {
-        await session.#applyViewport()
-        await session.call('Page.navigate', { url })
-        await session.#waitForLoad()
-        // Seeded after the first load: whatever was already open (the user's tabs and
-        // this tab) is the baseline, and only pages after it count as "appeared".
-        await session.#rememberPages()
-        return session
-      } catch (error) {
-        await session.close()
-        throw error
-      }
+      await session.#applyViewport()
+      await session.call('Page.navigate', { url })
+      await session.#waitForLoad()
+      // Seeded after the first load: whatever was already open (the user's tabs and
+      // this tab) is the baseline, and only pages after it count as "appeared".
+      await session.#rememberPages()
+      return session
     } catch (error) {
-      connection.close()
+      // The tab goes back here; the connection stays. It is live and already allowed, and only the
+      // holder decides when one stops being worth keeping (see ./held.ts).
+      await session.close()
       throw error
     }
   }
@@ -291,7 +293,13 @@ export class BrowserSession implements BrowserPort {
     return { adopted: listed[appeared.indexOf(adopted)]!, appeared: listed }
   }
 
-  /** Close the tab this session created; the connection goes with it. */
+  /**
+   * Close the tab this session created. The connection stays open.
+   *
+   * That is the whole point of holding it: one permission box covers every task until this host
+   * restarts, so a task that put its connection away would make the next one ask again. A browser
+   * that has gone away closes its own side, and the holder hears about it there.
+   */
   async close(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
@@ -300,7 +308,6 @@ export class BrowserSession implements BrowserPort {
     } catch {
       // The browser may already be gone; nothing left to release.
     }
-    this.#connection.close()
   }
 
   /** Page targets, as the browser reports them. */

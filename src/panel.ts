@@ -17,10 +17,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { BROWSER_LABELS, DailyBrowserError, discoverBrowser } from './browser/discover'
+import { lastAttached } from './browser/attached'
+import {
+  BROWSER_LABELS,
+  DailyBrowserError,
+  dailyFailure,
+  discoverDailyBrowser,
+  localBrowserStatus,
+} from './browser/discover'
+import { heldStatus, reconnectConnection } from './browser/held'
 import { launchBrowser } from './browser/launch'
+import { CopyTargetError, copyDailyLoginsIntoPluginBrowser } from './browser/login-copy'
 import { probeDailyLogins } from './browser/login-probe'
-import { BrowserSession } from './browser/session'
 import type { Config as ConfigShape } from './config'
 import { changeKey, describeKey, resolveKey, storableNames } from './credentials'
 import { actionSpace } from './decision/action-space'
@@ -38,8 +46,10 @@ import { TEXT_PROBE } from './prompts'
 import { ROUTE, TOKEN_GLOBAL, TOKEN_HEADER } from './protocol'
 import type {
   BrowserReport,
+  ConnectReport,
   DecisionTestReport,
   LaunchReport,
+  LoginCopyReport,
   LoginProbeReport,
   StorableKey,
   StatusReport,
@@ -195,6 +205,26 @@ async function handle(
       send(res, 200, await testDecision(ctx, config))
       return
     }
+    if (path === '/connect-browser') {
+      if (req.method !== 'POST') {
+        send(res, 405, { error: '这个接口只接受 POST。' })
+        return
+      }
+      // The mirror image of the refusal below: this button is about the reader's own browser, and it
+      // is the only thing in the plugin that may open a connection to it. On the plugin's own route
+      // there is nothing to connect to until 「启动并连接」 has started a browser, so it is refused
+      // there rather than left looking like a button that does nothing.
+      if (config.browserConnection.get() !== 'daily') {
+        send(res, 409, {
+          error:
+            '现在的「连接方式」是「插件自己的浏览器」：那一个由「启动并连接」负责启动和连接，不需要这个按钮。' +
+            '要连你正在用的浏览器，先把「连接方式」改成「你正在用的浏览器」。',
+        })
+        return
+      }
+      send(res, 200, await connectDailyBrowser(config))
+      return
+    }
     if (path === '/launch-browser') {
       if (req.method !== 'POST') {
         send(res, 405, { error: '这个接口只接受 POST。' })
@@ -230,6 +260,17 @@ async function handle(
         return
       }
       send(res, 200, await loginProbe(config))
+      return
+    }
+    if (path === '/login-copy') {
+      // POST rather than GET because this one changes something: the plugin's own browser is written
+      // to. The reader's own browser is only read — no tab in it, no write to its profile — and the
+      // answer carries counts rather than cookies.
+      if (req.method !== 'POST') {
+        send(res, 405, { error: '这个接口只接受 POST。' })
+        return
+      }
+      send(res, 200, await loginCopy(config))
       return
     }
     if (path === '/text-models') {
@@ -364,37 +405,120 @@ function credentialsFile(): string {
   return join(home && home.length > 0 ? home : join(homedir(), '.dsh'), '.credentials.yaml')
 }
 
-async function browserReport(config: ConfigShape): Promise<BrowserReport> {
+/**
+ * Where the browser stands, judged from this machine and never by connecting to it.
+ *
+ * The page asks this every time it opens, and a connection is what makes Chrome/Edge put
+ * 「允许远程调试？」 on screen — so a status line that connected once per page load asked the reader
+ * for permission every single time, and left a background tab in a browser this plugin does not
+ * own. Everything here is a file read or a loopback check (`localBrowserStatus`), plus what the
+ * holder remembers about the connection it is keeping (`heldStatus`, which is memory and nothing
+ * else); the one piece of connected-after knowledge is `lastAttached`, noted by whoever really did
+ * connect during this run.
+ *
+ * A launch reports through this too, for the same reason: after the plugin's own browser has been
+ * started, what the page needs is its address, and the port file already says that.
+ *
+ * Exported because "this never connects" is a property worth a test of its own: a status line that
+ * quietly connected again would put 「允许远程调试？」 back on screen every time the page opens.
+ */
+export async function browserReport(config: ConfigShape): Promise<BrowserReport> {
   const connection = config.browserConnection.get()
-  const options = {
+  const kind = config.browserKind.get()
+  const local = await localBrowserStatus({
     cdpUrl: config.cdpUrl.get() || undefined,
     userDataDir: config.userDataDir.get() || undefined,
-    preferredKind: config.browserKind.get(),
+    preferredKind: kind,
     connection,
+  })
+  const attached = lastAttached(connection)
+  const held = heldStatus(connection)
+  // A state that names an address carries two sentences: where the browser is, and that this page
+  // has not connected to it. The second is only true while nothing is held, so it — and only it —
+  // is dropped once there is a connection, while the address sentence is kept because it is still
+  // the right answer to "where is it?". A browser that is not even running keeps its whole
+  // sentence: that one is the first thing to act on, whatever is held for it.
+  const addressKnown = local.state === 'listening' || local.state === 'pinned'
+  const localSaid =
+    !addressKnown || held.state === 'idle'
+      ? local.message
+      : held.state === 'connected'
+        ? firstSentence(local.message)
+        : // A broken connection: the sentence that matters is the held one, which says what to press.
+          ''
+  const heldSaid =
+    held.state === 'disconnected'
+      ? dailyFailure(kind, 'disconnected').message
+      : held.state === 'connected'
+        ? HELD_SAID
+        : ''
+  return {
+    ...local,
+    connection,
+    ...(attached === undefined ? {} : { attached }),
+    held,
+    // The state's own sentence first, then what is held, then — only when this host has really
+    // connected on this route — the one line of connected-after information this report may carry.
+    message:
+      localSaid +
+      heldSaid +
+      (attached === undefined ? '' : `本次 DSH 启动以来连过一次：${attached.endpoint}（${ago(attached.at)}）。`),
   }
+}
+
+/** What the page says while a connection really is being held: the whole point of holding it. */
+const HELD_SAID =
+  '这条连接正握着，之后跑任务不会再弹「允许远程调试？」；宿主进程重启后才需要重新连。'
+
+/**
+ * The first sentence of a state line, which is the sentence that names the address.
+ *
+ * What follows it is about connecting — "this page has not connected to it, so nothing pops up" — and
+ * once a connection is held that is the wrong story while the address is still the right answer.
+ */
+function firstSentence(text: string): string {
+  const stop = text.indexOf('。')
+  return stop === -1 ? text : text.slice(0, stop + 1)
+}
+
+/**
+ * Open the reader's own browser because the reader pressed the button.
+ *
+ * This is the only place a connection to that browser is ever opened by asking, and the asking is
+ * the point: Chrome/Edge 144+ put 「允许远程调试？」 on screen once per connection, so the connection
+ * is opened once and kept (see ./browser/held.ts) rather than per task. Nothing else in the plugin
+ * presses this button for the reader — not page load, not a task — which is what makes the box
+ * appear at a moment the reader is looking.
+ *
+ * A page load does not do this, and must not start doing it: the state line is drawn from the files
+ * on this machine, and connecting there would put the box on screen every time the page opened —
+ * the exact regression this release fixes.
+ */
+async function connectDailyBrowser(config: ConfigShape): Promise<ConnectReport> {
+  const kind = config.browserKind.get()
   try {
-    const endpoint = await discoverBrowser(options)
-    const session = await BrowserSession.open('about:blank', options)
-    try {
-      // Observing the blank page is the cheap proof that the connection is not just
-      // answering /json/version: it round-trips the snapshot script through a real
-      // tab and one attached session.
-      const page = await session.observe()
-      return {
-        ok: true,
-        connection,
-        endpoint: endpoint.httpUrl,
-        version: endpoint.browser,
-        source: endpoint.source,
-        title: page.title,
-        elements: page.actions.length,
-      }
-    } finally {
-      await session.close()
-    }
+    // The address is read fresh rather than remembered: after a browser restart the port is a new
+    // one, and reconnecting means going to wherever that browser now is.
+    const endpoint = await discoverDailyBrowser(kind, { profileDir: config.userDataDir.get() || undefined })
+    // `reconnectConnection` rather than `holdConnection`: this press is the reader's own decision to
+    // try again, so a connection the holder remembers as broken is forgotten first instead of being
+    // reported back at them.
+    await reconnectConnection(endpoint.wsUrl, { route: 'daily', kind })
+    return { ok: true, browser: await browserReport(config) }
   } catch (error) {
-    return { ok: false, connection, message: describe(error) }
+    if (error instanceof DailyBrowserError) {
+      return { ok: false, browser: await browserReport(config), message: error.message }
+    }
+    throw error
   }
+}
+
+/** How long ago a connection happened, in words a reader can use. */
+function ago(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
+  if (seconds < 90) return '刚刚'
+  const minutes = Math.round(seconds / 60)
+  return minutes < 60 ? `${minutes} 分钟前` : `${Math.round(minutes / 60)} 小时前`
 }
 
 /**
@@ -406,9 +530,10 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
  * opened either: see src/browser/login-probe.ts for why that is a property of the route rather than
  * a promise.
  *
- * The four ways the reader's own browser cannot be reached come back as an answer rather than as an
- * error, because each one is a sentence about something to do in that browser; the page shows it
- * under the button that asked.
+ * The ways the reader's own browser cannot be reached come back as an answer rather than as an
+ * error, because each one is a sentence about something to do in that browser — or, when the
+ * connection this host was holding has gone away, about the button that opens it again. The page
+ * shows it under the button that asked.
  */
 async function loginProbe(config: ConfigShape): Promise<LoginProbeReport> {
   const kind = config.browserKind.get()
@@ -429,6 +554,48 @@ async function loginProbe(config: ConfigShape): Promise<LoginProbeReport> {
         bySite: [],
         message: error.message,
       }
+    }
+    throw error
+  }
+}
+
+/**
+ * Carry the logins of the reader's own browser into the browser this plugin started.
+ *
+ * The reader asked for every site and no filtering, so nothing here picks: what cannot be carried
+ * is counted by reason, and what was meant to land is checked against what the plugin's browser
+ * says it now holds — per domain, which is the finest thing the page may be told. No cookie's name
+ * or value is in this answer, in a log, or in a trace.
+ *
+ * The four ways the reader's own browser cannot be reached come back as an answer rather than as an
+ * error, in the same words the probe uses, because each one is a sentence about something to do in
+ * that browser. A plugin browser that will not come up is a sentence too: the button says what
+ * happened instead of the page showing a stack trace.
+ */
+async function loginCopy(config: ConfigShape): Promise<LoginCopyReport> {
+  const kind = config.browserKind.get()
+  const label = BROWSER_LABELS[kind]
+  const nothing = {
+    domains: { expected: 0, landed: 0 },
+    cookiesLanded: 0,
+    skipped: { expired: 0, partitioned: 0, noDomain: 0 },
+    mismatched: [],
+  }
+  try {
+    return {
+      ok: true,
+      label,
+      ...(await copyDailyLoginsIntoPluginBrowser({
+        kind,
+        // 数据目录 is honoured for the source for the same reason the probe honours it: a browser
+        // started with `--user-data-dir` keeps its profile, and its `DevToolsActivePort`, elsewhere.
+        profileDir: config.userDataDir.get() || undefined,
+        exeOverride: config.browserPath.get() || undefined,
+      })),
+    }
+  } catch (error) {
+    if (error instanceof DailyBrowserError || error instanceof CopyTargetError) {
+      return { ok: false, label, ...nothing, message: error.message }
     }
     throw error
   }

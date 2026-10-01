@@ -38,22 +38,105 @@ export const TOKEN_GLOBAL = '__JEV_ULTRAFAST_TOKEN__'
 /** The cordis row this plugin's settings belong to: the bundle's package name. */
 export const ENTRY_ID = 'dsh-jev-ultrafast'
 
-/** Whether a browser could be reached, and what it was. */
-export interface BrowserReport {
-  ok: boolean
-  /** HTTP base URL of the DevTools endpoint that answered. */
+/**
+ * Where a browser stands, judged from what is on this machine rather than by connecting to it.
+ *
+ * `switch-off`, `no-port`, `not-running` and `listening` are the four things the reader's own
+ * browser says about itself in the files it writes: the switch is off, the switch is on with no port
+ * written down, the port file is there but nobody is listening, or the port is there and answers.
+ * `pinned` is a browser named by hand (the `cdpUrl` setting or the environment), where whether it
+ * can be reached is not this machine's to answer.
+ *
+ * It lives here rather than next to the reading code because it is a contract: the page draws a
+ * different line for each one, and both halves have to mean the same thing by the same word.
+ */
+export type BrowserLocalState = 'switch-off' | 'no-port' | 'not-running' | 'listening' | 'pinned'
+
+/**
+ * Whether the host is holding a live connection to a browser.
+ *
+ * `idle` is "nothing held" rather than "it failed": this host may simply not have connected yet.
+ * `disconnected` is the one that matters to the page — a connection the host *was* holding went
+ * away, and the host will not open another one on its own. It lives here because it is a contract:
+ * the page draws a different verdict and a different button for each value, and the host's answer
+ * has to mean the same thing by the same word.
+ */
+export type BrowserHeldState = 'idle' | 'connected' | 'disconnected'
+
+/** What is held right now, if anything. Never a credential or a cookie: addresses and sentences only. */
+export interface BrowserHeldReport {
+  state: BrowserHeldState
+  /** The WebSocket address the connection was opened at, when one was. */
   endpoint?: string
-  /** Version string the endpoint reported, for example `Chrome/140.0.7339.128`. */
-  version?: string
-  /** Where the endpoint was found: setting, environment, browser file, default port. */
+  /** Milliseconds since the epoch: when this connection was established. */
+  connectedAt?: number
+  /** Why it went away, in the browser's own words, when it did. */
+  reason?: string
+}
+
+/**
+ * Where the browser stands, and only what can be said without connecting to it.
+ *
+ * The page asks this on open, and the whole shape follows from that: connecting is what makes
+ * Chrome/Edge 144+ ask 「允许远程调试？」, so a status line must never be the reason for a connection.
+ * Nothing here claims a version, a page title or an element count — none of those exist without a
+ * connection — and `attached` is the one field that carries connected-after information, present
+ * only when this host really did connect during this run.
+ */
+export interface BrowserReport {
+  /** Which of the five local states this is. See `BrowserLocalState`. */
+  state: BrowserLocalState
+  /** Which route this judgement is about: the plugin's own, or the reader's. */
+  connection: 'plugin' | 'daily'
+  /** The address the local state named, when it named one. */
+  endpoint?: string
+  /** Where that address came from: setting, environment, the browser's own file, a default port. */
   source?: string
-  /** Which browser the connection went to: the plugin's own, or the one the reader is using. */
-  connection?: 'plugin' | 'daily'
-  title?: string
-  /** How many operatable elements the test page offered. */
-  elements?: number
-  /** Why it failed, in the words the discovery code would use. */
+  /** The last connection this host really made on this route, if it made one. */
+  attached?: { endpoint: string; at: number }
+  /** What this host is holding open for this route right now. Pure memory: reading it connects to nothing. */
+  held: BrowserHeldReport
+  /** The state in words, as one or more sentences with no connected-only claim in them. */
+  message: string
+}
+
+/**
+ * What the browser block's connect button did, on the route the reader is already using.
+ *
+ * A failed connect is an answer, not an error response: "it asked, and this is what the browser
+ * said" is exactly what the reader needs to see, and it is also what the button is for.
+ */
+export interface ConnectReport {
+  ok: boolean
+  /** The state line as it stands after the attempt, so the page never has to ask twice. */
+  browser: BrowserReport
+  /** Why it could not connect, in the same words a run would use. Absent on success. */
   message?: string
+}
+
+/**
+ * The words the browser block uses for a held connection, and the button that changes it.
+ *
+ * They live in the protocol rather than in the page because both halves have to mean the same thing
+ * by them (`idle` is not `disconnected`), and because a test can then hold the wording to account
+ * without rendering a React tree. `disconnected` keeps the whole phrase because it is the verdict
+ * under which the page also says what to do about it.
+ */
+export const HELD_LABELS: Record<BrowserHeldState, string> = {
+  connected: '已连接',
+  idle: '未连接',
+  disconnected: '连接已断开',
+}
+
+/** The connect button before this host has ever connected. */
+export const CONNECT_BUTTON = '连接你的浏览器'
+
+/** The same button once a held connection has gone away. */
+export const RECONNECT_BUTTON = '重新连接'
+
+/** What that one button says in the state the page is showing. */
+export function connectButtonLabel(state: BrowserHeldState): string {
+  return state === 'disconnected' ? RECONNECT_BUTTON : CONNECT_BUTTON
 }
 
 /**
@@ -198,6 +281,34 @@ export interface LoginProbeReport {
   /** One entry per domain, most cookies first. */
   bySite: LoginProbeSite[]
   /** Why nothing could be read, in the same four sentences the daily route uses. */
+  message?: string
+}
+
+/**
+ * What the browser block's 「把登录灌进插件自己的浏览器」 button did.
+ *
+ * Counts and domain names only. The cookies were carried straight from one browser to the other and
+ * are not in this answer: the page is told how many landed and which domains came up short, never a
+ * cookie's name or value. A failure is a normal answer rather than an error response, because the
+ * four ways the reader's own browser cannot be reached are things the reader fixes in that browser,
+ * and a browser that will not start is a sentence to read rather than a stack trace.
+ */
+export interface LoginCopyReport {
+  ok: boolean
+  /** Which browser was read, so the page's sentence can name it. */
+  label: string
+  /**
+   * Domain tally: how many distinct domains were meant to be written, and how many of them came
+   * back with exactly the count that was expected.
+   */
+  domains: { expected: number; landed: number }
+  /** How many cookies were read back under those domains. */
+  cookiesLanded: number
+  /** What was deliberately not written, by reason. */
+  skipped: { expired: number; partitioned: number; noDomain: number }
+  /** Only the domains whose landed count differs from the expected one, in name order. */
+  mismatched: Array<{ domain: string; expected: number; landed: number }>
+  /** Why nothing was written, in the same four sentences the daily route uses. */
   message?: string
 }
 

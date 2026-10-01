@@ -6,16 +6,24 @@
  * numbers go back to the page; the cookies themselves never leave the browser, and nothing here
  * is written down — no trace, no log, no file. That is the whole point of doing this as a read of
  * the browser level rather than as a page session: `Storage.getCookies` on the browser socket
- * takes no target, so no tab is created in front of the reader, and closing the socket at the end
- * leaves the browser exactly as it was.
+ * takes no target, so no tab is created in front of the reader, and nothing about the browser's own
+ * state changes.
  *
- * The three files this route reads are the ones `discoverDailyBrowser` already reads, and the four
- * ways it can fail are that route's four — same class, same sentences. Only the last step differs:
- * that route resolves `/json/version` and drives a page, while this one opens the browser socket
- * the profile's own `DevToolsActivePort` names and sends one command.
+ * That socket is the host's, not this request's: it is asked for from ./held.ts and left open, so
+ * the 「允许远程调试？」 this press causes is the only one the reader has to answer for every task
+ * that follows.
+ *
+ * The three files this route reads are the ones `discoverDailyBrowser` already reads, and the ways
+ * it can fail are that route's — same class, same sentences, plus one the files cannot show: a
+ * connection this host was holding that has gone away. Only the last step differs: that route
+ * resolves `/json/version` and drives a page, while this one opens the browser socket the profile's
+ * own `DevToolsActivePort` names and sends one command.
+ *
+ * The opening half is exported on its own (`openDailyConnection`) because the copy that fills the
+ * plugin's own browser with these logins reaches the same browser the same way; see ./login-copy.ts.
  */
-import { CdpConnection } from './cdp'
 import {
+  DailyBrowserError,
   dailyFailure,
   dailyProfileDir,
   isPortListening,
@@ -24,6 +32,7 @@ import {
   wsUrlFromActivePort,
   type BrowserKind,
 } from './discover'
+import { holdConnection } from './held'
 
 /** The only three things this probe reads off a cookie: where it is, and whether it outlives the browser. */
 export interface ProbeCookie {
@@ -90,10 +99,16 @@ function isSessionCookie(cookie: ProbeCookie): boolean {
   return !(expires > 0)
 }
 
-/** The cookies out of one `Storage.getCookies` answer; anything else is no cookies at all. */
-export function cookiesFrom(answer: unknown): ProbeCookie[] {
+/**
+ * The cookies out of one `Storage.getCookies` answer; anything else is no cookies at all.
+ *
+ * Generic because two readers look at the same answer for different reasons: the probe reads three
+ * fields off a cookie, while the copy that fills the plugin's own browser needs the whole thing.
+ * The default stays the narrow one, so nothing the probe does changes here.
+ */
+export function cookiesFrom<T = ProbeCookie>(answer: unknown): T[] {
   const cookies = (answer as { cookies?: unknown } | null | undefined)?.cookies
-  return Array.isArray(cookies) ? (cookies as ProbeCookie[]) : []
+  return Array.isArray(cookies) ? (cookies as T[]) : []
 }
 
 /** One browser-level DevTools socket, narrowed to what this probe does with it. */
@@ -105,21 +120,25 @@ export interface ProbeConnection {
 /** How a socket is opened. Injectable, because a test must never touch a real browser. */
 export type ProbeConnector = (wsUrl: string) => Promise<ProbeConnection>
 
-/**
- * The real connector: one browser-level WebSocket, with no timeout at all.
- *
- * Waiting is the behaviour rather than a fallback, for the same reason the daily route waits:
- * Chrome/Edge 144+ ask 「允许远程调试？」 on every connection, and a timer that fired while that box
- * was on screen would close the very connection the box is about. A retry would only raise a
- * second box.
- */
-export const openProbeSocket: ProbeConnector = async (wsUrl) => {
-  const connection = await CdpConnection.connect(wsUrl, 0)
-  return {
-    send: (method, params) => connection.send(method, params ?? {}),
-    close: () => connection.close(),
-  }
+/** One open socket to the reader's own browser, and the address it was opened at. */
+export interface DailyConnection {
+  connection: ProbeConnection
+  /** The browser-level socket address, named so a caller can tell two browsers apart. */
+  wsUrl: string
+  /**
+   * True when this is the host's connection rather than one this call opened.
+   *
+   * A held connection is the reader's one allowed permission, and putting it away at the end of a
+   * probe or a copy would make the next task ask for it again — so the caller must leave it alone.
+   */
+  held: boolean
 }
+
+/**
+ * The real connector — a browser-level WebSocket with no timeout at all — is the holder's
+ * (`held.ts`). It is not written down here any more, because nothing opens one directly: every path
+ * asks the holder for the connection the reader already allowed.
+ */
 
 /** What this probe reads off the machine, and how it reaches the browser. */
 export interface LoginProbeOptions {
@@ -135,14 +154,22 @@ export interface LoginProbeOptions {
 }
 
 /**
- * Count what the reader's own browser is holding, and take nothing away from it.
+ * Reach the reader's own browser at the browser level, or say which of the five things is wrong.
  *
- * The four failures are `discoverDailyBrowser`'s four, in the same words: the profile's switch,
- * the port it wrote down, whether that port still answers, and whether this connection was
- * allowed. A socket that cannot be opened at all is the last of those — refusing the box, or
- * closing the browser before it was answered, arrives here the same way.
+ * Split out of `probeDailyLogins` because the copy that fills the plugin's own browser starts the
+ * same way — same files, same failures, same socket — and then does something else with it. Both
+ * callers get the same `DailyBrowserError`, because one place for the wording is what keeps the two
+ * routes from drifting apart.
+ *
+ * There is only one socket behind this: the reader's connection is asked for from the holder rather
+ * than opened here, so a probe and a task cannot each raise 「允许远程调试？」. A caller that supplies
+ * its own connector is opening its own socket, and owns putting it away (that is the only thing
+ * `connect` is for, and it is what the tests use it as).
+ *
+ * The address comes back with the connection so a caller can tell whether it has reached the same
+ * browser twice, which is a question the copy has to answer before it writes anything.
  */
-export async function probeDailyLogins(options: LoginProbeOptions): Promise<LoginProbeSummary> {
+export async function openDailyConnection(options: LoginProbeOptions): Promise<DailyConnection> {
   const { kind } = options
   const dir = options.profileDir ?? dailyProfileDir(kind, options)
   if ((await remoteDebuggingEnabled(dir)) !== true) throw dailyFailure(kind, 'switch-off')
@@ -157,20 +184,48 @@ export async function probeDailyLogins(options: LoginProbeOptions): Promise<Logi
   // step would be waiting on a permission box that cannot exist.
   if (!(await isPortListening(active.port))) throw dailyFailure(kind, 'not-running')
 
-  let connection: ProbeConnection
-  try {
-    connection = await (options.connect ?? openProbeSocket)(wsUrl)
-  } catch {
-    throw dailyFailure(kind, 'not-authorized')
+  if (options.connect !== undefined) {
+    try {
+      const connection = await options.connect(wsUrl)
+      return { connection, wsUrl, held: false }
+    } catch {
+      throw dailyFailure(kind, 'not-authorized')
+    }
   }
 
   try {
+    // A browser-level connection is a connection: it is what raises 「允许远程调试？」 and what a
+    // later page load may report as "this host has already been here" — see ./attached.ts and
+    // ./held.ts, which notes it and keeps it.
+    const connection = await holdConnection(wsUrl, { route: 'daily', kind })
+    return { connection, wsUrl, held: true }
+  } catch (error) {
+    // The holder's own sentence — "the connection you were holding went away, press 重新连接" — is
+    // the answer for that case and is left exactly as it is. Everything else that failed here is a
+    // handshake the reader did not allow.
+    if (error instanceof DailyBrowserError) throw error
+    throw dailyFailure(kind, 'not-authorized')
+  }
+}
+
+/**
+ * Count what the reader's own browser is holding, and take nothing away from it.
+ *
+ * The failures are `discoverDailyBrowser`'s, in the same words: the profile's switch, the port it
+ * wrote down, whether that port still answers, whether this connection was allowed, and — the one
+ * that is not a file — a connection this host was holding that has since gone away. A socket that
+ * cannot be opened at all is the fourth of those: refusing the box, or closing the browser before it
+ * was answered, arrives here the same way.
+ */
+export async function probeDailyLogins(options: LoginProbeOptions): Promise<LoginProbeSummary> {
+  const daily = await openDailyConnection(options)
+  try {
     // No `browserContextId`: with none, the command means the whole browser. It is a read, and it
     // is the only command sent — nothing here creates a target, and no tab may appear.
-    return summarizeLoginProbe(cookiesFrom(await connection.send('Storage.getCookies', {})))
+    return summarizeLoginProbe(cookiesFrom(await daily.connection.send('Storage.getCookies', {})))
   } finally {
-    // Whether the read worked or not, the socket goes away with the request that opened it. That
-    // is also what takes the permission box off the reader's screen.
-    connection.close()
+    // The reader's connection stays open — that one permission is meant to cover every later task.
+    // Only a socket this call opened itself goes away with the request that opened it.
+    if (!daily.held) daily.connection.close()
   }
 }
