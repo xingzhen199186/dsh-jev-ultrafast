@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
 import { resolveDecisionRoute } from '../src/decision/providers'
 import { resolveTextRoute } from '../src/decision/text-providers'
-import { Config, apply, followNotes, inject, launchNote, name, saveScreenshot } from '../src/index'
+import { Config, apply, cutNote, followNotes, inject, launchNote, name, saveScreenshot } from '../src/index'
 
 /**
  * The plugin's registration surface: what it asks the harness for, what it
@@ -133,6 +133,31 @@ describe('the step line that reports a new window', () => {
     expect(followNotes([{ step: 1, adopted: null, appeared: [{ url: 'chrome://newtab/', title: '' }] }])).toEqual([
       '点开了新窗口「chrome://newtab/」，没有跟过去',
     ])
+  })
+})
+
+describe('the line that reports a page too big for one decision to read', () => {
+  it('says nothing when the whole page was sent', () => {
+    // The ordinary case. A run that read the page whole must not grow a sentence about size, or the
+    // line would stop meaning anything on the runs where it does appear.
+    expect(cutNote(12, 0, 0)).toBe('')
+  })
+
+  it('names both what was sent and what was left out', () => {
+    // The reader cannot tell a wrong decision from a decision made on a fraction of the page, so the
+    // count comes first and the reason it was cut comes with it.
+    expect(cutNote(44, 53, 0)).toBe('（这一页元素太多，已按与目标的相关性裁到 44 项，另有 53 项没有送去判断）')
+  })
+
+  it('reports the page text on its own when only the text was too long', () => {
+    expect(cutNote(12, 0, 3000)).toBe('（这一页文字太长，只把前面的 3000 字送去判断，后面还有 3000 字没有送去）')
+  })
+
+  it('reads as one sentence when both had to be cut', () => {
+    expect(cutNote(44, 53, 250)).toBe(
+      '（这一页元素太多，已按与目标的相关性裁到 44 项，另有 53 项没有送去判断；' +
+        '文字也太长，只把前面的 3000 字送去判断，后面还有 250 字没有送去）',
+    )
   })
 })
 

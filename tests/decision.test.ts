@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
-import { actionSpace } from '../src/decision/action-space'
+import { actionSpace, trimActionSpace } from '../src/decision/action-space'
 import { askText, fieldContext, fieldText, type DshChunk, type TextHelperSource } from '../src/decision/text-helper'
 import {
   type DecisionContext,
@@ -8,6 +8,7 @@ import {
   buildQuestionnaire,
   choose,
   readDecision,
+  requestChars,
   validateChoice,
 } from '../src/decision/typesafe'
 
@@ -61,6 +62,66 @@ describe('action space', () => {
   })
 })
 
+/** A page of numbered controls, as the runs that outgrew one request really looked. */
+function buttons(count: number, label: (index: number) => string, offset = 0): SnapshotAction[] {
+  return Array.from({ length: count }, (_unused, at) => ({
+    id: `e${offset + at + 1}`,
+    kind: 'click' as const,
+    node: offset + at + 1,
+    role: 'button',
+    label: label(offset + at + 1),
+  }))
+}
+
+describe('element table cap', () => {
+  it('leaves a table that already fits exactly as it is', () => {
+    const space = actionSpace(observed)
+    const trimmed = trimActionSpace(space, context.goal, [])
+
+    expect(trimmed.omitted).toBe(0)
+    expect(trimmed.space).toBe(space)
+  })
+
+  it('drops the entries with no visible label before it drops a labelled one', () => {
+    // Ten controls whose name is only their role, then fifty with a name of their own: five times
+    // as many elements as one request may carry.
+    const actions = [...buttons(10, () => 'button'), ...buttons(50, (index) => `Option ${index}`, 10)]
+    const trimmed = trimActionSpace(actionSpace(actions), 'Find a flight', [])
+
+    expect(trimmed.omitted).toBe(12)
+    expect(trimmed.space.elements).toHaveLength(48)
+    // The ten stand-in names went first, then the two labelled entries furthest down the page.
+    expect(trimmed.space.elements.map((element) => element.index)).toEqual(
+      Array.from({ length: 48 }, (_unused, at) => String(at + 11)),
+    )
+    expect(trimmed.space.elements.every((element) => element.label !== element.role)).toBe(true)
+  })
+
+  it('keeps the element the goal names and the element the run just acted on', () => {
+    const actions = buttons(60, (index) => (index === 60 ? 'Book flight' : `Option ${index}`))
+    const trimmed = trimActionSpace(actionSpace(actions), 'Find a flight', ['57'])
+    const kept = new Set(trimmed.space.elements.map((element) => element.index))
+
+    expect(trimmed.omitted).toBe(12)
+    expect(kept.has('57')).toBe(true)
+    expect(kept.has('60')).toBe(true)
+  })
+
+  it('never offers a target for an element it left out, nor an operation with no target', () => {
+    const typeable = buttons(10, () => 'textbox', 50).map((action) => ({ ...action, kind: 'fill' as const, value: '' }))
+    const trimmed = trimActionSpace(actionSpace([...buttons(50, (index) => `Option ${index}`), ...typeable]), 'Find a flight', [])
+    const table = new Set(trimmed.space.elements.map((element) => element.index))
+
+    expect(trimmed.omitted).toBe(12)
+    for (const [operation, group] of Object.entries(trimmed.space.targets)) {
+      expect(Object.keys(group).length, operation).toBeGreaterThan(0)
+      for (const target of Object.keys(group)) expect(table.has(target.split(':')[0]!)).toBe(true)
+    }
+    expect(trimmed.space.targets.TYPE_TEXT).toBeUndefined()
+    expect(Object.keys(trimmed.space.targets.CLICK!)).toHaveLength(48)
+  })
+})
+
 describe('questionnaire', () => {
   const space = actionSpace(observed)
 
@@ -94,6 +155,100 @@ describe('questionnaire', () => {
     const quiet = buildQuestionnaire(space, context, 'jev-latest').request.state as { note?: string }
     expect(quiet.note).toBeUndefined()
   })
+
+  it('asks for visible evidence of the goal before either terminal operation may be chosen', () => {
+    // Both used to be one hollow sentence each — "Every requirement is visibly satisfied." — and
+    // the audit's finding was exact: the goal's own success markers never reached the criteria the
+    // service judged. Each terminal operation is now a statement that can be checked against the
+    // page, and the check is the page's own text or element list.
+    const { request } = buildQuestionnaire(space, context, 'jev-latest')
+    const questions = request.questions as { operation: { criteria: Record<string, string> } }
+    expect(questions.operation.criteria.DONE).toBe(
+      'Every requirement in the goal is satisfied, and the page itself shows the proof: the names, ' +
+        'numbers, dates, prices, distances or confirmation the goal asks for appear in the page text ' +
+        'or in the element list. A page that only looks like the right screen is not DONE.',
+    )
+    expect(questions.operation.criteria.BLOCKED).toBe(
+      'No offered operation can move the goal forward: the control this step needs is not on the page, ' +
+        'or is disabled or unreachable, and no offered element can change that. Say BLOCKED only when ' +
+        'the page shows that, never because a step was already tried.',
+    )
+    expect(questions.operation.criteria.DONE).toContain('the page itself shows the proof')
+    expect(questions.operation.criteria.BLOCKED).toContain('the page shows that')
+  })
+
+  it('tells the service when the element table is a selection rather than the whole page', () => {
+    const said = buildQuestionnaire(space, { ...context, omittedElements: 12 }, 'jev-latest').request
+      .state as { elements_omitted?: number }
+    expect(said.elements_omitted).toBe(12)
+
+    const quiet = buildQuestionnaire(space, context, 'jev-latest').request.state as {
+      elements_omitted?: number
+    }
+    expect(quiet.elements_omitted).toBeUndefined()
+  })
+
+  it('marks where a long page text was cut, and cuts nothing else', () => {
+    const text = 'x'.repeat(6000)
+    const note = '这个页面还有别的部分'
+    const { request } = buildQuestionnaire(space, { ...context, note, page: { ...context.page, text } }, 'jev-latest')
+    const state = request.state as { page: { url: string; title: string; text: string }; note?: string; elements: unknown }
+
+    // The cut is announced where it happened, with how much was left out, so a service reading the
+    // text knows it is reading the top of a longer page.
+    const [kept, marker] = state.page.text.split('\n')
+    expect(kept).toHaveLength(3000)
+    expect(marker).toBe('[... page text cut here: 3000 more characters of this page were not sent ...]')
+    // Title, URL, the one-off sentence and the element table are sized on their own terms.
+    expect(state.page.url).toBe(context.page.url)
+    expect(state.page.title).toBe(context.page.title)
+    expect(state.note).toBe(note)
+    expect(state.elements).toEqual(space.elements)
+  })
+
+  it('cuts the audit’s oversized page down to the caps, and marks the text it left out', () => {
+    // 97 elements and a 6000-character text is the shape that made a 32,686-character body in the
+    // GitHub run of the 2026-10 audit. Cutting the two is arithmetic, and arithmetic is not the
+    // guarantee — the caller measures the body it would send and cuts again (see the run loop) — so
+    // what is pinned here is that each cap does its own work.
+    const actions: SnapshotAction[] = Array.from({ length: 97 }, (_unused, at) => ({
+      id: `e${at + 1}`,
+      kind: 'click',
+      node: at + 1,
+      role: 'button',
+      label: `Open the settings page for repository number ${at + 1}`,
+    }))
+    const { space: capped, omitted } = trimActionSpace(
+      actionSpace(actions),
+      'Open the settings page for repository 7',
+      [],
+    )
+    const { request } = buildQuestionnaire(
+      capped,
+      { ...context, page: { ...context.page, text: 'y'.repeat(6000) }, omittedElements: omitted },
+      'jev-latest',
+    )
+
+    expect(omitted).toBe(49)
+    expect(capped.elements).toHaveLength(48)
+    const state = request.state as { page: { text: string } }
+    expect(state.page.text).toContain('page text cut here')
+  })
+
+  it('measures the body it would send, so a caller can hold a budget that counting cannot', () => {
+    const whole = buildQuestionnaire(space, context, 'jev-latest').request
+    expect(requestChars(space, context, 'jev-latest')).toBe(JSON.stringify(whole).length)
+
+    // The measurement follows the request itself rather than an estimate of it: the page text is the
+    // term that changes here, and the answer moves by exactly that much.
+    const long = { ...context, page: { ...context.page, text: 'y'.repeat(6000) } }
+    const cut = buildQuestionnaire(space, long, 'jev-latest').request
+    const grown = requestChars(space, long, 'jev-latest')
+    const before = (whole.state as { page: { text: string } }).page.text
+    const after = (cut.state as { page: { text: string } }).page.text
+    expect(grown).toBe(JSON.stringify(cut).length)
+    expect(grown - JSON.stringify(whole).length).toBe(JSON.stringify(after).length - JSON.stringify(before).length)
+  })
 })
 
 describe('answer validation', () => {
@@ -111,6 +266,36 @@ describe('answer validation', () => {
     ['a missing answer', undefined],
   ])('refuses %s', (_name, answer) => {
     expect(() => validateChoice(answer, ['a', 'b'])).toThrow(InvalidDecision)
+  })
+
+  // The refusal is the only thing a reader sees when a run stops on a bad answer, so it
+  // has to say what came back and what was wrong with it. The first case is the shape a
+  // GitHub run actually ended on (2026-10-01, run-1790849761917-uajy): the service named
+  // CLICK at 0.36 while TYPE_TEXT sat at 0.37, and the old sentence said only that
+  // something was wrong.
+  it('names what it picked, and what was actually most probable', () => {
+    const answer = {
+      choice: 'CLICK',
+      confidence: 0.26,
+      probabilities: { CLICK: 0.36, TYPE_TEXT: 0.37, DONE: 0.27 },
+    }
+    expect(() => validateChoice(answer, ['CLICK', 'TYPE_TEXT', 'DONE'], '下一步该做哪个操作')).toThrow(
+      '决策服务返回了无法执行的结果，没有执行任何动作：「下一步该做哪个操作」' +
+        '它选的是 CLICK（概率 0.36），但概率最高的是 TYPE_TEXT（概率 0.37）——这一问它自己没拿定主意',
+    )
+  })
+
+  it('says what came back when the answer is not an object at all', () => {
+    expect(() => validateChoice(undefined, ['a', 'b'], '下一步该做哪个操作')).toThrow(
+      '「下一步该做哪个操作」这一问的回答不是一个对象：收到 什么都没有',
+    )
+  })
+
+  it('lists the options that did not line up', () => {
+    const answer = { choice: 'a', confidence: 0.5, probabilities: { a: 0.5, b: 0.3, c: 0.2 } }
+    expect(() => validateChoice(answer, ['a', 'b'])).toThrow(
+      '概率表覆盖的选项与问题里列出的对不上：问题给了 2 个，回答里是 3 个，多出 c',
+    )
   })
 })
 
@@ -205,6 +390,32 @@ describe('decision reading', () => {
   it('refuses a response with no answers at all', () => {
     expect(() => readDecision({}, space, questionnaire)).toThrow(InvalidDecision)
     expect(() => readDecision({ answers: null }, space, questionnaire)).toThrow(InvalidDecision)
+  })
+
+  it('says what came back instead of answers', () => {
+    expect(() => readDecision({ error: 'boom' }, space, questionnaire)).toThrow(
+      '决策服务没有返回 answers 字段（收到 一个对象（含 error）），没有执行任何动作',
+    )
+  })
+
+  it('names the element a refused target answer picked, and the one it should have', () => {
+    // Target 1 is the Search button, target 2 is the field it would open. The service
+    // named 2 while 1 held the probability, so no click can be executed.
+    expect(() =>
+      readDecision(
+        {
+          answers: {
+            operation: operation('CLICK'),
+            click_target: { choice: '2', confidence: 0.3, probabilities: { '1': 0.7, '2': 0.3 } },
+          },
+        },
+        space,
+        questionnaire,
+      ),
+    ).toThrow(
+      '「用 CLICK 时该选哪个元素」它选的是 2「Open Where from?」（概率 0.3），' +
+        '但概率最高的是 1「Search」（概率 0.7）——这一问它自己没拿定主意',
+    )
   })
 })
 

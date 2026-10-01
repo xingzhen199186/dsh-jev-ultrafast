@@ -57,3 +57,47 @@ export const MAX_STEPS = 60
 
 /** Decision requests allowed in one run; two per step leaves room for a stale retry. */
 export const MAX_DECISIONS = MAX_STEPS * 2
+
+/**
+ * Observed elements one decision request may carry.
+ *
+ * 48 is the upper edge of the runs that worked, not a round number: in the 2026-10 audit the
+ * successful runs carried at most 42 elements, the 携程 runs that failed carried 40–52, and the
+ * GitHub run grew its table from 14 to 97 elements inside one run. A table that size is where the
+ * service's two best choices sit within 0.05 of each other and the answer starts flipping, so the
+ * table is cut at the size that never caused it rather than at the size the page happens to have.
+ */
+export const MAX_ELEMENTS = 48
+
+/**
+ * Page-text characters one decision request may carry.
+ *
+ * The snapshot stops at 6000, and sending all of it is what pushed one GitHub request to 32,686
+ * characters. 3000 is what keeps the request body at the order of 20,000 characters together with
+ * the element cap above — the size the service still answered usefully at. Whatever is left out is
+ * marked where it was cut; the title, the URL, the chosen element and the recent actions are never
+ * cut at all.
+ */
+export const MAX_PAGE_TEXT = 3000
+
+/**
+ * Characters one decision request body may occupy.
+ *
+ * The two caps above are arithmetic on counts, and arithmetic cannot know how long a page's own
+ * labels are: measured against the 2026-10 shapes, a 97-element page with 46-character labels and a
+ * value on every control still came out at 20,236 characters once the table was cut to 48, and one
+ * with longer labels at 26,650. So the cap that has to hold is checked against the body itself, and
+ * the table is cut further — a few entries at a time, in the same order — until it does. A page
+ * light enough for the two caps never reaches this.
+ */
+export const MAX_REQUEST_CHARS = 20_000
+
+/**
+ * The operation confidence below which a decision is asked a second time instead of acted on.
+ *
+ * 49 of the 71 decisions in the 2026-10 audit came back below this, and every one of them was acted
+ * on anyway: the service's own "I am not sure" was recorded and then ignored. At or above it the
+ * answer is taken as final. Below it the same question is asked once more, and only two answers
+ * that name the same choice are executed.
+ */
+export const CONFIDENCE_FLOOR = 0.5

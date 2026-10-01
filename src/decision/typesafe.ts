@@ -22,7 +22,7 @@
 import { recordable, redactUrl, type TraceSink } from '../artifacts'
 import type { SnapshotAction } from '../browser/session'
 import { requestSignal } from '../net'
-import { NEXT_ACTION, TARGET } from '../prompts'
+import { MAX_PAGE_TEXT, NEXT_ACTION, TARGET } from '../prompts'
 import type { ActionSpace } from './action-space'
 
 /** The decision service returned something we cannot safely act on. */
@@ -69,6 +69,13 @@ export interface DecisionContext {
    * `browser/nested.ts`). Absent on an ordinary step.
    */
   note?: string
+  /**
+   * How many observed elements this request's table left out because the page offered more than the
+   * cap (see `action-space.ts`). Absent when nothing was cut. The service is told the number so it
+   * reads the table as a selection rather than as the whole page; what it is not told is anything
+   * about the elements themselves, which are simply not there.
+   */
+  omittedElements?: number
 }
 
 /** Where decisions come from, and with whose credential. */
@@ -147,8 +154,14 @@ export function buildQuestionnaire(space: ActionSpace, context: DecisionContext,
     operations[operation] = OPERATION_LABELS[operation] ?? operation
   }
   for (const [name, control] of Object.entries(space.controls)) operations[name] = control.label
-  operations.DONE = 'Every requirement is visibly satisfied.'
-  operations.BLOCKED = 'No supported operation can progress.'
+  operations.DONE =
+    'Every requirement in the goal is satisfied, and the page itself shows the proof: the names, ' +
+    'numbers, dates, prices, distances or confirmation the goal asks for appear in the page text or ' +
+    'in the element list. A page that only looks like the right screen is not DONE.'
+  operations.BLOCKED =
+    'No offered operation can move the goal forward: the control this step needs is not on the page, ' +
+    'or is disabled or unreachable, and no offered element can change that. Say BLOCKED only when the ' +
+    'page shows that, never because a step was already tried.'
 
   const questions: Record<string, unknown> = {
     operation: {
@@ -178,10 +191,14 @@ export function buildQuestionnaire(space: ActionSpace, context: DecisionContext,
   const request = {
     model,
     state: {
-      page: { url: context.page.url, title: context.page.title, text: context.page.text },
+      page: { url: context.page.url, title: context.page.title, text: cappedText(context.page.text) },
       // Sits with the page it is about, and only when there is something to say: an empty
       // field would be one more thing for the service to read on every step.
       ...(context.note ? { note: context.note } : {}),
+      // Said next to the table it is about, and only when the table is a selection: a page that
+      // offered more than one request can carry is not the same page as one that offered exactly
+      // this much, and the service is the one being asked to decide about it.
+      ...(context.omittedElements ? { elements_omitted: context.omittedElements } : {}),
       elements: space.elements,
       recent_actions: context.history.slice(-10).map((entry) => pick(entry, ['action', 'kind', 'text', 'page_changed'])),
     },
@@ -191,11 +208,146 @@ export function buildQuestionnaire(space: ActionSpace, context: DecisionContext,
 }
 
 /**
+ * The size of the body one decision request would carry, in characters.
+ *
+ * Exported because the request is the only thing whose size matters, and the caller is the one that
+ * decides how much of the page goes into it: counting the elements and the page-text characters is
+ * arithmetic, and arithmetic cannot see how long a page's own labels are (see `prompts.ts`).
+ */
+export function requestChars(space: ActionSpace, context: DecisionContext, model: string): number {
+  return JSON.stringify(buildQuestionnaire(space, context, model).request).length
+}
+
+/**
+ * Page-text characters one request has to leave out; `0` when the whole text fits.
+ *
+ * Shared rather than recomputed, so the request and the run that reports it cannot disagree about
+ * whether the page was cut.
+ */
+export function textLeftOut(text: string): number {
+  return Math.max(0, text.length - MAX_PAGE_TEXT)
+}
+
+/**
+ * The page text as this request may carry it.
+ *
+ * The cut is marked where it happened and says how much was left out, so a service reading the
+ * text knows it is reading the top of a longer page rather than the whole of a short one. The cut
+ * touches the page text only: the URL, the title, the element table and the recent actions are
+ * sized on their own terms and are never sliced mid-value.
+ */
+function cappedText(text: string): string {
+  const left = textLeftOut(text)
+  if (left === 0) return text
+  return `${text.slice(0, MAX_PAGE_TEXT)}\n[... page text cut here: ${left} more characters of this page were not sent ...]`
+}
+
+/** Three decimals is enough to read a probability back; more only makes the sentence longer. */
+function odds(value: number): string {
+  return String(Math.round(value * 1000) / 1000)
+}
+
+/**
+ * A short stand-in for whatever the service put where an answer was expected.
+ *
+ * Only ever handed an answer, never page state, so no page text can reach a message
+ * through here. Strings are cut off because the interesting part of "it sent us this"
+ * is the shape, not the whole body.
+ */
+function seen(value: unknown): string {
+  if (value === undefined) return '什么都没有'
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return `一个数组（${value.length} 项）`
+  if (typeof value === 'object') {
+    const keys = Object.keys(value as object)
+    if (keys.length === 0) return '一个空对象'
+    return `一个对象（含 ${keys.slice(0, 5).join('、')}${keys.length > 5 ? ' 等' : ''}）`
+  }
+  if (typeof value === 'string') return value.length > 40 ? `「${value.slice(0, 40)}…」` : `「${value}」`
+  return String(value)
+}
+
+/**
+ * Why one answer cannot be acted on, said so the reader knows what came back and what
+ * was wrong with it.
+ *
+ * This used to be one sentence for every failure, and the one failure that actually
+ * stops runs — a distribution whose stated winner is not its most probable choice (the
+ * service answering "CLICK" over a 0.37 "TYPE_TEXT" with 0.36) — was indistinguishable
+ * from a network or parsing problem. Naming the winner and the runner-up is the evidence
+ * a reader needs to tell "the service is unsure" apart from "we asked it badly".
+ * `label` names an element index when the question is a target question; it is the same
+ * label the question itself carried.
+ */
+function whyUnusable(answer: unknown, ids: string[], label?: (id: string) => string | undefined): string {
+  if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
+    return `这一问的回答不是一个对象：收到 ${seen(answer)}`
+  }
+  const record = answer as { choice?: unknown; confidence?: unknown; probabilities?: unknown }
+  const { choice, confidence, probabilities } = record
+
+  if (typeof probabilities !== 'object' || probabilities === null || Array.isArray(probabilities)) {
+    return `这一问没有给出可用的概率表：收到 ${seen(probabilities)}`
+  }
+
+  const entries = Object.entries(probabilities as Record<string, unknown>)
+  const offScale = entries.find(
+    ([, value]) => typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1,
+  )
+  if (offScale) return `概率表里「${offScale[0]}」的概率不是 0 到 1 的数字：收到 ${seen(offScale[1])}`
+
+  if (entries.length !== ids.length || entries.some(([key]) => !ids.includes(key))) {
+    const extra = entries.filter(([key]) => !ids.includes(key)).map(([key]) => key)
+    const missing = ids.filter((id) => !entries.some(([key]) => key === id))
+    return (
+      `概率表覆盖的选项与问题里列出的对不上：问题给了 ${ids.length} 个，回答里是 ${entries.length} 个` +
+      (extra.length > 0 ? `，多出 ${extra.slice(0, 3).join('、')}` : '') +
+      (missing.length > 0 ? `，缺少 ${missing.slice(0, 3).join('、')}` : '')
+    )
+  }
+
+  const named = (id: string): string => {
+    const name = label?.(id)
+    return name ? `${id}「${name}」` : id
+  }
+
+  if (typeof choice !== 'string' || !ids.includes(choice)) {
+    return `它给出的选择 ${seen(choice)} 不在问题列出的选项里`
+  }
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    return `它给出的把握度不是 0 到 1 的数字：收到 ${seen(confidence)}`
+  }
+
+  const values = entries.map(([, value]) => value as number)
+  const total = values.reduce((sum, value) => sum + value, 0)
+  if (Math.abs(total - 1) >= 0.02) return `概率加起来不等于 1：实际是 ${odds(total)}`
+
+  const top = Math.max(...values)
+  const chosen = (probabilities as Record<string, number>)[choice]!
+  if (chosen < top - 1e-6) {
+    const winners = entries.filter(([, value]) => (value as number) >= top - 1e-9).map(([key]) => key)
+    return (
+      `它选的是 ${named(choice)}（概率 ${odds(chosen)}），但概率最高的是 ` +
+      `${winners.map(named).join('、')}（概率 ${odds(top)}）——这一问它自己没拿定主意`
+    )
+  }
+  return '回答缺少必需的字段'
+}
+
+/**
  * Validate one answer against the choices its question actually offered.
  * A probability distribution that does not cover exactly those choices, or whose
  * winner is not the most probable one, is a broken answer rather than a decision.
+ *
+ * `question` and `label` exist only to make the refusal readable; neither changes what
+ * is accepted. A caller that passes neither gets the same validation as before.
  */
-export function validateChoice(answer: unknown, ids: string[]): ChoiceAnswer {
+export function validateChoice(
+  answer: unknown,
+  ids: string[],
+  question = '这一问',
+  label?: (id: string) => string | undefined,
+): ChoiceAnswer {
   const record = answer as { choice?: unknown; confidence?: unknown; probabilities?: unknown } | null | undefined
   const probabilities = record?.probabilities
   const { choice, confidence } = record ?? {}
@@ -220,7 +372,11 @@ export function validateChoice(answer: unknown, ids: string[]): ChoiceAnswer {
         Math.max(...entries.map(([, value]) => value as number)) - 1e-6
   }
 
-  if (!valid) throw new InvalidDecision('决策服务返回了无法执行的结果，没有执行任何动作')
+  if (!valid) {
+    throw new InvalidDecision(
+      `决策服务返回了无法执行的结果，没有执行任何动作：「${question}」${whyUnusable(answer, ids, label)}`,
+    )
+  }
   return {
     choice: choice as string,
     confidence: confidence as number,
@@ -236,10 +392,10 @@ export function validateChoice(answer: unknown, ids: string[]): ChoiceAnswer {
 export function readDecision(payload: unknown, space: ActionSpace, questionnaire: Questionnaire): Decision {
   const answers = (payload as { answers?: Record<string, unknown> } | null)?.answers
   if (typeof answers !== 'object' || answers === null) {
-    throw new InvalidDecision('决策服务没有返回 answers 字段，没有执行任何动作')
+    throw new InvalidDecision(`决策服务没有返回 answers 字段（收到 ${seen(payload)}），没有执行任何动作`)
   }
 
-  const operationAnswer = validateChoice(answers.operation, questionnaire.operations)
+  const operationAnswer = validateChoice(answers.operation, questionnaire.operations, '下一步该做哪个操作')
   const operation = operationAnswer.choice
 
   let choice: string
@@ -249,7 +405,12 @@ export function readDecision(payload: unknown, space: ActionSpace, questionnaire
 
   const candidates = space.targets[operation]
   if (candidates) {
-    targetAnswer = validateChoice(answers[`${operation.toLowerCase()}_target`], questionnaire.targetIds[operation]!)
+    targetAnswer = validateChoice(
+      answers[`${operation.toLowerCase()}_target`],
+      questionnaire.targetIds[operation]!,
+      `用 ${operation} 时该选哪个元素`,
+      (id) => candidates[id]?.label.split(' → ')[0],
+    )
     target = targetAnswer.choice
     for (const [index, action] of Object.entries(candidates)) {
       probabilities[action.id] = targetAnswer.probabilities[index]!

@@ -3,8 +3,10 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
+import type { ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
+import { requestChars } from '../src/decision/typesafe'
 import { type TaskDeps, runTask } from '../src/loop'
 
 /**
@@ -51,7 +53,7 @@ function wheel(count: number, states: string[]): PageState[] {
   return Array.from({ length: count }, (_unused, index) => pageState(states[index % states.length]!))
 }
 
-function decisionFor(choice: string, target = '1'): Decision {
+function decisionFor(choice: string, target = '1', confidence = 0.9): Decision {
   // The operation is the one the real decision layer would name for the chosen action, so the
   // sentences the loop writes carry the operation the run really performed.
   const chosen = actions.find((candidate) => candidate.id === choice)
@@ -60,9 +62,9 @@ function decisionFor(choice: string, target = '1'): Decision {
     operation:
       choice === 'DONE' || choice === 'BLOCKED' ? choice : chosen?.kind === 'fill' ? 'TYPE_TEXT' : 'CLICK',
     target: choice === 'DONE' || choice === 'BLOCKED' ? null : target,
-    confidence: 0.9,
-    probabilities: { [choice]: 0.9 },
-    operationProbabilities: {},
+    confidence,
+    probabilities: { [choice]: confidence },
+    operationProbabilities: { [choice]: confidence },
     targetProbabilities: {},
     targetConfidence: null,
     usage: {},
@@ -81,6 +83,8 @@ interface Harness {
     decisions: number
     /** Every context a decision was asked with, in order. */
     contexts: DecisionContext[]
+    /** Every element table a decision was asked about, in order. */
+    spaces: ActionSpace[]
     /** What the loop told the browser about the page it was on when it looked for new tabs. */
     adoptOptions: Array<{ onlyIfSameUrl?: boolean } | undefined>
     /** The browser calls in the order they arrived, so a test can assert on their sequence. */
@@ -93,6 +97,8 @@ function harness(config: {
   /** Scripted freshness answers; once exhausted the page is considered fresh. */
   fresh?: boolean[]
   choices: string[]
+  /** Confidence per decision call, drained one per call; the floor is what the re-ask tests vary. */
+  confidences?: number[]
   /** The target key to record for a choice, for the tests that need two different targets. */
   targets?: Record<string, string>
   /** Scripted answers to "did that click open a page?", drained one per step. */
@@ -109,6 +115,7 @@ function harness(config: {
     closed: false,
     decisions: 0,
     contexts: [] as DecisionContext[],
+    spaces: [] as ActionSpace[],
     adoptOptions: [] as Array<{ onlyIfSameUrl?: boolean } | undefined>,
     calls: [] as string[],
   }
@@ -150,11 +157,12 @@ function harness(config: {
 
   const deps: TaskDeps = {
     open: async () => browser,
-    decide: async (_source, _space, context) => {
+    decide: async (_source, space, context) => {
       seen.decisions += 1
       seen.contexts.push(context)
+      seen.spaces.push(space)
       const choice = config.choices.shift() ?? 'DONE'
-      return decisionFor(choice, config.targets?.[choice])
+      return decisionFor(choice, config.targets?.[choice], config.confidences?.shift() ?? 0.9)
     },
     typeText: async (_source, context) => {
       seen.typedFields.push(context)
@@ -667,6 +675,238 @@ describe('run loop', () => {
       expect(trace[0]).toMatchObject({ kind: 'run', status: 'done', steps: 1 })
     } finally {
       rmSync(recorded.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('sends a table cut to the cap, and says how many elements it left out', async () => {
+    // 60 numbered controls is the shape of the GitHub run in the 2026-10 audit, where the table
+    // grew from 14 elements to 97 inside one run until the service's two best answers sat within
+    // 0.05 of each other. What is sent is a selection; the run's own table is not cut.
+    const crowd = Array.from({ length: 60 }, (_unused, at) => button(`e${at + 1}`, at + 1, `Option ${at + 1}`))
+    const h = harness({ pages: [pageState('f0', { actions: crowd, text: 'y'.repeat(4000) })], choices: ['DONE'] })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(h.seen.spaces[0]!.elements).toHaveLength(48)
+    expect(h.seen.contexts[0]!.omittedElements).toBe(12)
+    expect(result.elements).toHaveLength(60)
+    // Reported back for the reader: what the last request carried, what it left out, and that the
+    // page's own text was longer than one request may hold.
+    expect(result.sentElements).toBe(48)
+    expect(result.omittedElements).toBe(12)
+    expect(result.textCut).toBe(4000 - 3000)
+  })
+
+  it('says nothing about a table that fits', async () => {
+    const h = harness({ pages: [pageState('f0')], choices: ['DONE'] })
+    const result = await run(h.deps)
+
+    expect(h.seen.contexts[0]!.omittedElements).toBeUndefined()
+    // Nothing was cut, so there is nothing to report: the ordinary run says nothing about size.
+    expect(result.sentElements).toBe(2)
+    expect(result.omittedElements).toBe(0)
+    expect(result.textCut).toBe(0)
+  })
+
+  it('cuts the table below the cap when the page itself would still overshoot the request budget', async () => {
+    // Long labels and a value on every control are what counting cannot see: 97 such elements
+    // measured 26,650 characters once the table was cut to 48. The body the service receives is the
+    // thing that has to fit, so the run measures it and cuts the table again.
+    const heavy = Array.from({ length: 97 }, (_unused, at) => ({
+      id: `e${at + 1}`,
+      kind: 'click' as const,
+      node: at + 1,
+      role: 'button',
+      label:
+        `Open the settings page for repository number ${at + 1} and then select the branch called ` +
+        `feature/very-long-branch-name-${at + 1}`,
+      value: `repository-${at + 1}-current-value-that-the-page-reports`,
+    }))
+    const h = harness({ pages: [pageState('f0', { actions: heavy })], choices: ['DONE'] })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    const [space, asked] = [h.seen.spaces[0]!, h.seen.contexts[0]!]
+    expect(space.elements.length).toBeLessThan(48)
+    expect(asked.omittedElements).toBe(97 - space.elements.length)
+    // Measured from exactly what the run handed the decision layer.
+    expect(requestChars(space, asked, decision.model)).toBeLessThanOrEqual(20_000)
+  })
+
+  it('asks the same question again when the service says it is unsure, and executes two answers that agree', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['e1', 'e1', 'DONE'],
+      confidences: [0.3, 0.42, 0.9],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // The second question is a decision like any other, and the only extra one this step costs.
+    expect(result.decisions).toBe(3)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    // The same question means the same page, the same table and the same one-off sentence.
+    expect(h.seen.spaces[1]).toBe(h.seen.spaces[0])
+    expect(h.seen.contexts[1]).toEqual(h.seen.contexts[0])
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        agreed: true,
+        first: { choice: 'e1', confidence: 0.3, probabilities: { e1: 0.3 } },
+        second: { choice: 'e1', confidence: 0.42, probabilities: { e1: 0.42 } },
+      },
+    ])
+  })
+
+  it('stops when the two answers disagree, and keeps what each one said', async () => {
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: ['e1', 'e2', 'DONE'],
+      confidences: [0.2, 0.6],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+    expect(result.steps).toBe(0)
+    expect(result.decisions).toBe(2)
+    expect(h.seen.executed).toHaveLength(0)
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        agreed: false,
+        first: { choice: 'e1', confidence: 0.2, probabilities: { e1: 0.2 } },
+        second: { choice: 'e2', confidence: 0.6, probabilities: { e2: 0.6 } },
+      },
+    ])
+  })
+
+  it('says the same thing whether or not the second answer was sure', async () => {
+    // The sentence is about the first answer's confidence because the second one may well be
+    // certain — certain and different is the case it exists for. Two unsure answers get the same
+    // sentence rather than a second wording to keep in step.
+    for (const [second, confident] of [
+      [0.6, true],
+      [0.3, false],
+    ] as Array<[number, boolean]>) {
+      const h = harness({
+        pages: [pageState('f0')],
+        choices: ['e1', 'e2'],
+        confidences: [0.2, second],
+      })
+      const result = await run(h.deps)
+
+      expect(result.status).toBe('blocked')
+      expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+      expect(result.reasks[0]).toMatchObject({ agreed: false, second: { confidence: second } })
+      expect(confident ? second >= 0.5 : second < 0.5).toBe(true)
+    }
+  })
+
+  it('stops when the two answers name one operation but a different element', async () => {
+    // Two answers that agree about what to do and disagree about where to do it are the same
+    // jitter the re-ask exists for: the two best elements sat 0.01–0.05 apart in the audit.
+    const two = [button('e1', 1, 'Search'), button('e9', 9, 'Search again')]
+    const h = harness({
+      pages: [pageState('f0', { actions: two })],
+      choices: ['e1', 'e9'],
+      targets: { e1: '1', e9: '2' },
+      confidences: [0.3, 0.4],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+    expect(result.reasks[0]).toMatchObject({ agreed: false, first: { choice: 'e1' }, second: { choice: 'e9' } })
+  })
+
+  it('keeps a single answer that is at or above the floor', async () => {
+    // 0.5 is the floor itself, and the floor is not below itself.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['e1', 'DONE'],
+      confidences: [0.5, 0.9],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.decisions).toBe(2)
+    expect(result.reasks).toEqual([])
+  })
+
+  it('asks at most one extra question per step, however unsure both answers are', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      choices: ['e1', 'e1', 'DONE', 'DONE'],
+      confidences: [0.1, 0.2, 0.3, 0.4],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // Two questions for the step and two for the terminal answer: the second unsure answer is
+    // acted on rather than asked about a third time.
+    expect(result.decisions).toBe(4)
+    expect(result.reasks).toHaveLength(2)
+    expect(result.reasks.every((record) => record.agreed)).toBe(true)
+  })
+
+  it('does not spend a question the model-call budget cannot afford', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      // The sure answer's field goes stale, so it costs a decision and no step; the next answer is
+      // unsure, and the budget is exactly one decision short of a second question.
+      fresh: [true, false, true, false],
+      choices: ['e2', 'e2'],
+      confidences: [0.9, 0.3],
+    })
+    const result = await run(h.deps, { maxSteps: 1 })
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('达到本次运行的模型调用上限（2 次），已停止')
+    expect(result.decisions).toBe(2)
+    expect(result.reasks).toEqual([])
+    expect(h.seen.executed).toHaveLength(0)
+  })
+
+  it('does not ask again once the step budget is spent', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2'), pageState('f3')],
+      choices: ['e1', 'e1', 'e1', 'e1'],
+      confidences: [0.9, 0.9, 0.9, 0.3],
+    })
+    const result = await run(h.deps, { maxSteps: 3 })
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('达到本次运行的动作上限（3 步），已停止')
+    expect(result.steps).toBe(3)
+    expect(result.decisions).toBe(4)
+    expect(result.reasks).toEqual([])
+  })
+
+  it('writes both answers into the run trace', async () => {
+    const h = harness({ pages: [pageState('f0')], choices: ['e1', 'e2'], confidences: [0.2, 0.6] })
+    const result = await run(h.deps, { record: true })
+    try {
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(trace[trace.length - 1]).toMatchObject({
+        kind: 'run',
+        status: 'blocked',
+        reasks: [
+          {
+            step: 1,
+            agreed: false,
+            first: { choice: 'e1', confidence: 0.2 },
+            second: { choice: 'e2', confidence: 0.6 },
+          },
+        ],
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
     }
   })
 })

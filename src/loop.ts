@@ -24,12 +24,12 @@
  *    stops it as well, saying which action it was stuck on instead of burning the budget.
  */
 import type { ActionSpace, ElementEntry } from './decision/action-space'
-import { actionSpace } from './decision/action-space'
+import { actionSpace, trimActionSpace } from './decision/action-space'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
-import { choose } from './decision/typesafe'
-import { MAX_STEPS } from './prompts'
+import { choose, requestChars, textLeftOut } from './decision/typesafe'
+import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage } from './browser/session'
 import { nestedNote } from './browser/nested'
@@ -55,6 +55,28 @@ export interface TextCall {
   usage: Record<string, unknown>
   field: string
   value: string
+}
+
+/** One answer to the operation question, kept so a re-asked step can show what was said. */
+export interface AnswerRecord {
+  /** The action id the answer would execute, or `DONE` / `BLOCKED`. */
+  choice: string
+  confidence: number
+  /** Probability per operation the question offered. */
+  probabilities: Record<string, number>
+}
+
+/**
+ * One step whose operation answer came back below the confidence floor and was therefore asked a
+ * second time. Recorded whether or not the two answers agreed, because a run that stops this way
+ * has to be able to show what the service said each time rather than only that it was unsure.
+ */
+export interface ReaskRecord {
+  step: number
+  /** Whether both answers named the same choice — the only case in which the step was executed. */
+  agreed: boolean
+  first: AnswerRecord
+  second: AnswerRecord
 }
 
 /** One step that opened pages in new tabs, as the run found them. */
@@ -185,6 +207,17 @@ export interface TaskResult {
   decisions: number
   history: HistoryEntry[]
   textCalls: TextCall[]
+  /**
+   * Steps where the operation answer came back unsure and the same question was asked again, with
+   * what it said each time. Empty on a run the service was confident about throughout.
+   */
+  reasks: ReaskRecord[]
+  /** Elements the last request before the run stopped carried. */
+  sentElements: number
+  /** How many of the page's own elements that request left out; `0` when it carried them all. */
+  omittedElements: number
+  /** Page-text characters that request had to leave out; `0` when the whole text went. */
+  textCut: number
   /** Steps that opened new tabs, and which of those pages the run moved onto. */
   follows: FollowRecord[]
   /** The independent check of the run's own claim, always present and never assumed. */
@@ -227,6 +260,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const decisions: DecisionRecord[] = []
   const textCalls: TextCall[] = []
   const follows: FollowRecord[] = []
+  const reasks: ReaskRecord[] = []
+  // What the last request the run made had to leave out. All zero on a page small enough to send
+  // whole, which is the ordinary case.
+  let sentElements = 0
+  let omittedElements = 0
+  let textCut = 0
   const emit = (event: LoopEvent): void => options.onEvent?.(event)
 
   let session: BrowserPort | null = null
@@ -279,18 +318,98 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // step continues with the fresh page. Retrying the freshness check instead
       // would spin forever on a page that never settles.
       if (!(await session.fresh(page))) page = await session.observe({ screenshot: screenshots })
-      const space = actionSpace(page.actions)
-      // What the service is told about a page the snapshot could only partly see, plus the
-      // one-off sentence the last answer earned. Nothing at all on an ordinary step.
+      // The page's own table can be far larger than one decision can carry — the GitHub run of the
+      // 2026-10 audit grew it from 14 elements to 97 inside one run — so what is sent is a
+      // selection. The selection is said out loud rather than passed off as the whole page.
       const note = [nestedNote(page.nested), hint].filter(Boolean).join(' ')
-      const decision = await deps.decide({ ...decisionSource, signal: options.signal }, space, {
+      const full = actionSpace(page.actions)
+      const recent = history.map((entry) => entry.target)
+      // Fixed while the table is cut, so the request measured below is the request that is sent.
+      const viewed = page
+      // What the service is told about a page the snapshot could only partly see, plus the one-off
+      // sentence the last answer earned. Built from the count because the table may still be cut
+      // again below; nothing at all on an ordinary step.
+      const contextFor = (omitted: number): DecisionContext => ({
         goal: options.goal,
-        page,
+        page: viewed,
         history,
         ...(note ? { note } : {}),
+        ...(omitted > 0 ? { omittedElements: omitted } : {}),
       })
-      hint = ''
+      let limit = MAX_ELEMENTS
+      let trimmed = trimActionSpace(full, options.goal, recent, limit)
+      // Counting elements is arithmetic, and arithmetic cannot see how long the page's own labels
+      // are. What has to fit is the body the service receives, so it is measured and the table is
+      // cut again — in the same order, a few entries at a time — until it does. A page light enough
+      // for the caps never comes through here; one element is where it stops, because the element
+      // that is sent is sent whole.
+      while (
+        limit > 1 &&
+        requestChars(trimmed.space, contextFor(trimmed.omitted), decisionSource.model) > MAX_REQUEST_CHARS
+      ) {
+        limit -= 4
+        trimmed = trimActionSpace(full, options.goal, recent, limit)
+      }
+      const { space, omitted } = trimmed
+      // Kept for the run's own report, so a reader can see that the last page the run decided on was
+      // bigger than one request could carry instead of having to take it on trust.
+      sentElements = space.elements.length
+      omittedElements = omitted
+      textCut = textLeftOut(viewed.text)
+      // Built once because the same question may be asked twice: a re-ask is the same request
+      // against the same page, not a new one.
+      const asked = contextFor(omitted)
+      let decision = await deps.decide({ ...decisionSource, signal: options.signal }, space, asked)
       decisions.push({ ...decision, fingerprint: page.fingerprint, elapsed_ms: elapsedMs() })
+      hint = ''
+
+      // ---- did it know, or did it guess? ----
+      // A confidence under the floor is the service saying it is not sure, and this run used to
+      // record that and then act on it anyway — 49 of the 71 decisions in the 2026-10 audit came
+      // back this way. The same question is asked once more instead, and only two answers that name
+      // the same choice are executed; two that disagree stop the step rather than pick one of them.
+      // This is judged here, before the answers are acted on and before the brakes below: the
+      // question is what the service thinks, not what the page did.
+      if (decision.confidence < CONFIDENCE_FLOOR) {
+        // The second question is a second decision like any other, so it is only asked while the
+        // run still has both a decision and a step to spend; running out here stops the run with
+        // the budget's own sentence rather than acting on an answer nobody stands behind.
+        if (decisions.length >= maxDecisions) {
+          status = 'blocked'
+          reason = `达到本次运行的模型调用上限（${maxDecisions} 次），已停止`
+          break
+        }
+        if (history.length >= maxSteps) {
+          status = 'blocked'
+          reason = `达到本次运行的动作上限（${maxSteps} 步），已停止`
+          break
+        }
+        const again = await deps.decide({ ...decisionSource, signal: options.signal }, space, asked)
+        decisions.push({ ...again, fingerprint: page.fingerprint, elapsed_ms: elapsedMs() })
+        const first: AnswerRecord = {
+          choice: decision.choice,
+          confidence: decision.confidence,
+          probabilities: decision.operationProbabilities,
+        }
+        const second: AnswerRecord = {
+          choice: again.choice,
+          confidence: again.confidence,
+          probabilities: again.operationProbabilities,
+        }
+        const agreed = again.choice === decision.choice
+        reasks.push({ step: history.length + 1, agreed, first, second })
+        if (!agreed) {
+          status = 'blocked'
+          // Said about the first answer's confidence, because the second one may well be sure —
+          // certain and different is exactly the disagreement this stops on.
+          reason = `决策服务两次给的答案不一样（第一次把握低于 ${CONFIDENCE_FLOOR}），先停下`
+          break
+        }
+        // The second answer is the one that stands: the two name the same choice, and this one was
+        // given against the page in hand.
+        decision = again
+      }
+
       emit({
         type: 'decided',
         step: history.length + 1,
@@ -535,6 +654,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     elapsed_ms: elapsedMs(),
     // Only present when that is how it ended: what it was repeating, and how often.
     ...(stuckOn ? { stuck_on: stuckOn } : {}),
+    // Likewise: what the service said on the steps it was not sure about, and whether the two
+    // answers it gave agreed.
+    ...(reasks.length > 0 ? { reasks } : {}),
   })
   artifacts?.finish(elapsedMs())
   return {
@@ -546,6 +668,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     decisions: decisions.length,
     history,
     textCalls,
+    reasks,
+    sentElements,
+    omittedElements,
+    textCut,
     follows,
     verification,
     // Read off the page the run actually stopped on, so the sentence is about what the

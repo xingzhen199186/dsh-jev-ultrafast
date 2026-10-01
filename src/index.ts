@@ -12,6 +12,7 @@ import { captureLlm } from './dsh-model'
 import { runTask } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
+import { MAX_PAGE_TEXT } from './prompts'
 import { LOGIN_HINT } from './protocol'
 import { browserNote, prepareRun } from './run-setup'
 
@@ -42,6 +43,11 @@ interface TaskOutput {
   verification: string
   /** How many element actions were left out because the page offered more than 250. */
   omittedActions: number
+  /** Elements the run's last request carried, and how many of the page's own it left out. */
+  sentElements: number
+  omittedElements: number
+  /** Page-text characters that request had to leave out; `0` when the whole text went. */
+  textCut: number
   /** Where the last screen's screenshot was written, or empty when none was taken. */
   screenshot: string
   /** Where this run's raw exchanges (and, with screenshots on, one frame per step) were written. */
@@ -109,6 +115,9 @@ export function apply(ctx: Context, config: ConfigShape): void {
             textCalls: { type: 'integer', required: true },
             verification: { type: 'string', required: true },
             omittedActions: { type: 'integer', required: true },
+            sentElements: { type: 'integer', required: true },
+            omittedElements: { type: 'integer', required: true },
+            textCut: { type: 'integer', required: true },
             screenshot: { type: 'string', required: true },
             recordDir: { type: 'string', required: true },
           },
@@ -123,6 +132,8 @@ export function apply(ctx: Context, config: ConfigShape): void {
           if (value.omittedActions > 0) {
             summary.push(`这个页面能操作的元素超过 250 个，还有 ${value.omittedActions} 个没进候选表`)
           }
+          const cut = cutNote(value.sentElements, value.omittedElements, value.textCut)
+          if (cut) summary.push(cut)
           if (value.note) summary.push(value.note)
           if (value.screenshot) summary.push(`最后一屏的截图已写到：${value.screenshot}`)
           if (value.recordDir) {
@@ -299,6 +310,9 @@ function toOutput(result: TaskResult, note = ''): TaskOutput {
     textCalls: result.textCalls.length,
     verification: result.verification.note,
     omittedActions: result.omittedActions,
+    sentElements: result.sentElements,
+    omittedElements: result.omittedElements,
+    textCut: result.textCut,
     screenshot: '',
     recordDir: result.recordDir,
   }
@@ -347,4 +361,27 @@ export function followNotes(records: FollowRecord[]): string[] {
       return `点开了新窗口「${name}」，没有跟过去`
     }),
   )
+}
+
+/**
+ * What to say when the page was bigger than one decision could read.
+ *
+ * A run decides on a selection whenever a page offers more elements, or more text, than one request
+ * can carry; it is never told about the page whole. The pages that broke the audit's runs were
+ * exactly those, so the summary has to say which of the two was cut and by how much — otherwise a
+ * wrong decision and a decision made on part of the page read the same to whoever is looking.
+ *
+ * Exported because it is pure and worth pinning: this is the only place a reader learns that the
+ * run did not see everything.
+ */
+export function cutNote(sent: number, omitted: number, textCut: number): string {
+  const parts: string[] = []
+  if (omitted > 0) {
+    parts.push(`这一页元素太多，已按与目标的相关性裁到 ${sent} 项，另有 ${omitted} 项没有送去判断`)
+  }
+  if (textCut > 0) {
+    const start = omitted > 0 ? '文字也太长' : '这一页文字太长'
+    parts.push(`${start}，只把前面的 ${MAX_PAGE_TEXT} 字送去判断，后面还有 ${textCut} 字没有送去`)
+  }
+  return parts.length === 0 ? '' : `（${parts.join('；')}）`
 }
