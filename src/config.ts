@@ -1,5 +1,5 @@
 import Schema from '@deepseek-ai/schemastery'
-import type { BrowserKind } from './browser/launch'
+import type { BrowserConnection, BrowserKind } from './browser/launch'
 import type { DecisionProvider } from './decision/providers'
 import { DEFAULT_TEXT_PROVIDER } from './decision/text-providers'
 
@@ -30,6 +30,8 @@ export interface VolatileValue<T> {
  * cordis.yml, in a session log, or in this file.
  */
 export interface Config {
+  /** Which browser a run drives: this plugin's own profile, or the one the reader already uses. */
+  browserConnection: VolatileValue<BrowserConnection>
   /** Which browser the settings page's own button starts, and which one discovery prefers. */
   browserKind: VolatileValue<BrowserKind>
   /** Explicit path to that browser's executable, for an install that is not in the usual place. */
@@ -63,8 +65,16 @@ export interface Config {
 // shape for the code that reads it, and the plugin's own test checks the two agree.
 // Field order here is the order the settings page shows them in.
 export const Config = Schema.object({
+  browserConnection: Schema.union(['daily', 'plugin'])
+    .default('daily')
+    .volatile()
+    .description(
+      '连哪个浏览器。「你正在用的浏览器」直接用你现在的登录状态：需要在它里面打开「允许远程调试」，插件不启动、不关闭、也不动任何档案文件；' +
+        '「插件自己的浏览器」由插件启动并驱动一份自己的数据目录，和你日常那个互不干扰。',
+    ),
+
   browserKind: Schema.union(['chrome', 'edge'])
-    .default('chrome')
+    .default('edge')
     .volatile()
     .description(
       '设置页里「启动并连接」启动哪个浏览器。插件会给它一个自己的用户数据目录（和你日常那个分开），端口也自己挑，所以这里只管选哪一个。',

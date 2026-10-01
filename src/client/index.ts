@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { decisionProvider, resolveDecisionRoute } from '../decision/providers'
 import { TEXT_PROVIDERS, isDshRoute, resolveTextRoute, textProvider } from '../decision/text-providers'
-import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, sourceLabel } from '../protocol'
+import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, inspectPageUrl, sourceLabel } from '../protocol'
 import type {
   DecisionTestReport,
   KeyState,
@@ -142,6 +142,18 @@ const BUSY_FLOOR_MS = 1200
 /** A block's visible title, for the sentences that have to name the block they are about. */
 function blockTitle(id: FieldGroupId): string {
   return FIELD_GROUPS.find((group) => group.id === id)?.title ?? id
+}
+
+/**
+ * Which browser the connection went to, in the words the dropdown above uses.
+ *
+ * The report's own answer is what is named, not the boxes as they are being edited: which of
+ * the two browsers a run drives is exactly the thing a half-saved page must not be able to
+ * misreport.
+ */
+function connectionLabel(connection?: 'plugin' | 'daily'): string {
+  const labels = FIELDS.find((field) => field.key === 'browserConnection')?.choiceLabels
+  return (connection === undefined ? undefined : labels?.[connection]) ?? '浏览器'
 }
 
 type Tone = 'ok' | 'bad' | 'idle'
@@ -435,7 +447,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       const report = await ask<LaunchReport>('/launch-browser', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: filled('browserKind') === 'edge' ? 'edge' : 'chrome' }),
+        body: JSON.stringify({ kind: filled('browserKind') === 'chrome' ? 'chrome' : 'edge' }),
       })
       setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
       setNotice(
@@ -756,7 +768,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
           '现在',
           '连上了',
           'ok',
-          `${browser.endpoint}（${browser.version}）· 当前标签页「${browser.title || '空白页'}」，能操作的元素 ${browser.elements} 个。`,
+          `${browser.endpoint}（${browser.version}）· 连的是${connectionLabel(browser.connection)} · ` +
+            `当前标签页「${browser.title || '空白页'}」，能操作的元素 ${browser.elements} 个。`,
         )
       }
       const text = browser.message ?? '连不上这个浏览器。'
@@ -824,6 +837,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const advancedFields = FIELDS.filter((field) => field.group === 'advanced')
   const advancedChanged = advancedFields.filter((field) => filled(field.key) !== '').length
   const advancedOpen = open.advanced === true
+  /** Whether the browser block is drawn for the reader's own browser, which it may not start. */
+  const dailyConnection = filled('browserConnection') === 'daily'
   /** Inside 高级设置 a field keeps the name of the block it came from. */
   const blockOf = (id: SectionId): FieldGroup =>
     visibleGroups.find((group) => group.id === id) ?? visibleGroups[0]
@@ -869,19 +884,38 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         ? createElement(
             'div',
             { style: S.actions },
-            // Only the launch itself blocks this button: the page's own check opens a tab
-            // and can take a while, and letting that disable this would make a press do
-            // nothing at all.
-            createElement(
-              'button',
-              { type: 'button', onClick: () => void launchBrowserFromPage(), disabled: launching },
-              launching ? '正在启动…' : '启动并连接',
-            ),
-            createElement(
-              'span',
-              { style: S.actionsHint },
-              '在插件自己的浏览器里登录一次，之后长期保留。',
-            ),
+            // The two routes need different things here. On 「你正在用的浏览器」 there is no
+            // button at all: nothing on this page may start, close or write to the reader's own
+            // browser, so the sentence says what to do in that browser instead of offering a
+            // control the host would only refuse. On 「插件自己的浏览器」 the button starts it,
+            // and only the launch itself blocks it: the page's own check opens a tab and can
+            // take a while, and letting that disable this would make a press do nothing at all.
+            ...(dailyConnection
+              ? [
+                  createElement(
+                    'span',
+                    { key: 'how', style: S.actionsHint },
+                    `连不上时：在 ${inspectPageUrl(filled('browserKind') === 'chrome' ? 'chrome' : 'edge')} 里勾上` +
+                      '「允许远程调试」，再在弹出的「允许远程调试？」框上点「允许」——插件会一直等这个框，不超时、也不重试。',
+                  ),
+                ]
+              : [
+                  createElement(
+                    'button',
+                    {
+                      key: 'launch',
+                      type: 'button',
+                      onClick: () => void launchBrowserFromPage(),
+                      disabled: launching,
+                    },
+                    launching ? '正在启动…' : '启动并连接',
+                  ),
+                  createElement(
+                    'span',
+                    { key: 'hint', style: S.actionsHint },
+                    '在插件自己的浏览器里登录一次，之后长期保留。',
+                  ),
+                ]),
           )
         : null,
       group.id === 'decision'

@@ -13,7 +13,7 @@ import { runTask } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
 import { LOGIN_HINT } from './protocol'
-import { launchNote, prepareRun } from './run-setup'
+import { browserNote, prepareRun } from './run-setup'
 
 export const name = 'dsh-jev-ultrafast'
 // `credentials` is injected so a key is resolved through the harness credential
@@ -230,6 +230,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           userDataDir: config.userDataDir.get() || undefined,
           preferredKind: config.browserKind.get(),
           exeOverride: config.browserPath.get() || undefined,
+          connection: config.browserConnection.get(),
         })
         const result = await readPage({
           url: args.url,
@@ -240,6 +241,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
             cdpUrl: ensured.endpoint.httpUrl || ensured.endpoint.wsUrl,
             userDataDir: config.userDataDir.get() || undefined,
             preferredKind: config.browserKind.get(),
+            connection: config.browserConnection.get(),
           },
         })
         return {
@@ -250,7 +252,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           capped: result.capped,
           stop: result.stop,
           reason: result.reason,
-          note: launchNote(ensured.launched),
+          note: browserNote(config.browserConnection.get(), ensured),
           text: result.text,
         }
       },
@@ -320,9 +322,9 @@ export function saveScreenshot(base64: string): string {
   }
 }
 
-// `launchNote` lives in ./run-setup with the rest of a run's assembly; it is exported from
-// here as well, because this is where the tool and the tests already look for it.
-export { launchNote }
+// `launchNote` and `browserNote` live in ./run-setup with the rest of a run's assembly; they are
+// exported from here as well, because this is where the tool and the tests already look for them.
+export { browserNote, launchNote } from './run-setup'
 
 /**
  * What to say about the tabs one step opened. A page the run moved onto is where that

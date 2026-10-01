@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
-import { BROWSER_KINDS, BROWSER_LABELS } from '../src/browser/launch'
+import { BROWSER_CONNECTIONS, BROWSER_KINDS, BROWSER_LABELS } from '../src/browser/launch'
 import { FIELDS, FIELD_GROUPS, KEY_BLOCKS, SELF_SAVING_BLOCKS, fieldsOfBlock } from '../src/client/fields'
 import { INSPECTOR_URL } from '../src/command'
 import { DECISION_PROVIDER_IDS } from '../src/decision/providers'
@@ -50,6 +50,24 @@ describe('settings page fields', () => {
     for (const kind of BROWSER_KINDS) {
       expect(field?.choiceLabels?.[kind], kind).toBe(BROWSER_LABELS[kind])
     }
+  })
+
+  it('offers the two ways to reach a browser, and opens a fresh install on the reader’s own Edge', () => {
+    // Same reason as above, and the default matters here rather than being decoration: it is the
+    // route a fresh install drives, and it is the one that attaches to the browser the reader is
+    // already logged into instead of starting a window of its own.
+    const field = FIELDS.find((candidate) => candidate.key === 'browserConnection')
+    expect(field?.kind).toBe('choice')
+    expect(field?.group).toBe('browser')
+    expect([...(field?.choices ?? [])]).toEqual([...BROWSER_CONNECTIONS])
+    for (const route of BROWSER_CONNECTIONS) {
+      // A value with no wording would show the raw id in a Chinese page.
+      expect(field?.choiceLabels?.[route]?.length, route).toBeGreaterThan(0)
+    }
+    expect(resolveConfig({}).browserConnection.get()).toBe('daily')
+    // And the browser on the same no-config answer: Edge is what the schema declares, and it is
+    // the one Windows ships with, so the default window a task opens is one the reader already has.
+    expect(resolveConfig({}).browserKind.get()).toBe('edge')
   })
 
   it('draws the decision provider as a dropdown fed by the host route table', () => {

@@ -70,7 +70,7 @@ Three blocks in the settings page (Settings → Jev browser):
 |---|---|
 | Decision service | TypeSafe Jev direct, or any OpenAI-compatible route; the credential comes from the DSH credential store, the plugin stores nothing of its own |
 | Text model | Filling in field values, and the start-page fallback when a sentence carries no URL; can use a DSH built-in model or your own route |
-| Browser | Pick Chrome or Edge; **Launch and connect** opens a browser of the plugin's own. Log in once in that window and it stays: the plugin turns on "continue where you left off" for that profile, so the login is still there after you close and reopen it. Logins from your everyday browser cannot be carried over — on Windows the credential key is bound to the profile's location and cannot be unwrapped anywhere else |
+| Browser | **Connection** picks either **your own browser** (default — uses the logins you already have) or **the plugin's own browser** (a separate profile, no interference). Your own browser: keep it open, open `edge://inspect/#remote-debugging` in it (`chrome://inspect/#remote-debugging` for Chrome) and tick "Allow remote debugging"; when the plugin connects, the browser asks "Allow remote debugging?" — click Allow. That prompt appears on every connection and the plugin waits for it instead of clicking for you. The plugin's own browser: log in once in the window it opens and the login stays |
 
 Under **Advanced** you can set the decision output cap (default `393216`; when a server rejects it, the reply reports that server's own limit).
 
@@ -82,6 +82,7 @@ Under **Advanced** you can set the decision output cap (default `393216`; when a
 - "Content arrived" is judged from page text, not from the network: a page that only swaps images takes the no-change branch.
 - Frame-by-frame screenshots are off by default; when on, the trace directory holds `frames/NNNNNN.jpg`.
 - Logins from your everyday browser cannot move into the plugin's own browser — on Windows the credential key is bound to the profile's location, so a copy cannot unwrap it. Log in once there and the login stays.
+- With your own browser chosen, you cannot use it while the plugin is working, and while that debugging switch is on any local program could in principle connect to it.
 
 ## Relationship to upstream
 

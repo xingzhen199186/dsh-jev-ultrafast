@@ -47,6 +47,8 @@ export interface BrowserReport {
   version?: string
   /** Where the endpoint was found: setting, environment, browser file, default port. */
   source?: string
+  /** Which browser the connection went to: the plugin's own, or the one the reader is using. */
+  connection?: 'plugin' | 'daily'
   title?: string
   /** How many operatable elements the test page offered. */
   elements?: number
@@ -103,14 +105,26 @@ export interface StorableKey {
 }
 
 /**
+ * The page inside the reader's own browser that carries 「允许远程调试」.
+ *
+ * It is a `chrome://`-family address, so nothing on this machine can open it from the
+ * outside — a command line cannot reach those pages — which is why it appears in sentences
+ * the reader acts on rather than in a call this plugin could make.
+ */
+export function inspectPageUrl(kind: 'chrome' | 'edge'): string {
+  return `${kind === 'chrome' ? 'chrome' : 'edge'}://inspect/#remote-debugging`
+}
+
+/**
  * What a run that stopped short gets told when the page it stopped on may want a login.
  *
  * A hint, not a diagnosis: a `blocked` run has many causes, and the one thing the reader
- * cannot see from the report is that this plugin drives a browser profile of its own —
- * separate from the one they are logged into every day.
+ * cannot see from the report is where their logins live — in a profile of the plugin's own,
+ * or in the browser they use every day.
  */
 export const LOGIN_HINT =
-  '如果卡在要登录的页面：插件用的是它自己那份浏览器，和你日常那个互相独立；需要登录的网站，得先在它开出来的窗口里登录一次，登录会保留。'
+  '如果卡在要登录的页面：连的是你正在用的浏览器时，登录状态本该就在；连的是插件自己那份数据目录时，它和你日常那个互相独立，' +
+  '需要登录的网站得先在它开出来的窗口里登录一次。'
 
 /** Chinese wording for a store source id; an unknown id is shown as it came. */
 export function sourceLabel(source: string): string {

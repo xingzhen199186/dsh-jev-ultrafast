@@ -22,6 +22,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
+  BROWSER_LABELS,
   discoverBrowser,
   pluginProfileDir,
   readActivePort,
@@ -30,12 +31,11 @@ import {
   type DiscoverOptions,
 } from './discover'
 
-export type { BrowserKind }
-
-export const BROWSER_KINDS: readonly BrowserKind[] = ['chrome', 'edge']
-
-/** The name each browser is called on the page. */
-export const BROWSER_LABELS: Record<BrowserKind, string> = { chrome: 'Chrome', edge: 'Edge' }
+// The browser union and the names it is called by live in ./discover, next to the two routes
+// that have to name a browser in a sentence; they are re-exported here because this is where
+// the settings page and its tests have always looked for them.
+export type { BrowserConnection, BrowserKind } from './discover'
+export { BROWSER_CONNECTIONS, BROWSER_KINDS, BROWSER_LABELS } from './discover'
 
 /**
  * Where each browser usually installs itself, most likely first.
@@ -244,14 +244,16 @@ const ENSURE_DEPS: EnsureDeps = { discover: discoverBrowser, launch: launchBrows
 /**
  * The browser a task will drive: the one already there, or one started because there was none.
  *
- * Two things it deliberately does *not* do, both to keep a task from driving a browser the
- * reader did not choose. A pinned endpoint (`cdpUrl`) or a named profile directory
- * (`userDataDir`) is an instruction, not a hint: when one of those is set and unreachable,
- * the failure is reported as it is, because starting a different browser would be answering
- * a question nobody asked. And when there is nothing pinned and nothing running, the
- * browser that starts is the one the settings page already says — same executable lookup,
- * same profile directory, same port-file trick, and the same idempotence: a second task
- * finds the browser the first one started instead of opening a second window.
+ * Three things it deliberately does *not* do, all of them to keep a task from driving a browser
+ * the reader did not choose. On the 「你正在用的浏览器」 route nothing is ever started: that
+ * window is the reader's own, so a failure there is reported as it is rather than answered with
+ * a second browser. A pinned endpoint (`cdpUrl`) or a named profile directory (`userDataDir`) is
+ * an instruction, not a hint: when one of those is set and unreachable, the failure is reported
+ * as it is, because starting a different browser would be answering a question nobody asked. And
+ * when there is nothing pinned and nothing running, the browser that starts is the one the
+ * settings page already says — same executable lookup, same profile directory, same port-file
+ * trick, and the same idempotence: a second task finds the browser the first one started instead
+ * of opening a second window.
  */
 export async function ensureBrowser(
   options: EnsureOptions = {},
@@ -260,8 +262,11 @@ export async function ensureBrowser(
   try {
     return { endpoint: await deps.discover(options), launched: null }
   } catch (error) {
+    // The reader's own browser is not this plugin's to start: 「连接方式」 chose the window they
+    // are already working in, and the reason it could not be reached is the answer they need.
+    if (options.connection === 'daily') throw error
     if (options.cdpUrl?.trim() || options.userDataDir?.trim()) throw error
-    const launched = await deps.launch(options.preferredKind ?? 'chrome', {
+    const launched = await deps.launch(options.preferredKind ?? 'edge', {
       exeOverride: options.exeOverride,
       timeoutMs: options.timeoutMs,
     })

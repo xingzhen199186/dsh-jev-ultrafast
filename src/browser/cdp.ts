@@ -44,18 +44,32 @@ export class CdpConnection {
     socket.addEventListener('error', () => this.#fail(new Error('与浏览器的调试连接出错')))
   }
 
-  /** Open a connection, rejecting if the endpoint does not answer in time. */
+  /**
+   * Open a connection, rejecting if the endpoint does not answer in time.
+   *
+   * `timeoutMs` of 0 waits as long as it takes, and the route that connects to the reader's own
+   * browser asks for exactly that: Chrome/Edge 144+ ask permission on every connection, and a
+   * timer that fires while that box is on screen would close the very connection the box is
+   * about. Retrying is no better — killing the connection takes the box away with it, and a
+   * second connection raises a second box — so waiting is the whole behaviour, not a fallback.
+   */
   static async connect(wsUrl: string, timeoutMs = 15_000): Promise<CdpConnection> {
     const socket = new WebSocket(wsUrl)
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        socket.close()
-        reject(new Error(`连接浏览器调试端口超时（${timeoutMs} 毫秒）：${wsUrl}`))
-      }, timeoutMs)
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              socket.close()
+              reject(new Error(`连接浏览器调试端口超时（${timeoutMs} 毫秒）：${wsUrl}`))
+            }, timeoutMs)
+          : null
+      const answered = (): void => {
+        if (timer !== null) clearTimeout(timer)
+      }
       socket.addEventListener(
         'open',
         () => {
-          clearTimeout(timer)
+          answered()
           resolve()
         },
         { once: true },
@@ -63,7 +77,7 @@ export class CdpConnection {
       socket.addEventListener(
         'error',
         () => {
-          clearTimeout(timer)
+          answered()
           reject(new Error(`无法连接浏览器调试端口：${wsUrl}`))
         },
         { once: true },

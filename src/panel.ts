@@ -198,6 +198,16 @@ async function handle(
         send(res, 405, { error: '这个接口只接受 POST。' })
         return
       }
+      // The reader's own browser is not this plugin's to start or close. Refusing here is what
+      // keeps the page's button from becoming a press that quietly does nothing.
+      if (config.browserConnection.get() === 'daily') {
+        send(res, 409, {
+          error:
+            '现在的「连接方式」是「你正在用的浏览器」：插件不启动、也不关闭任何浏览器——那一个是你自己的。' +
+            '要让插件自己起一个，先把「连接方式」改成「插件自己的浏览器」，再按这个按钮。',
+        })
+        return
+      }
       const body = await readJson(req)
       // What the reader has chosen in the dropdown, which may not be saved yet; the saved
       // setting is the fallback for a caller that sends nothing.
@@ -343,10 +353,12 @@ function credentialsFile(): string {
 }
 
 async function browserReport(config: ConfigShape): Promise<BrowserReport> {
+  const connection = config.browserConnection.get()
   const options = {
     cdpUrl: config.cdpUrl.get() || undefined,
     userDataDir: config.userDataDir.get() || undefined,
     preferredKind: config.browserKind.get(),
+    connection,
   }
   try {
     const endpoint = await discoverBrowser(options)
@@ -358,6 +370,7 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
       const page = await session.observe()
       return {
         ok: true,
+        connection,
         endpoint: endpoint.httpUrl,
         version: endpoint.browser,
         source: endpoint.source,
@@ -368,7 +381,7 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
       await session.close()
     }
   } catch (error) {
-    return { ok: false, message: describe(error) }
+    return { ok: false, connection, message: describe(error) }
   }
 }
 

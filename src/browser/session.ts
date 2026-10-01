@@ -144,7 +144,13 @@ export class BrowserSession implements BrowserPort {
   /** Discover a browser, open a background tab in it, and load `url`. */
   static async open(url: string, options: DiscoverOptions = {}): Promise<BrowserSession> {
     const endpoint = await discoverBrowser(options)
-    const connection = await CdpConnection.connect(endpoint.wsUrl)
+    // The reader's own browser asks permission on every connect, and that box stays on screen
+    // only while this handshake is parked on it, so this is the one route that passes no
+    // deadline. See `CdpConnection.connect`.
+    const connection = await CdpConnection.connect(
+      endpoint.wsUrl,
+      options.connection === 'daily' ? 0 : undefined,
+    )
     try {
       const { targetId } = await connection.send<{ targetId: string }>('Target.createTarget', {
         url: 'about:blank',

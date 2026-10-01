@@ -7,7 +7,7 @@
  * to where a key comes from cannot be made in one path and forgotten in the other.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { LaunchedBrowser } from './browser/launch'
+import type { BrowserConnection, EnsuredBrowser, LaunchedBrowser } from './browser/launch'
 import { ensureBrowser } from './browser/launch'
 import type { Config as ConfigShape } from './config'
 import { resolveKey } from './credentials'
@@ -20,6 +20,7 @@ import type { TaskOptions } from './loop'
 
 /** The live settings one run is assembled from, read once so a save mid-run cannot split it. */
 export interface RunSettings {
+  browserConnection: BrowserConnection
   browserKind: 'chrome' | 'edge'
   browserPath: string
   cdpUrl: string
@@ -40,6 +41,7 @@ export interface RunSettings {
 /** Read every live setting once, so one run cannot straddle two versions of the page. */
 export function readSettings(config: ConfigShape): RunSettings {
   return {
+    browserConnection: config.browserConnection.get(),
     browserKind: config.browserKind.get(),
     browserPath: config.browserPath.get(),
     cdpUrl: config.cdpUrl.get(),
@@ -141,16 +143,18 @@ export async function prepareRun(
   // connected and nothing was pinned, this is where the plugin starts the browser the
   // settings page names — the same act as its 「启动并连接」 button, reached from a task
   // instead of a press. The endpoint it settled on is handed to the loop, so the run
-  // drives exactly the browser that was found or started here.
+  // drives exactly the browser that was found or started here. On the 「你正在用的浏览器」
+  // route nothing is started at all: an unreachable browser there is reported, not replaced.
   const ensured = await ensureBrowser({
     cdpUrl: settings.cdpUrl || undefined,
     userDataDir: settings.userDataDir || undefined,
     preferredKind: settings.browserKind,
     exeOverride: settings.browserPath || undefined,
+    connection: settings.browserConnection,
   })
 
   return {
-    note: launchNote(ensured.launched),
+    note: browserNote(settings.browserConnection, ensured),
     base: {
       maxSteps: overrides.maxSteps ?? settings.maxSteps,
       screenshots: overrides.screenshots ?? settings.screenshots,
@@ -164,6 +168,7 @@ export async function prepareRun(
         cdpUrl: ensured.endpoint.httpUrl || ensured.endpoint.wsUrl,
         userDataDir: settings.userDataDir || undefined,
         preferredKind: settings.browserKind,
+        connection: settings.browserConnection,
       },
       decision: {
         endpoint: decisionRoute.endpoint,
@@ -188,5 +193,22 @@ export function launchNote(launched: LaunchedBrowser | null): string {
   return (
     `本来没有可连的浏览器，已按设置启动 ${launched.label} 并连上` +
     `（它用的是插件自己那份数据目录，与你日常那个分开；需要登录的站点第一次要你亲自登录一次）`
+  )
+}
+
+/**
+ * What to say about the browser a run will drive; nothing when there is nothing to say.
+ *
+ * A window that appeared on the reader's desktop is not something to leave unsaid. Neither is
+ * the one thing the daily route can make them wait on: Chrome/Edge 144+ ask permission on every
+ * connection, and the run sits on that box until it is answered rather than timing out — so the
+ * note says which browser this is, and what to click if a box appears.
+ */
+export function browserNote(connection: BrowserConnection, ensured: EnsuredBrowser): string {
+  if (ensured.launched !== null) return launchNote(ensured.launched)
+  if (connection !== 'daily') return ''
+  return (
+    `这次连的是你正在用的浏览器（${ensured.endpoint.browser}，登录状态直接可用）。` +
+    '如果它弹出「允许远程调试？」，在框上点「允许」，插件会一直等着。'
   )
 }

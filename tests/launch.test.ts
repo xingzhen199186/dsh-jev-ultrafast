@@ -33,7 +33,7 @@ import {
 
 describe('browser launcher', () => {
   it('offers the two browsers the page lets the reader pick', () => {
-    expect([...BROWSER_KINDS]).toEqual(['chrome', 'edge'])
+    expect([...BROWSER_KINDS]).toEqual(['edge', 'chrome'])
     expect(BROWSER_LABELS.chrome).toBe('Chrome')
     expect(BROWSER_LABELS.edge).toBe('Edge')
   })
@@ -113,8 +113,8 @@ describe('browser launcher', () => {
       expect(pluginProfileDirs('chrome')[1].endsWith(join('browser', 'edge'))).toBe(true)
       expect(pluginProfileDirs('edge')[0].endsWith(join('browser', 'edge'))).toBe(true)
       expect(pluginProfileDirs('edge')[1].endsWith(join('browser', 'chrome'))).toBe(true)
-      // Nothing chosen yet: Chrome, the same default the settings page shows.
-      expect(pluginProfileDirs(undefined)[0].endsWith(join('browser', 'chrome'))).toBe(true)
+      // Nothing chosen yet: Edge, the same default the settings page shows.
+      expect(pluginProfileDirs(undefined)[0].endsWith(join('browser', 'edge'))).toBe(true)
     } finally {
       if (before === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = before
@@ -256,7 +256,7 @@ describe('the browser a task finds or starts', () => {
     expect(ensured.endpoint.httpUrl).toBe(started.endpoint)
   })
 
-  it('starts Chrome when the reader never picked a browser', async () => {
+  it('starts Edge when the reader never picked a browser', async () => {
     const kinds: BrowserKind[] = []
     await ensureBrowser(
       {},
@@ -267,11 +267,11 @@ describe('the browser a task finds or starts', () => {
         },
         launch: async (kind) => {
           kinds.push(kind)
-          return { ...started, kind: 'chrome', label: 'Chrome' }
+          return started
         },
       },
     )
-    expect(kinds).toEqual(['chrome'])
+    expect(kinds).toEqual(['edge'])
   })
 
   it('reports a pinned endpoint that does not answer instead of starting a different browser', async () => {

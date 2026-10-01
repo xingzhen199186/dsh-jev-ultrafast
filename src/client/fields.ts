@@ -107,11 +107,20 @@ export interface FieldSpec {
  */
 export const FIELDS: readonly FieldSpec[] = [
   {
+    key: 'browserConnection',
+    label: '连接方式',
+    hint: '「你正在用的浏览器」直接用你现在的登录状态；「插件自己的浏览器」是插件另开一份，互不干扰。',
+    kind: 'choice',
+    choices: ['daily', 'plugin'],
+    choiceLabels: { daily: '你正在用的浏览器', plugin: '插件自己的浏览器' },
+    group: 'browser',
+  },
+  {
     key: 'browserKind',
     label: '用哪个浏览器',
-    hint: '「启动并连接」会启动它，并给它一个插件自己的数据目录。',
+    hint: '上面选「插件自己的浏览器」时，「启动并连接」会启动它，并给它一个插件自己的数据目录。',
     kind: 'choice',
-    choices: ['chrome', 'edge'],
+    choices: ['edge', 'chrome'],
     choiceLabels: { chrome: 'Chrome', edge: 'Edge' },
     group: 'browser',
   },
