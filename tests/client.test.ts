@@ -172,10 +172,9 @@ describe('settings page fields', () => {
 })
 
 /**
- * Three places name the inspector: the route the host registers, the settings page's button,
- * and the sentence the slash command prints. They have to be one address, and nothing else in
- * the build ties them together — a rename that missed one would leave a button, or a line of
- * help, pointing at nothing.
+ * Two places name the inspector: the route the host registers and the sentence the slash
+ * command prints. They have to be one address, and nothing else in the build ties them
+ * together — a rename that missed one would leave a line of help pointing at nothing.
  */
 describe('the way into the inspector', () => {
   it('lives under the route prefix, so the host serves what the page asks for', () => {

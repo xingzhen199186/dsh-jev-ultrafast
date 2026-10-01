@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { decisionProvider, resolveDecisionRoute } from '../decision/providers'
 import { TEXT_PROVIDERS, isDshRoute, resolveTextRoute, textProvider } from '../decision/text-providers'
-import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, inspectorUrl, sourceLabel } from '../protocol'
+import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, sourceLabel } from '../protocol'
 import type {
   AdoptRunStatus,
   DecisionTestReport,
@@ -52,15 +52,6 @@ import {
   type FieldSpec,
   type SectionId,
 } from './fields'
-
-/**
- * Open the inspector in a new tab. Its own page asks for the token, so this is a plain
- * navigation, and the address is built from the origin in front of the reader — right on
- * whichever port they are on.
- */
-function openInspector(): void {
-  window.open(inspectorUrl(window.location.origin), '_blank', 'noopener')
-}
 
 export const name = ENTRY_ID
 
@@ -1072,22 +1063,6 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
               'span',
               { style: S.actionsHint },
               '搬过来的那份登录数据会留在磁盘上，只是不再使用它。',
-            ),
-          )
-        : null,
-      group.id === 'browser'
-        ? createElement(
-            'div',
-            { style: S.actions },
-            createElement(
-              'button',
-              { type: 'button', onClick: () => openInspector() },
-              '打开交互式检查器',
-            ),
-            createElement(
-              'span',
-              { style: S.actionsHint },
-              '想一步一步看每个动作、也能回放跑过的运行，就打开它。',
             ),
           )
         : null,
