@@ -120,8 +120,15 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
   if (action.kind === 'select') return { executed: action.id }
 
   const { x, y } = target
-  for (const type of ['mousePressed', 'mouseReleased'] as const) {
-    await session.call('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
+  // A key lands on whatever the page itself has focused, and the click is only one way of getting
+  // there. On 携程 (2026-10-02) the field the run had just typed into was still that focus, and the
+  // click aimed at it again is what brought the candidate list back a moment later with nothing in
+  // it highlighted. So a press asks first: a target that already is the page's focus is pressed
+  // where it is, and only a target that is not is clicked into it.
+  if (action.kind !== 'press_key' || !(await isFocused(session, action))) {
+    for (const type of ['mousePressed', 'mouseReleased'] as const) {
+      await session.call('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
+    }
   }
   if (action.kind === 'fill') {
     // Select what is already in the field first, so typing replaces rather than appends.
@@ -137,13 +144,46 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
     await session.call('Input.insertText', { text: text ?? '' })
   }
   if (action.kind === 'press_key') {
-    // The click above is what puts the focus on the observed element — a page's own popup
-    // list listens for keys on the field it hangs off, not on the document.
+    // The key goes to the page rather than to the element, and a page's own popup list listens on
+    // the field it hangs off rather than on the document — which is why the focus the check above
+    // protects is the thing this press is riding on.
     for (const params of keyEvents(String(action.key ?? ''))) {
       await session.call('Input.dispatchKeyEvent', params)
     }
   }
   return { executed: action.id }
+}
+
+/**
+ * Whether the observed element is what the page has focused right now.
+ *
+ * Read through the same channel the target itself comes from, and only for a press: a target that
+ * is already the focus is pressed where it stands, so the click that used to precede every press
+ * — and could land on a wrapper, or take the focus away from the field it was meant to keep it on
+ * — is not sent at all.
+ *
+ * A query that cannot be answered (the element detached, the page mid-navigation, the connection
+ * refusing) comes back `false` rather than throwing: a focus nobody can read is not evidence of
+ * one, and the click it falls back to is what this path did before it could ask.
+ */
+async function isFocused(session: BrowserPort, action: SnapshotAction): Promise<boolean> {
+  try {
+    const response = await session.call<{ result?: { value?: unknown } }>('Runtime.evaluate', {
+      expression: focusSource(action),
+      returnByValue: true,
+    })
+    return response.result?.value === true
+  } catch {
+    return false
+  }
+}
+
+/** The same element lookup the target comes from, asked the one question the press cares about. */
+function focusSource(action: SnapshotAction): string {
+  return `(action => {
+  const e=window.__jevFast?.nodes.get(action.node);
+  return !!e && e === document.activeElement;
+})(${JSON.stringify(action)})`
 }
 
 /**

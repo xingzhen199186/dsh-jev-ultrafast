@@ -6,7 +6,7 @@ import { StalePage } from '../src/browser/session'
 import type { ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
-import { requestChars } from '../src/decision/typesafe'
+import { InvalidDecision, requestChars } from '../src/decision/typesafe'
 import { type TaskDeps, runTask } from '../src/loop'
 
 /**
@@ -99,6 +99,12 @@ function harness(config: {
   choices: string[]
   /** Confidence per decision call, drained one per call; the floor is what the re-ask tests vary. */
   confidences?: number[]
+  /**
+   * Call ordinals (1-based) that come back with something the run cannot act on, and the sentence the
+   * decision layer writes about it. A call named here refuses instead of answering, which is what the
+   * service does when its own distribution has no winner.
+   */
+  unusable?: Record<number, string>
   /** The target key to record for a choice, for the tests that need two different targets. */
   targets?: Record<string, string>
   /** Scripted answers to "did that click open a page?", drained one per step. */
@@ -161,6 +167,8 @@ function harness(config: {
       seen.decisions += 1
       seen.contexts.push(context)
       seen.spaces.push(space)
+      const unusable = config.unusable?.[seen.decisions]
+      if (unusable) throw new InvalidDecision(unusable)
       const choice = config.choices.shift() ?? 'DONE'
       return decisionFor(choice, config.targets?.[choice], config.confidences?.shift() ?? 0.9)
     },
@@ -752,6 +760,7 @@ describe('run loop', () => {
     expect(result.reasks).toEqual([
       {
         step: 1,
+        reason: 'low-confidence',
         agreed: true,
         first: { choice: 'e1', confidence: 0.3, probabilities: { e1: 0.3 } },
         second: { choice: 'e1', confidence: 0.42, probabilities: { e1: 0.42 } },
@@ -775,11 +784,138 @@ describe('run loop', () => {
     expect(result.reasks).toEqual([
       {
         step: 1,
+        reason: 'low-confidence',
         agreed: false,
         first: { choice: 'e1', confidence: 0.2, probabilities: { e1: 0.2 } },
         second: { choice: 'e2', confidence: 0.6, probabilities: { e2: 0.6 } },
       },
     ])
+  })
+
+  /**
+   * The two sentences the decision layer writes for an answer the run cannot act on, kept verbatim
+   * from `./decision/typesafe` and from the 携程 run of 2026-10-02 whose trace carries the first one.
+   */
+  const UNUSABLE_MISMATCH =
+    '决策服务返回了无法执行的结果，没有执行任何动作：「下一步该做哪个操作」它选的是 WAIT（概率 0.35），' +
+    '但概率最高的是 CLICK（概率 0.36）——这一问它自己没拿定主意'
+  const UNUSABLE_MISSING =
+    '决策服务返回了无法执行的结果，没有执行任何动作：「下一步该做哪个操作」这一问没有给出可用的概率表：收到 什么都没有'
+
+  it('asks again when the answer cannot be acted on, and runs the second one', async () => {
+    // The run of 2026-10-02 stopped on the first sentence above: the service named WAIT at 0.35 over
+    // its own 0.36 CLICK, and the step threw instead of spending one more question on it. An answer
+    // that cannot be read is the same "ask once more" as an unsure one, and the step runs on what
+    // comes back — here the answer it could not get the first time.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['e1', 'DONE'],
+      unusable: { 1: UNUSABLE_MISMATCH },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // The refused asking plus the two that answered: an unusable answer is paid for like any other.
+    expect(result.decisions).toBe(3)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'unusable',
+        agreed: false,
+        first: null,
+        second: { choice: 'e1', confidence: 0.9, probabilities: { e1: 0.9 } },
+        unusable: { first: UNUSABLE_MISMATCH },
+      },
+    ])
+  })
+
+  it('stops when both askings of one step cannot be acted on, and keeps both sentences', async () => {
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: [],
+      unusable: { 1: UNUSABLE_MISMATCH, 2: UNUSABLE_MISSING },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    // The decision layer's own sentence, the one that names what the service chose, that choice's
+    // probability and the one that beat it. It is the whole reason the run stopped, and no action
+    // was taken on either asking.
+    expect(result.reason).toBe(UNUSABLE_MISSING)
+    expect(result.steps).toBe(0)
+    expect(result.decisions).toBe(2)
+    expect(h.seen.executed).toHaveLength(0)
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'unusable',
+        agreed: false,
+        first: null,
+        second: null,
+        unusable: { first: UNUSABLE_MISMATCH, second: UNUSABLE_MISSING },
+      },
+    ])
+  })
+
+  it('stops on the service’s own sentence when the second asking is the unusable one', async () => {
+    // One extra question per step, whichever of the two askings is the one that cannot be read: an
+    // unsure answer that is then answered with a refusal ends the step rather than earning a third.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: ['e1'],
+      confidences: [0.3],
+      unusable: { 2: UNUSABLE_MISMATCH },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe(UNUSABLE_MISMATCH)
+    expect(result.decisions).toBe(2)
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'low-confidence',
+        agreed: false,
+        first: { choice: 'e1', confidence: 0.3, probabilities: { e1: 0.3 } },
+        second: null,
+        unusable: { second: UNUSABLE_MISMATCH },
+      },
+    ])
+  })
+
+  it('does not spend a question the model-call budget cannot afford, even on an unusable answer', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      // The first answer's field goes stale, so it costs a decision and no step; the next answer is
+      // the one that cannot be read, and the budget is exactly one decision short of asking again.
+      fresh: [true, false],
+      choices: ['e2'],
+      unusable: { 2: UNUSABLE_MISMATCH },
+    })
+    const result = await run(h.deps, { maxSteps: 1 })
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('达到本次运行的模型调用上限（2 次），已停止')
+    expect(result.decisions).toBe(2)
+    expect(result.reasks).toEqual([])
+    expect(h.seen.executed).toHaveLength(0)
+  })
+
+  it('does not ask again once the step budget is spent, even on an unusable answer', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      choices: ['e1', 'e1'],
+      unusable: { 3: UNUSABLE_MISMATCH },
+    })
+    const result = await run(h.deps, { maxSteps: 2 })
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('达到本次运行的动作上限（2 步），已停止')
+    expect(result.steps).toBe(2)
+    expect(result.decisions).toBe(3)
+    expect(result.reasks).toEqual([])
   })
 
   it('says the same thing whether or not the second answer was sure', async () => {

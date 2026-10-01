@@ -28,7 +28,7 @@ import { actionSpace, trimActionSpace } from './decision/action-space'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
-import { choose, requestChars, textLeftOut } from './decision/typesafe'
+import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage } from './browser/session'
@@ -41,12 +41,6 @@ import { verify, type Verification } from './verify'
 
 /** How a run ended. `blocked` means the loop stopped itself, `failed` means the environment did. */
 export type RunStatus = 'done' | 'blocked' | 'failed'
-
-/** One decision, as it was made against one observed page. */
-export interface DecisionRecord extends Decision {
-  fingerprint: string
-  elapsed_ms: number
-}
 
 /** One paid text-model call. */
 export interface TextCall {
@@ -66,17 +60,37 @@ export interface AnswerRecord {
   probabilities: Record<string, number>
 }
 
+/** One asking of the operation question: an answer, or the service's own words for why it is not one. */
+interface Attempt {
+  decision: Decision | null
+  /** What the decision layer said about an answer that cannot be acted on; empty when it gave one. */
+  unusable: string
+}
+
+/** Why the first answer of a step did not stand on its own. */
+export type ReaskReason = 'low-confidence' | 'unusable'
+
 /**
- * One step whose operation answer came back below the confidence floor and was therefore asked a
- * second time. Recorded whether or not the two answers agreed, because a run that stops this way
+ * One step whose operation answer could not be stood behind on the first asking and was therefore
+ * asked a second time: the service was unsure of it, or what came back could not be read as an
+ * answer at all. Recorded whether or not the second asking helped, because a run that stops this way
  * has to be able to show what the service said each time rather than only that it was unsure.
  */
 export interface ReaskRecord {
   step: number
-  /** Whether both answers named the same choice — the only case in which the step was executed. */
+  /** Why the first answer did not stand: below the confidence floor, or not an answer that could be read. */
+  reason: ReaskReason
+  /** Whether the first answer was one that could be read and both askings named the same choice. */
   agreed: boolean
-  first: AnswerRecord
-  second: AnswerRecord
+  /** What the first asking said, or `null` when what came back could not be read as an answer. */
+  first: AnswerRecord | null
+  /** What the second asking said, or `null` when what came back could not be read as an answer. */
+  second: AnswerRecord | null
+  /**
+   * The service's own sentence about an asking that could not be read, per side. Absent when both
+   * could be read, which is the ordinary re-ask.
+   */
+  unusable?: { first?: string; second?: string }
 }
 
 /** One step that opened pages in new tabs, as the run found them. */
@@ -257,7 +271,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const textSource = artifacts ? { ...options.text, trace: artifacts.trace } : options.text
 
   const history: HistoryEntry[] = []
-  const decisions: DecisionRecord[] = []
+  // Every question this run paid for, counted rather than only listed: an answer that comes back
+  // unusable was paid for exactly like one that can be acted on, so it spends the same budget.
+  let decisionCalls = 0
   const textCalls: TextCall[] = []
   const follows: FollowRecord[] = []
   const reasks: ReaskRecord[] = []
@@ -309,7 +325,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       }
 
       // ---- decide ----
-      if (decisions.length >= maxDecisions) {
+      if (decisionCalls >= maxDecisions) {
         status = 'blocked'
         reason = `达到本次运行的模型调用上限（${maxDecisions} 次），已停止`
         break
@@ -359,22 +375,37 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // Built once because the same question may be asked twice: a re-ask is the same request
       // against the same page, not a new one.
       const asked = contextFor(omitted)
-      let decision = await deps.decide({ ...decisionSource, signal: options.signal }, space, asked)
-      decisions.push({ ...decision, fingerprint: page.fingerprint, elapsed_ms: elapsedMs() })
+      // One asking of the question. An answer the decision layer refuses to hand over — a
+      // distribution whose stated winner is not its most probable choice, a field the service left
+      // out — is neither a crash nor a page failure: it is the same "ask once more" as a confidence
+      // under the floor, and it goes through the same seam and the same budget as one.
+      const ask = async (): Promise<Attempt> => {
+        decisionCalls += 1
+        try {
+          const answer = await deps.decide({ ...decisionSource, signal: options.signal }, space, asked)
+          return { decision: answer, unusable: '' }
+        } catch (error) {
+          if (!(error instanceof InvalidDecision)) throw error
+          return { decision: null, unusable: error.message }
+        }
+      }
+      const first = await ask()
       hint = ''
 
       // ---- did it know, or did it guess? ----
       // A confidence under the floor is the service saying it is not sure, and this run used to
       // record that and then act on it anyway — 49 of the 71 decisions in the 2026-10 audit came
-      // back this way. The same question is asked once more instead, and only two answers that name
-      // the same choice are executed; two that disagree stop the step rather than pick one of them.
+      // back this way. The same question is asked once more instead, and only an answer that can
+      // stand is executed: two that disagree stop the step rather than pick one of them, and so
+      // does a second asking that cannot be read, which leaves the step nothing to act on at all.
       // This is judged here, before the answers are acted on and before the brakes below: the
       // question is what the service thinks, not what the page did.
-      if (decision.confidence < CONFIDENCE_FLOOR) {
+      let decision = first.decision
+      if (decision === null || decision.confidence < CONFIDENCE_FLOOR) {
         // The second question is a second decision like any other, so it is only asked while the
         // run still has both a decision and a step to spend; running out here stops the run with
         // the budget's own sentence rather than acting on an answer nobody stands behind.
-        if (decisions.length >= maxDecisions) {
+        if (decisionCalls >= maxDecisions) {
           status = 'blocked'
           reason = `达到本次运行的模型调用上限（${maxDecisions} 次），已停止`
           break
@@ -384,30 +415,44 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           reason = `达到本次运行的动作上限（${maxSteps} 步），已停止`
           break
         }
-        const again = await deps.decide({ ...decisionSource, signal: options.signal }, space, asked)
-        decisions.push({ ...again, fingerprint: page.fingerprint, elapsed_ms: elapsedMs() })
-        const first: AnswerRecord = {
-          choice: decision.choice,
-          confidence: decision.confidence,
-          probabilities: decision.operationProbabilities,
+        const second = await ask()
+        const agreed =
+          first.decision !== null && second.decision !== null && second.decision.choice === first.decision.choice
+        reasks.push({
+          step: history.length + 1,
+          // What the first answer was stopped by: it was unsure, or it could not be read at all.
+          reason: first.decision === null ? 'unusable' : 'low-confidence',
+          agreed,
+          first: first.decision ? answerRecord(first.decision) : null,
+          second: second.decision ? answerRecord(second.decision) : null,
+          ...(first.unusable || second.unusable
+            ? {
+                unusable: {
+                  ...(first.unusable ? { first: first.unusable } : {}),
+                  ...(second.unusable ? { second: second.unusable } : {}),
+                },
+              }
+            : {}),
+        })
+        if (second.decision === null) {
+          status = 'blocked'
+          // The decision layer's own sentence, which names what the service chose, that choice's
+          // probability and the choice that was more probable than it. The same sentence answers
+          // whether it was the first asking or the second that could not be read: what the reader
+          // needs is what the service said, not how many times it was asked.
+          reason = second.unusable
+          break
         }
-        const second: AnswerRecord = {
-          choice: again.choice,
-          confidence: again.confidence,
-          probabilities: again.operationProbabilities,
-        }
-        const agreed = again.choice === decision.choice
-        reasks.push({ step: history.length + 1, agreed, first, second })
-        if (!agreed) {
+        if (first.decision !== null && !agreed) {
           status = 'blocked'
           // Said about the first answer's confidence, because the second one may well be sure —
           // certain and different is exactly the disagreement this stops on.
           reason = `决策服务两次给的答案不一样（第一次把握低于 ${CONFIDENCE_FLOOR}），先停下`
           break
         }
-        // The second answer is the one that stands: the two name the same choice, and this one was
-        // given against the page in hand.
-        decision = again
+        // The second answer is the one that stands: either the two name the same choice, or the
+        // first one could not be read at all and this is the only answer the step has.
+        decision = second.decision
       }
 
       emit({
@@ -650,7 +695,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     status,
     reason,
     steps: history.length,
-    decisions: decisions.length,
+    decisions: decisionCalls,
     elapsed_ms: elapsedMs(),
     // Only present when that is how it ended: what it was repeating, and how often.
     ...(stuckOn ? { stuck_on: stuckOn } : {}),
@@ -665,7 +710,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     reason,
     elapsedMs: elapsedMs(),
     steps: history.length,
-    decisions: decisions.length,
+    decisions: decisionCalls,
     history,
     textCalls,
     reasks,
@@ -682,6 +727,15 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     recordDir: artifacts?.dir ?? '',
     page: page ? { url: page.url, title: page.title, text: page.text } : null,
     elements: page ? safeElements(page) : [],
+  }
+}
+
+/** The three things a re-ask record keeps about one answer the service gave. */
+function answerRecord(decision: Decision): AnswerRecord {
+  return {
+    choice: decision.choice,
+    confidence: decision.confidence,
+    probabilities: decision.operationProbabilities,
   }
 }
 
