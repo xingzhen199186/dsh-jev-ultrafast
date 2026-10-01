@@ -71,10 +71,11 @@ export interface DecisionContext {
    */
   note?: string
   /**
-   * How many observed elements this request's table left out because the page offered more than the
-   * cap (see `action-space.ts`). Absent when nothing was cut. The service is told the number so it
-   * reads the table as a selection rather than as the whole page; what it is not told is anything
-   * about the elements themselves, which are simply not there.
+   * How many of the page's own elements this request's table left out: the ones the cap cut (see
+   * `action-space.ts`), and the ones the run had already ruled out as dead ends (see `dead-ends.ts`).
+   * Absent when there were none. The service is told the number so it reads the table as a selection
+   * rather than as the whole page; what it is not told is anything about the elements themselves,
+   * which are simply not there.
    */
   omittedElements?: number
 }

@@ -451,6 +451,57 @@ describe('run loop', () => {
     expect(result.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
   })
 
+  it('takes a dead end out of the next request, judged on the table and the address alone', async () => {
+    // The same carousel, on a page with enough elements to leave the floor room: the click moved
+    // nothing a reader would call the screen — the controls and the address stood still while the
+    // page rewrote its own text — so the element the step acted on comes out of the table the next
+    // request is built from and is nowhere in it. The model is not told to avoid it; it simply is
+    // not offered it, and the run does not steer what it picks instead.
+    const crowd = [
+      ...actions,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
+    ]
+    const frames = Array.from({ length: 4 }, (_unused, index) =>
+      pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
+    )
+    const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+    // The page itself is untouched — the element is still there to act on — while the table handed
+    // over is not: the first request carries the page whole, and every request after the step does not.
+    expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
+    expect(h.seen.spaces[2]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
+    expect(h.seen.spaces[1]!.targets.CLICK!['1']).toBeUndefined()
+    expect(result.elements.map((element) => element.index)).toContain('1')
+  })
+
+  it('sets aside a field that took the text and showed nothing for it, on purpose', async () => {
+    // Typing into a field does not move a page's address or its element table, so a step that entered
+    // a value and changed nothing reads as no change like any other — and that is wanted: the field
+    // that swallowed the text is the one to set aside for a step. Here it is the only field on the
+    // page, so the operation it was offered under leaves the questions with it.
+    const crowd = [
+      ...actions,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
+    ]
+    const h = harness({
+      pages: [pageState('f0', { actions: crowd }), pageState('f1', { actions: crowd })],
+      choices: ['e2', 'e2', 'e2'],
+      targets: { e2: '2' },
+    })
+    const result = await run(h.deps)
+
+    expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+    expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toContain('2')
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).not.toContain('2')
+    expect(h.seen.spaces[1]!.targets.TYPE_TEXT).toBeUndefined()
+    // Set aside for a step, not forbidden: the page still offers it, and the model already answered.
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e2', 'e2', 'e2'])
+  })
+
   it('counts a step as a change when the element table moves, the text standing still', async () => {
     // The other half of the same test: the screen the run landed on offers a control the page it
     // came from did not, and the table is what says so — the page's own text never moved.

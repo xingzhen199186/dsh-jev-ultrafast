@@ -21,10 +21,15 @@
  *    sentence saying why, and only a run of them stops the run;
  *  - three consecutive steps that left the page unchanged stop the run, and a run of steps on
  *    one and the same target that only ever brings back page states the run has already shown
- *    stops it as well, saying which action it was stuck on instead of burning the budget.
+ *    stops it as well, saying which action it was stuck on instead of burning the budget;
+ *  - a step that acted on an element and did not move the screen makes that element a dead end, and
+ *    it is taken out of every copy of the candidate table before the next request is built. The
+ *    judgement is the plugin's own, and where the run should go instead is not part of it: see
+ *    `./dead-ends.ts`.
  */
 import type { ActionSpace, ElementEntry } from './decision/action-space'
-import { actionSpace, trimActionSpace } from './decision/action-space'
+import { actionSpace, trimActionSpace, withoutElements } from './decision/action-space'
+import { nextDeadEnds } from './dead-ends'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
@@ -330,6 +335,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // keeps producing something new apart from one that is going round in circles.
   const seenStates = new Set<string>()
   const recentSteps: Array<{ replayed: boolean; target: string | null }> = []
+  // The elements this run has found to be dead ends: a step acted on one and the screen did not move
+  // for it. Read once per request, by `nextDeadEnds`, and emptied by a screen that really changed.
+  // The judgement is the plugin's own rather than a sentence to the model — see `./dead-ends.ts` for
+  // why, and for what this rule deliberately does not do.
+  let deadEnds = new Set<string>()
   // The action the run stopped on because it kept repeating it, when it stopped that way. It
   // rides along into the run's trace, so the file explains the stop without the conversation.
   let stuckOn: { operation: string; target: string | null; action: string; times: number } | null = null
@@ -387,6 +397,20 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // selection. The selection is said out loud rather than passed off as the whole page.
       const note = [nestedNote(page.nested), hint].filter(Boolean).join(' ')
       const full = actionSpace(page.actions)
+      // ---- what is already a dead end? ----
+      // Asked here, about the state this request is about to carry: the last step acted on an element
+      // and its own honest reading says the screen did not move for it, so that element is out of the
+      // candidates from now on, and a step that really moved the screen empties the set (see
+      // `./dead-ends.ts`). Recomputed from the step that really preceded this request rather than
+      // remembered apart from it, so the two cannot drift.
+      deadEnds = nextDeadEnds(deadEnds, history[history.length - 1], full.elements.length)
+      // Taken out of the table itself, before the cap and the request budget below read it, so the
+      // room one request has is never spent on an element the run has already ruled out. Which
+      // elements they are is never said — they are simply not there — while how many of the page's
+      // own elements they account for joins the count below, because that count is what tells the
+      // service it is reading a selection of the page rather than the whole of it.
+      const live = withoutElements(full, deadEnds)
+      const dead = full.elements.length - live.elements.length
       const recent = history.map((entry) => entry.target)
       // Fixed while the table is cut, so the request measured below is the request that is sent.
       const viewed = page
@@ -401,7 +425,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         ...(omitted > 0 ? { omittedElements: omitted } : {}),
       })
       let limit = MAX_ELEMENTS
-      let trimmed = trimActionSpace(full, options.goal, recent, limit)
+      let trimmed = trimActionSpace(live, options.goal, recent, limit)
       // Counting elements is arithmetic, and arithmetic cannot see how long the page's own labels
       // are. What has to fit is the body the service receives, so it is measured and the table is
       // cut again — in the same order, a few entries at a time — until it does. A page light enough
@@ -409,20 +433,20 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // that is sent is sent whole.
       while (
         limit > 1 &&
-        requestChars(trimmed.space, contextFor(trimmed.omitted), decisionSource.model) > MAX_REQUEST_CHARS
+        requestChars(trimmed.space, contextFor(trimmed.omitted + dead), decisionSource.model) > MAX_REQUEST_CHARS
       ) {
         limit -= 4
-        trimmed = trimActionSpace(full, options.goal, recent, limit)
+        trimmed = trimActionSpace(live, options.goal, recent, limit)
       }
       const { space, omitted } = trimmed
       // Kept for the run's own report, so a reader can see that the last page the run decided on was
       // bigger than one request could carry instead of having to take it on trust.
       sentElements = space.elements.length
-      omittedElements = omitted
+      omittedElements = omitted + dead
       textCut = textLeftOut(viewed.text)
       // Built once because the same question may be asked twice: a re-ask is the same request
       // against the same page, not a new one.
-      const asked = contextFor(omitted)
+      const asked = contextFor(omitted + dead)
       // One asking of the question. An answer the decision layer refuses to hand over — a
       // distribution whose stated winner is not its most probable choice, a field the service left
       // out — is neither a crash nor a page failure: it is the same "ask once more" as a confidence
