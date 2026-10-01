@@ -43,11 +43,23 @@ function pageState(fingerprint: string, overrides: Partial<PageState> = {}): Pag
   }
 }
 
-function decisionFor(choice: string): Decision {
+/**
+ * A page whose fingerprint keeps cycling, the way a site that redraws itself looks from here:
+ * the states come back round instead of the page ever sitting still or going somewhere new.
+ */
+function wheel(count: number, states: string[]): PageState[] {
+  return Array.from({ length: count }, (_unused, index) => pageState(states[index % states.length]!))
+}
+
+function decisionFor(choice: string, target = '1'): Decision {
+  // The operation is the one the real decision layer would name for the chosen action, so the
+  // sentences the loop writes carry the operation the run really performed.
+  const chosen = actions.find((candidate) => candidate.id === choice)
   return {
     choice,
-    operation: choice === 'DONE' || choice === 'BLOCKED' ? choice : 'CLICK',
-    target: choice === 'DONE' || choice === 'BLOCKED' ? null : '1',
+    operation:
+      choice === 'DONE' || choice === 'BLOCKED' ? choice : chosen?.kind === 'fill' ? 'TYPE_TEXT' : 'CLICK',
+    target: choice === 'DONE' || choice === 'BLOCKED' ? null : target,
     confidence: 0.9,
     probabilities: { [choice]: 0.9 },
     operationProbabilities: {},
@@ -81,6 +93,8 @@ function harness(config: {
   /** Scripted freshness answers; once exhausted the page is considered fresh. */
   fresh?: boolean[]
   choices: string[]
+  /** The target key to record for a choice, for the tests that need two different targets. */
+  targets?: Record<string, string>
   /** Scripted answers to "did that click open a page?", drained one per step. */
   adopt?: Array<AdoptResult | null>
   typeText?: () => Promise<TextResult>
@@ -139,7 +153,8 @@ function harness(config: {
     decide: async (_source, _space, context) => {
       seen.decisions += 1
       seen.contexts.push(context)
-      return decisionFor(config.choices.shift() ?? 'DONE')
+      const choice = config.choices.shift() ?? 'DONE'
+      return decisionFor(choice, config.targets?.[choice])
     },
     typeText: async (_source, context) => {
       seen.typedFields.push(context)
@@ -302,6 +317,84 @@ describe('run loop', () => {
     expect(result.status).toBe('blocked')
     expect(result.reason).toMatch(/连续 3 步/)
     expect(result.steps).toBe(3)
+  })
+
+  it('stops when one target keeps bringing back page states the run has already shown', async () => {
+    // Three states in a wheel: the first three steps are new, and from the fourth on every step
+    // shows a state the run has already shown. That is the shape of the 携程 loop (2026-10-01),
+    // where the page cycled through the same few states for 60 steps and changed on almost every
+    // one — so the rule above, which counts steps that changed nothing at all, never fired.
+    const h = harness({
+      pages: [pageState('f0'), ...wheel(12, ['f1', 'f2', 'f3'])],
+      choices: Array.from({ length: 12 }, () => 'e1'),
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    // Nine, not eight: the window ending at step 8 still holds the first appearance of f3.
+    expect(result.steps).toBe(9)
+    expect(h.seen.executed).toHaveLength(9)
+    expect(result.reason).toBe(
+      '同一个动作连着做了 6 次、页面只是在几个老样子之间打转，先停下——它卡在这个动作上了：CLICK 目标 1「Search」',
+    )
+  })
+
+  it('does not stop when a state the run has never shown turns up inside the window', async () => {
+    const h = harness({
+      // The wheel runs seven steps, then one state nothing has shown before, then the wheel again.
+      pages: [pageState('f0'), ...wheel(7, ['f1', 'f2', 'f3']), pageState('f4'), ...wheel(6, ['f1', 'f2', 'f3'])],
+      choices: Array.from({ length: 20 }, () => 'e1'),
+    })
+    const result = await run(h.deps)
+
+    // Without the new state at step 8 the window would have closed six replays in, at step 9.
+    // The intruder holds it open until it has fallen out of it, so the run stops at step 14.
+    expect(result.status).toBe('blocked')
+    expect(result.steps).toBe(14)
+    expect(result.reason).toContain('连着做了 6 次')
+  })
+
+  it('does not stop while the steps keep changing target, however old the states they bring back', async () => {
+    const h = harness({
+      pages: [pageState('f0'), ...wheel(16, ['f1', 'f2', 'f3'])],
+      choices: [...Array.from({ length: 14 }, (_unused, index) => (index % 2 === 0 ? 'e1' : 'e2')), 'DONE'],
+      targets: { e1: '1', e2: '2' },
+    })
+    const result = await run(h.deps)
+
+    // Six steps in a row only count when they are aimed at one and the same target: a run that
+    // moves between two controls is doing something, even on a page that redraws constantly.
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(14)
+  })
+
+  it('says how many times it repeated the action, and writes it into the run trace', async () => {
+    const h = harness({
+      pages: [pageState('f0'), ...wheel(12, ['f1', 'f2', 'f3'])],
+      choices: Array.from({ length: 12 }, () => 'e2'),
+      targets: { e2: '2' },
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.reason).toBe(
+        '同一个动作连着做了 6 次、页面只是在几个老样子之间打转，先停下——它卡在这个动作上了：TYPE_TEXT 目标 2「Where from?」',
+      )
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      // The last word of the trace carries the same facts, so the file explains the stop on its
+      // own: which action, which target, and how many times it went round.
+      expect(trace[trace.length - 1]).toMatchObject({
+        kind: 'run',
+        status: 'blocked',
+        steps: 9,
+        stuck_on: { operation: 'TYPE_TEXT', target: '2', action: 'Where from?', times: 6 },
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
   })
 
   it('stops at the action budget without asking for another decision to act on', async () => {

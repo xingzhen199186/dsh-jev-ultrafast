@@ -37,13 +37,25 @@ export const WHEEL = { x: 550, y: 650 } as const
  * They exist because a site's autocomplete list is often plain markup the snapshot cannot
  * name: on 携程 the candidate rows never entered the element table, so the only way to pick
  * one was the keyboard the page itself advertises.
+ *
+ * `text` is the character the key contributes, and CDP only types one when the event carries
+ * it: of the keys here, exactly Enter (`\r`) and Tab (`\t`) contribute one. Escape and the
+ * arrows contribute none, so no `text` is invented for them — an event that carried one would
+ * type a character into the page that the reader never asked for. `nativeVirtualKeyCode` is
+ * the platform's own code for the key, and upstream (`browser_harness` `helpers.py`, whose
+ * `press_key` this table is the port of) sends the same number as `windowsVirtualKeyCode` on
+ * every key, which is what keeps the synthetic event reading as a real one to a page that
+ * inspects the platform code.
  */
-export const PRESS_KEYS: Record<string, { key: string; code: string; windowsVirtualKeyCode: number }> = {
-  enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
-  escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
-  tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
-  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
-  arrowup: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+export const PRESS_KEYS: Record<
+  string,
+  { key: string; code: string; windowsVirtualKeyCode: number; nativeVirtualKeyCode: number; text?: string }
+> = {
+  enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: '\r' },
+  escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 },
+  tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9, text: '\t' },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 },
 }
 
 /**
@@ -55,7 +67,15 @@ export const PRESS_KEYS: Record<string, { key: string; code: string; windowsVirt
 export function keyEvents(name: string): Array<Record<string, unknown>> {
   const spec = PRESS_KEYS[name]
   if (!spec) throw new Error(`不支持的按键：${name || '(未给出)'}；只支持 ${Object.keys(PRESS_KEYS).join('、')}`)
-  const params = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode }
+  const params: Record<string, unknown> = {
+    key: spec.key,
+    code: spec.code,
+    windowsVirtualKeyCode: spec.windowsVirtualKeyCode,
+    nativeVirtualKeyCode: spec.nativeVirtualKeyCode,
+  }
+  // The field is left off keys that contribute no character, rather than sent as an empty
+  // string: "this key types nothing" and "this key types nothing yet" are not the same event.
+  if (spec.text !== undefined) params.text = spec.text
   return [
     { type: 'keyDown', ...params },
     { type: 'keyUp', ...params },

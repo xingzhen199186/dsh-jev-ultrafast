@@ -26,9 +26,40 @@ const context: DecisionContext = {
 describe('press_key', () => {
   it('sends the press and then the release, with the numbers CDP wants', () => {
     expect(keyEvents('enter')).toEqual([
-      { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
-      { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
+      {
+        type: 'keyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: '\r',
+      },
+      {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: '\r',
+      },
     ])
+  })
+
+  it('carries a character only where the key has one, and the same numbers on both events', () => {
+    // CDP types nothing for a key event without `text`, which is why Enter and Tab have to
+    // carry theirs — a key that arrives without one is a key the page never sees.
+    expect(keyEvents('enter')[0]).toMatchObject({ key: 'Enter', text: '\r' })
+    expect(keyEvents('tab')[0]).toMatchObject({ key: 'Tab', text: '\t' })
+    for (const name of ['escape', 'arrowdown', 'arrowup']) {
+      // No invented character: these keys produce none, and a `text` would be typed instead.
+      expect(keyEvents(name)[0]).not.toHaveProperty('text')
+    }
+    for (const name of Object.keys(PRESS_KEYS)) {
+      const [down, up] = keyEvents(name)
+      // The release is the press with one field changed, so it lands on what the page saw.
+      expect(up).toEqual({ ...down, type: 'keyUp' })
+      expect(down!.nativeVirtualKeyCode).toBe(down!.windowsVirtualKeyCode)
+    }
   })
 
   it('covers the five keys a field is driven with', () => {

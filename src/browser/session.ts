@@ -242,11 +242,19 @@ export class BrowserSession implements BrowserPort {
 
   /**
    * Whether the observed page still matches the decision.
-   * Click and select compare the target's own guard, which is cheap and scoped to
-   * the control; everything else compares the full semantic marker.
+   * The actions aimed at one element — click, select and press_key — compare the target's own
+   * guard, which is cheap and scoped to the control: it asks whether the element the action was
+   * aimed at is still that element, in that state, instead of whether the whole page is unchanged.
+   * The distinction is the point for a key: the pages that need one are the ones that keep
+   * repainting (an autocomplete list redrawn while it is being typed into), which is exactly
+   * where a whole-page marker would throw away a press that was still valid — on 携程 the marker
+   * moved on nearly every step. Everything else compares the full semantic marker.
    */
   async fresh(page: PageState, action?: SnapshotAction): Promise<boolean> {
-    if (action && (action.kind === 'click' || action.kind === 'select')) {
+    if (
+      action &&
+      (action.kind === 'click' || action.kind === 'select' || action.kind === 'press_key')
+    ) {
       const node = action.node
       if (typeof node !== 'number') return false
       const current = await this.evaluate<unknown[] | null>(

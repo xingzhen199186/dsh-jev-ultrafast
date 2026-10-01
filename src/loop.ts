@@ -19,7 +19,9 @@
  *  - a decision that names an element this observation does not have is not the run's
  *    failure: the page is observed again and the model is asked again, with one plain
  *    sentence saying why, and only a run of them stops the run;
- *  - three consecutive steps that left the page unchanged stop the run.
+ *  - three consecutive steps that left the page unchanged stop the run, and a run of steps on
+ *    one and the same target that only ever brings back page states the run has already shown
+ *    stops it as well, saying which action it was stuck on instead of burning the budget.
  */
 import type { ActionSpace, ElementEntry } from './decision/action-space'
 import { actionSpace } from './decision/action-space'
@@ -154,6 +156,25 @@ const REAL_DEPS: TaskDeps = {
  */
 const MAX_LOST_TARGETS = 2
 
+/**
+ * How many steps in a row may act on one and the same target while showing the run nothing it
+ * has not already seen, before the run stops and names the action it was stuck on.
+ *
+ * The rule below counts steps that changed nothing at all, which is enough for a page that
+ * simply sits still. The loop that actually burns a budget is busier than that: it clicks the
+ * same box again and again, the click opens and closes the same layer, and the page is a
+ * different state on almost every step. What gives it away is not that a step changed nothing
+ * but that the run keeps coming back to states it has already shown — the page cycles through a
+ * handful of states and never produces a new one. Six is that many because the run this rule was
+ * written for cycled through six such states, so the second time round the cycle is counted;
+ * the window is deliberately the length of a full round, and every step in it has to be a
+ * replay, so an ordinary run that keeps producing new pages (paging, scrolling through results)
+ * never reaches it. The target is what has to stay the same — the model alternating a click and
+ * a type on one input is one stuck loop, not two actions — and the sentence names the operation
+ * of the step that stopped the run.
+ */
+const MAX_REPEATED_STEPS = 6
+
 export interface TaskResult {
   goal: string
   status: RunStatus
@@ -219,11 +240,21 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let hint = ''
   // Consecutive decisions that named an element their own observation did not have.
   let lostTargets = 0
+  // Every page state the run has shown so far, and the last few steps with the target each one
+  // acted on and whether its state was a replay of an earlier one. Together these are what tells
+  // a page that keeps producing something new apart from one that is going round in circles.
+  const seenStates = new Set<string>()
+  const recentSteps: Array<{ replayed: boolean; target: string | null }> = []
+  // The action the run stopped on because it kept repeating it, when it stopped that way. It
+  // rides along into the run's trace, so the file explains the stop without the conversation.
+  let stuckOn: { operation: string; target: string | null; action: string; times: number } | null = null
 
   try {
     session = await deps.open(options.startUrl, options.browser)
     page = await session.observe({ screenshot: screenshots })
     emit({ type: 'observed', step: 0, url: page.url, elements: page.actions.length })
+    // The page the run started on is a state it has now shown, like every state after a step.
+    seenStates.add(page.fingerprint)
     // The starting frame: without it a replay begins at the first action's aftermath.
     artifacts?.frame(page.screenshot, 0)
     // Said before anything is decided, so something watching the run knows where its frames
@@ -436,6 +467,35 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         pageChanged: record.page_changed === true,
       })
 
+      // ---- is the run stuck on one action? ----
+      // The rule after this one counts steps that changed nothing at all, which is enough for a
+      // page that simply sits still. The loop that spends a whole budget is busier than that: the
+      // click reopens the same layer and the page is a different state on nearly every step, so
+      // no three steps in a row are untouched and that rule never fires. What such a page cannot
+      // hide is that it keeps coming back to states it has already shown — the state is judged
+      // against everything the run has shown so far, not against the step before it.
+      const replayed = seenStates.has(page.fingerprint)
+      seenStates.add(page.fingerprint)
+      recentSteps.push({ replayed, target: record.target })
+      if (recentSteps.length > MAX_REPEATED_STEPS) recentSteps.shift()
+      if (
+        recentSteps.length === MAX_REPEATED_STEPS &&
+        recentSteps.every((step) => step.replayed && step.target === recentSteps[0]!.target)
+      ) {
+        status = 'blocked'
+        stuckOn = {
+          operation: record.operation,
+          target: record.target,
+          action: record.action,
+          times: MAX_REPEATED_STEPS,
+        }
+        const what = `${record.operation}${record.target ? ` 目标 ${record.target}` : ''}「${record.action}」`
+        reason =
+          `同一个动作连着做了 ${MAX_REPEATED_STEPS} 次、页面只是在几个老样子之间打转，先停下——` +
+          `它卡在这个动作上了：${what}`
+        break
+      }
+
       const tail = history.slice(-3)
       if (tail.length === 3 && tail.every((entry) => entry.page_changed === false && entry.kind !== 'wait')) {
         status = 'blocked'
@@ -473,6 +533,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     steps: history.length,
     decisions: decisions.length,
     elapsed_ms: elapsedMs(),
+    // Only present when that is how it ended: what it was repeating, and how often.
+    ...(stuckOn ? { stuck_on: stuckOn } : {}),
   })
   artifacts?.finish(elapsedMs())
   return {
