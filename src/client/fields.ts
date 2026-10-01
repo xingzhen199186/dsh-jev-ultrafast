@@ -273,8 +273,8 @@ export const FIELDS: readonly FieldSpec[] = [
  *
  * These two are where a reader comes to paste a key or switch a supplier, and they sit
  * well above the page's own button at the bottom; saving them in place is what keeps that
- * trip short. 浏览器 / 任务 keep using the bottom button, which still writes everything —
- * so nothing that worked before stopped working.
+ * trip short. 浏览器 / 任务 keep using the bottom button, which writes the whole page —
+ * every name it is showing — so nothing that worked before stopped working.
  */
 export const SELF_SAVING_BLOCKS: readonly FieldGroupId[] = ['decision', 'text']
 
@@ -290,6 +290,22 @@ export const fieldsOfBlock = (id: FieldGroupId): readonly FieldSpec[] =>
   FIELDS.filter((field) => field.group === id || (field.group === 'advanced' && field.section === id))
 
 /**
+ * How many changes one save over exactly these names would write: a value per field key,
+ * plus a value per credential name it is showing.
+ *
+ * Both counts on the page are this rule over different sets — the whole page, and one
+ * block — so they cannot end up telling two stories about the same draft. That is what the
+ * bottom count and a block's own count were doing before: a draft under a name the page had
+ * stopped showing was counted by the page and not by any block.
+ */
+export const pendingChanges = (
+  fieldKeys: readonly string[],
+  drafts: Readonly<Record<string, string>>,
+  shown: readonly string[],
+): number =>
+  fieldKeys.length + shown.filter((name) => (drafts[name] ?? '').trim().length > 0).length
+
+/**
  * Whether one save may write the credential called `name`.
  *
  * The same "exactly this set" rule as the fields, and for the same reason: 浏览器 and
@@ -298,7 +314,41 @@ export const fieldsOfBlock = (id: FieldGroupId): readonly FieldSpec[] =>
  * fields stayed scoped, but a key meant for 决策服务 or 文本模型 could be committed by a
  * press that had nothing to do with it, under a name the reader was not looking at.
  *
- * No scope at all is the page's own 保存 at the bottom, which still writes every name.
+ * No scope at all is the page's own 保存 at the bottom, and it writes the names the page
+ * is *showing* — `shown` — rather than every name a value happens to be sitting under. A
+ * draft left behind by a supplier the reader then switched away from has no box on screen
+ * any more, so nothing on the page can confirm it; writing it anyway is how one key came to
+ * be stored under both doors (2026-09-29), and how the wrong one came back (2026-10-02).
  */
-export const saveOwnsKey = (scope: FieldGroupId | undefined, ownKey: string | undefined, name: string): boolean =>
-  scope === undefined || (ownKey !== undefined && ownKey === name)
+export const saveOwnsKey = (
+  scope: FieldGroupId | undefined,
+  ownKey: string | undefined,
+  name: string,
+  shown: readonly string[],
+): boolean => (scope === undefined ? shown.includes(name) : ownKey !== undefined && ownKey === name)
+
+/**
+ * The pasted values a save is leaving where they are: the non-empty drafts whose name the
+ * page is not showing, in a stable order so the sentence below reads the same twice.
+ */
+export const leftoverKeyNames = (
+  drafts: Readonly<Record<string, string>>,
+  shown: readonly string[],
+): string[] =>
+  Object.keys(drafts)
+    .filter((name) => (drafts[name] ?? '').trim().length > 0 && !shown.includes(name))
+    .sort()
+
+/**
+ * What to say about them, in one sentence: why they were not saved, and what would save
+ * them. Names only — a value never appears here, or anywhere else the page prints.
+ */
+export const leftoverKeysNotice = (names: readonly string[]): string => {
+  if (names.length === 0) return ''
+  const one = names.length === 1
+  return (
+    `另有${one ? '一处' : ` ${names.length} 处`}旧改动（${names.join('、')}）没有保存，` +
+    `因为${one ? '它' : '它们'}不是页面上现在显示的密钥名；` +
+    `要保存${one ? '它' : '它们'}，请把对应那一块的供应商（或密钥名）切回原来那个。`
+  )
+}

@@ -2,7 +2,17 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
 import { BROWSER_CONNECTIONS, BROWSER_KINDS, BROWSER_LABELS } from '../src/browser/launch'
-import { FIELDS, FIELD_GROUPS, KEY_BLOCKS, SELF_SAVING_BLOCKS, fieldsOfBlock, saveOwnsKey } from '../src/client/fields'
+import {
+  FIELDS,
+  FIELD_GROUPS,
+  KEY_BLOCKS,
+  SELF_SAVING_BLOCKS,
+  fieldsOfBlock,
+  leftoverKeyNames,
+  leftoverKeysNotice,
+  pendingChanges,
+  saveOwnsKey,
+} from '../src/client/fields'
 import { INSPECTOR_URL } from '../src/command'
 import { DECISION_PROVIDER_IDS } from '../src/decision/providers'
 import { INSPECTOR_PATH, ROUTE, inspectorUrl } from '../src/protocol'
@@ -209,15 +219,79 @@ describe('settings page fields', () => {
     // 启动并连接 / 连接你的浏览器 committed every value box on the page — a key meant for 决策服务
     // or 文本模型 could be stored, under a name the reader was not looking at, by a press that
     // had nothing to do with it. A block with no value box owns no credential at all.
-    expect(saveOwnsKey(undefined, undefined, 'OPENROUTER_API_KEY')).toBe(true) // the page's own 保存
-    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY')).toBe(true)
-    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'TYPESAFE_API_KEY')).toBe(false)
-    expect(saveOwnsKey('text', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY')).toBe(false)
+    // The page's own 保存 owns the names it is showing, and no other.
+    expect(saveOwnsKey(undefined, undefined, 'OPENROUTER_API_KEY', ['OPENROUTER_API_KEY'])).toBe(true)
+    expect(saveOwnsKey(undefined, undefined, 'TYPESAFE_API_KEY', ['OPENROUTER_API_KEY'])).toBe(false)
+    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY', [])).toBe(true)
+    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'TYPESAFE_API_KEY', [])).toBe(false)
+    expect(saveOwnsKey('text', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY', [])).toBe(false)
     for (const id of ['browser', 'run'] as const) {
       expect(KEY_BLOCKS, id).not.toContain(id)
-      expect(saveOwnsKey(id, undefined, 'OPENROUTER_API_KEY'), id).toBe(false)
-      expect(saveOwnsKey(id, undefined, 'DEEPSEEK_API_KEY'), id).toBe(false)
+      expect(saveOwnsKey(id, undefined, 'OPENROUTER_API_KEY', []), id).toBe(false)
+      expect(saveOwnsKey(id, undefined, 'DEEPSEEK_API_KEY', []), id).toBe(false)
     }
+  })
+})
+
+/**
+ * 2026-10-02: switching the decision supplier from TypeSafe to OpenRouter leaves the value
+ * that was pasted under TYPESAFE_API_KEY sitting in the page's drafts while the box on screen
+ * now shows OPENROUTER_API_KEY. The button at the bottom wrote every non-empty draft, so that
+ * value landed under both names (2026-09-29, both cells holding the same 35 characters) and
+ * the wrong one came back — while the page said 「有 1 处改动还没保存」 under a 决策服务 block
+ * reading 「这一块没有改动」. These checks pin both halves of the repair: the page's own 保存
+ * writes the names it is showing, and says which names it left where they were.
+ */
+describe('the page’s own 保存', () => {
+  it('writes the names it is showing, and leaves a draft whose box has gone where it is', () => {
+    const shown = ['OPENROUTER_API_KEY']
+    const drafts = { TYPESAFE_API_KEY: 'a-value-pasted-under-the-old-supplier', OPENROUTER_API_KEY: '' }
+    expect(saveOwnsKey(undefined, undefined, 'OPENROUTER_API_KEY', shown)).toBe(true)
+    expect(saveOwnsKey(undefined, undefined, 'TYPESAFE_API_KEY', shown)).toBe(false)
+    expect(leftoverKeyNames(drafts, shown)).toEqual(['TYPESAFE_API_KEY'])
+  })
+
+  it('says which names it skipped, and never a value', () => {
+    expect(leftoverKeysNotice(['TYPESAFE_API_KEY'])).toBe(
+      '另有一处旧改动（TYPESAFE_API_KEY）没有保存，因为它不是页面上现在显示的密钥名；' +
+        '要保存它，请把对应那一块的供应商（或密钥名）切回原来那个。',
+    )
+    // Two of them, and it is still one sentence: the count and both names are in it.
+    expect(leftoverKeysNotice(['TYPESAFE_API_KEY', 'DEEPSEEK_API_KEY'])).toBe(
+      '另有 2 处旧改动（TYPESAFE_API_KEY、DEEPSEEK_API_KEY）没有保存，因为它们不是页面上现在显示的密钥名；' +
+        '要保存它们，请把对应那一块的供应商（或密钥名）切回原来那个。',
+    )
+    // A name is all that is ever printed here.
+    expect(leftoverKeysNotice(['TYPESAFE_API_KEY'])).not.toContain('a-value-pasted')
+  })
+
+  it('leaves everything as it was when nothing was left behind', () => {
+    // The old write order and the old sentence, and not one character of extra notice.
+    const drafts = { OPENROUTER_API_KEY: 'a-value' }
+    expect(saveOwnsKey(undefined, undefined, 'OPENROUTER_API_KEY', ['OPENROUTER_API_KEY'])).toBe(true)
+    expect(leftoverKeyNames(drafts, ['OPENROUTER_API_KEY'])).toEqual([])
+    expect(leftoverKeysNotice([])).toBe('')
+  })
+
+  it('counts what the button will write, so the two counts cannot contradict each other', () => {
+    // The reported state: a leftover draft and nothing else. Both counts read 0 now; before,
+    // 决策服务 said 「这一块没有改动」 while the page bottom said 「有 1 处改动还没保存」.
+    const stale = { TYPESAFE_API_KEY: 'a-value', OPENROUTER_API_KEY: '' }
+    expect(pendingChanges([], stale, ['OPENROUTER_API_KEY'])).toBe(0) // the page's own count
+    expect(pendingChanges([], stale, [])).toBe(0) // a block with no box draws no name
+    // Paste into the box that is on screen and both of them say one thing is waiting.
+    const pasted = { ...stale, OPENROUTER_API_KEY: 'a-value' }
+    expect(pendingChanges([], pasted, ['OPENROUTER_API_KEY'])).toBe(1)
+  })
+
+  it('keeps every block’s own 保存 on its own scope, and wires the page button to the new one', () => {
+    // The pure rules above cannot see the wiring, and the wiring is the whole repair: the
+    // bottom button passes what the page is showing, and a block button still passes its own
+    // name alone — no third argument, so nothing about a block save changed.
+    const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+    expect(source).toMatch(/onClick: \(\) => void save\(undefined, undefined, shownKeyNames\)/)
+    expect(source).toMatch(/onClick: \(\) => void save\(group\.id, keyName\)/)
+    expect(source).toContain('leftoverKeysNotice(')
   })
 })
 

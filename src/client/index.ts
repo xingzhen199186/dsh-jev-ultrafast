@@ -59,6 +59,9 @@ import {
   KEY_BLOCKS,
   SELF_SAVING_BLOCKS,
   fieldsOfBlock,
+  leftoverKeyNames,
+  leftoverKeysNotice,
+  pendingChanges,
   saveOwnsKey,
   type FieldGroup,
   type FieldGroupId,
@@ -326,17 +329,19 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
    *
    * Given a block, only that block's own fields and its own credential are written —
    * `ownKey` is the name its value box stores under, and a block with no value box
-   * (浏览器 / 任务) owns no credential at all. Without a block, everything on the page is
-   * written, which is what the button at the bottom still does. A draft sitting in the
-   * other block therefore stays a draft until its own button is pressed, whichever
-   * button was pressed on this one.
+   * (浏览器 / 任务) owns no credential at all. Without a block, this is the page's own 保存,
+   * and it writes the names the page is showing (`shown`) and no others: a value left under
+   * a name whose box has gone — a supplier switched after a paste — is skipped, and the note
+   * at the end of the page says which names were skipped and how to get back to them. A draft
+   * sitting in the other block therefore stays a draft until its own button is pressed,
+   * whichever button was pressed on this one.
    *
    * The order is not cosmetic. A credential name typed into a field only becomes
    * storable once the config that mentions it is saved — the host checks the name
    * against the names in play — so the fields go first and the keys follow.
    */
   const save = useCallback(
-    async (scope?: FieldGroupId, ownKey?: string): Promise<boolean> => {
+    async (scope?: FieldGroupId, ownKey?: string, shown: readonly string[] = []): Promise<boolean> => {
       if (!form) return false
       setSaving(true)
       setError('')
@@ -345,6 +350,10 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       /** The fields this save owns: all of them, or one block's (its overrides included). */
       const owned = scope === undefined ? undefined : new Set(fieldsOfBlock(scope).map((field) => field.key))
       const where = scope === undefined ? '' : `「${blockTitle(scope)}」这一块`
+      // What this save is leaving where it is, said out loud at the end. Only the page's own
+      // 保存 can leave anything: a block save writes one name and never looks at the rest.
+      const leftover = scope === undefined ? leftoverKeyNames(keyDrafts, shown) : []
+      const leftoverNote = leftoverKeysNotice(leftover)
       try {
         const changed = Object.entries(draft).filter(([key]) => owned === undefined || owned.has(key))
         for (const [key, raw] of changed) {
@@ -364,8 +373,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         const stored: string[] = []
         for (const [name, value] of Object.entries(keyDrafts)) {
           if (value.trim().length === 0) continue
-          // A block owns one name: its own. Any other pasted value is left where it is.
-          if (!saveOwnsKey(scope, ownKey, name)) continue
+          // A block owns one name: its own. The page owns the ones it is showing.
+          if (!saveOwnsKey(scope, ownKey, name, shown)) continue
           const after = await ask<{ keys: StorableKey[] }>('/credential', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -388,9 +397,9 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
           return next
         })
         setNotice(
-          done.length > 0
+          (done.length > 0
             ? `${where}已保存：${done.join('，')}。下一次任务立刻就用新值，不用重启。`
-            : `${where}没有需要保存的改动。`,
+            : `${where}没有需要保存的改动。`) + leftoverNote,
         )
         // A save can change which key names are in play, so the key rows are re-read.
         // A failed refresh is not a failed save, and must not be reported as one.
@@ -398,7 +407,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         return true
       } catch (failure) {
         setError(message(failure))
-        if (done.length > 0) setNotice(`${where}这一部分已经保存了：${done.join('，')}。`)
+        if (done.length > 0) setNotice(`${where}这一部分已经保存了：${done.join('，')}。${leftoverNote}`)
         return false
       } finally {
         setSaving(false)
@@ -584,21 +593,39 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   /** True while the text model is a route DSH serves, which owns its own address and key. */
   const textIsDsh = resolveTextRoute({ provider: filled('textProvider') }).kind === 'dsh'
   /**
+   * The name a block's value box stores under, or '' where the block draws no box.
+   *
+   * 文本模型 on a DSH route is the only such case: DSH holds that credential itself, so the
+   * block says so instead of drawing a box. One definition, used both to draw the box and to
+   * decide what the page's own 保存 writes, so the two can never drift apart.
+   */
+  const boxNameOf = (id: FieldGroupId): string => {
+    if (!KEY_BLOCKS.includes(id)) return ''
+    return id === 'text' && textIsDsh ? '' : id === 'decision' ? decisionName : textName
+  }
+  /**
+   * The names the page is showing at this moment: the only ones its own 保存 writes.
+   *
+   * Deduplicated because the two blocks can point at one name (both doors on OpenRouter).
+   */
+  const shownKeyNames = [...new Set(KEY_BLOCKS.map(boxNameOf).filter((name) => name.length > 0))]
+  /**
    * What the store says about a name. A name that is not in the report is one the
    * reader has just typed: nothing is known about it yet, and the honest default is
    * "not stored, but writable" — the save order above is what makes that true.
    */
   const keyState = (name: string): KeyState =>
     status?.keys.find((entry) => entry.name === name)?.state ?? { configured: false, writable: true }
-  const pending =
-    Object.keys(draft).length + Object.values(keyDrafts).filter((entry) => entry.trim().length > 0).length
+  const pending = pendingChanges(Object.keys(draft), keyDrafts, shownKeyNames)
   /** The same count, for one block: its own fields plus the value pasted into its own box. */
   const pendingOf = (id: FieldGroupId): number => {
     const owned = new Set(fieldsOfBlock(id).map((field) => field.key))
-    const fields = Object.keys(draft).filter((key) => owned.has(key)).length
-    const name = id === 'decision' ? decisionName : id === 'text' ? textName : ''
-    const pasted = name.length > 0 && (keyDrafts[name] ?? '').trim().length > 0 ? 1 : 0
-    return fields + pasted
+    const name = boxNameOf(id)
+    return pendingChanges(
+      Object.keys(draft).filter((key) => owned.has(key)),
+      keyDrafts,
+      name.length > 0 ? [name] : [],
+    )
   }
   const onDraft = (name: string, next: string): void =>
     setKeyDrafts((current) => ({ ...current, [name]: next }))
@@ -1069,13 +1096,12 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
 
   const blocks = visibleGroups.map((group) => {
     const fields = FIELDS.filter((field) => field.group === group.id)
-    // Which name a pasted value would go under. Only the two key-taking blocks show a
-    // value box; the rest of the page has no credential of its own.
-    const name = group.id === 'decision' ? decisionName : group.id === 'text' ? textName : ''
     // A built-in door has no credential of ours at all: DSH holds it, so the row says so
     // rather than drawing a paste box nothing would ever read.
     const dshKeys = group.id === 'text' && textIsDsh
-    const keyName = KEY_BLOCKS.includes(group.id) && !dshKeys ? name : ''
+    // Which name a pasted value would go under. Only the two key-taking blocks show a value
+    // box, and the name is the same one the page's own 保存 counts as shown: it is one box.
+    const keyName = boxNameOf(group.id)
     return createElement(
       'div',
       { key: group.id, style: S.block },
@@ -1378,7 +1404,11 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
           { style: S.actions },
           createElement(
             'button',
-            { type: 'button', onClick: () => void save(), disabled: saving },
+            {
+              type: 'button',
+              onClick: () => void save(undefined, undefined, shownKeyNames),
+              disabled: saving,
+            },
             saving ? '正在保存…' : '保存全部改动',
           ),
           createElement(
