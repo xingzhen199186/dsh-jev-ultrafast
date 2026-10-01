@@ -26,7 +26,7 @@ function harness(stdout = '') {
 }
 
 describe('closing the reader’s browser', () => {
-  it('asks politely first, and reads the store to decide whether it worked', async () => {
+  it('ends the browser’s windows outright, then reads the store to see whether it worked', async () => {
     const { calls, run } = harness('1234\r\n5678\r\n')
     const report = await closeBrowser('edge', {
       profileDir: 'C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data',
@@ -36,36 +36,31 @@ describe('closing the reader’s browser', () => {
       locked: async () => false,
     })
 
-    expect(report).toEqual({ ok: true, asked: 2, forced: 0 })
+    expect(report).toEqual({ ok: true, asked: 0, forced: 2 })
     const list = calls.find((call) => call.file === 'powershell.exe')
     expect(list?.env?.JEV_PROCESS).toBe('msedge.exe')
     expect(list?.env?.JEV_OWN).toBe('C:\\Users\\me\\.dsh\\jev-ultrafast')
     const kills = calls.filter((call) => call.file === 'taskkill')
     expect(kills).toHaveLength(1)
-    expect(kills[0].args).toEqual(['/PID', '1234', '/PID', '5678'])
+    expect(kills[0].args).toEqual(['/PID', '1234', '/PID', '5678', '/F'])
   })
 
-  it('forces what is left when the polite pass did not release the store', async () => {
+  it('has one pass only: asking politely is what would drop the session cookies', async () => {
     const { calls, run } = harness('4321\r\n')
-    let checks = 0
     const report = await closeBrowser('edge', {
       profileDir: 'C:\\p',
       ownRoot: 'C:\\own',
       platform: 'win32',
       waitMs: 0,
       run,
-      locked: async () => {
-        checks += 1
-        return checks <= 1
-      },
+      locked: async () => true,
     })
 
-    expect(report.ok).toBe(true)
+    expect(report.ok).toBe(false)
     expect(report.forced).toBe(1)
     const kills = calls.filter((call) => call.file === 'taskkill')
-    expect(kills).toHaveLength(2)
-    expect(kills[0].args).not.toContain('/F')
-    expect(kills[1].args).toContain('/F')
+    expect(kills).toHaveLength(1)
+    expect(kills[0].args).toContain('/F')
   })
 
   it('says so plainly when the browser will not let go', async () => {

@@ -22,7 +22,7 @@
  * is the reader's own, copies the logins over, and puts the browser back where it was.
  */
 import { existsSync } from 'node:fs'
-import { copyFile, cp, mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises'
+import { copyFile, cp, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ProfileAdoptReport } from '../protocol'
@@ -175,7 +175,36 @@ export async function adoptProfile(
       note: `在 ${from} 里没有找到可搬的登录数据。`,
     }
   }
+  await keepSessionCookies(to)
   return { ok: true, browser: options.label, from, to, files: copied.files, bytes: copied.bytes }
+}
+
+/**
+ * Make the copied profile keep the session cookies it now holds.
+ *
+ * Most logins are ordinary cookies with an expiry date and survive being copied unharmed. Some
+ * are session cookies — GitHub's is one — which a browser keeps only for the run that created
+ * them unless it is set to reopen the last session. That setting lives in the profile's own
+ * preferences, and the profile being copied from may well have it off. Without this step the
+ * copy is a profile that looks complete and is signed out of every site that works that way.
+ */
+async function keepSessionCookies(profileDir: string): Promise<void> {
+  const file = join(profileDir, 'Default', 'Preferences')
+  let preferences: Record<string, unknown> = {}
+  try {
+    preferences = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    // Preferences that are missing or unreadable are not a reason to abandon the logins: this
+    // only adds one setting, and everything else in the copy is unaffected.
+  }
+  const session =
+    typeof preferences.session === 'object' && preferences.session !== null
+      ? (preferences.session as Record<string, unknown>)
+      : {}
+  session.restore_on_startup = 1
+  preferences.session = session
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify(preferences))
 }
 
 /**

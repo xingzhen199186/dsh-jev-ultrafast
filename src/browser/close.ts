@@ -8,11 +8,14 @@
  * reader's windows naming none at all. What does separate the two is exactly that difference,
  * so the rule runs the other way — every window process of that browser, except this plugin's.
  *
- * The polite way comes first. On Windows, `taskkill /PID` without `/F` asks the window to
- * close, which is what lets Edge save its session and offer the tabs back afterwards; a forced
- * kill would not. A browser that keeps a background process alive anyway — Edge's startup
- * boost does exactly that — still holds the cookie store, so what is left gets a second and
- * forceful pass.
+ * It is ended outright rather than asked to close, and that is the uncomfortable part of this
+ * file. Asking politely — `taskkill /PID` without `/F` — lets the browser save its session,
+ * which is what offers the tabs back afterwards. Saving that session is also exactly what
+ * throws away every session cookie it holds, and a login kept in one of those is gone by the
+ * time the copy is made. That failure is silent: the copied profile looks complete and signs
+ * the reader out of every site that works that way, GitHub among them. Keeping the tabs would
+ * mean giving up the logins, and the logins are the whole reason this exists. The browser comes
+ * back with the browser's own "restore pages" prompt instead.
  *
  * Whether this worked is not "did something get killed" but "can the store be read now". The
  * call reports the store, and the caller copies only when it says yes.
@@ -126,20 +129,14 @@ export async function closeBrowser(kind: BrowserKind, options: CloseOptions): Pr
     }
   }
 
-  const first = await list()
-  await kill(first, false)
-  if (await waitForUnlocked(store, locked, waitMs)) return { ok: true, asked: first.length, forced: 0 }
-
-  const left = await list()
-  await kill(left, true)
+  const windows = await list()
+  await kill(windows, true)
   const ok = await waitForUnlocked(store, locked, waitMs)
   return {
     ok,
-    asked: first.length,
-    forced: left.length,
-    note: ok
-      ? undefined
-      : `没能让 ${name} 退出：找到 ${first.length + left.length} 个窗口进程，登录数据仍被占着。`,
+    asked: 0,
+    forced: windows.length,
+    note: ok ? undefined : `没能让 ${name} 退出：找到 ${windows.length} 个窗口进程，登录数据仍被占着。`,
   }
 }
 

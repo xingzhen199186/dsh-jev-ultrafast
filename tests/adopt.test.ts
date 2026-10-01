@@ -6,7 +6,7 @@
  * looks complete and reads as logged out — so it is checked by name rather than by size.
  */
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -111,6 +111,13 @@ describe('copying the logins into the profile this plugin drives', () => {
     expect(existsSync(join(to, 'Default', 'Network', 'Cookies'))).toBe(true)
     expect(existsSync(join(to, 'Default', 'Local Storage', 'leveldb', 'site.ldb'))).toBe(true)
     expect(existsSync(join(to, 'Default', 'Cache'))).toBe(false)
+
+    // The copy has to reopen the last session, or every session cookie it carries — and with
+    // them the logins of every site that authenticates that way — is discarded on first start.
+    const preferences = JSON.parse(await readFile(join(to, 'Default', 'Preferences'), 'utf8')) as {
+      session?: { restore_on_startup?: number }
+    }
+    expect(preferences.session?.restore_on_startup).toBe(1)
   })
 
   it('replaces the previous copy instead of piling a second one on top', async () => {
