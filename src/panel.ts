@@ -616,7 +616,15 @@ async function testDecision(ctx: Context, config: ConfigShape): Promise<Decision
     { id: 'e2', kind: 'fill', node: 2, label: '示例输入框：备注', value: '' },
   ])
   const decision = await choose(
-    { endpoint: route.endpoint, model: route.model, apiKey, wrapFallback: route.wrapFallback },
+    {
+      endpoint: route.endpoint,
+      model: route.model,
+      apiKey,
+      wrapFallback: route.wrapFallback,
+      // This button is where a reader checks one door's key, so it is also where a refusal of it
+      // has to say which cell was read and what shape that door's key should have.
+      keyOrigin: { ref: route.keyRef, label: route.label, shape: route.keyShape },
+    },
     space,
     {
       goal: '在示例页面上点一下「确认」按钮。',

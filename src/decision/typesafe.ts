@@ -24,6 +24,7 @@ import type { SnapshotAction } from '../browser/session'
 import { requestSignal } from '../net'
 import { MAX_PAGE_TEXT, NEXT_ACTION, TARGET } from '../prompts'
 import type { ActionSpace } from './action-space'
+import type { DecisionKeyShape } from './providers'
 
 /** The decision service returned something we cannot safely act on. */
 export class InvalidDecision extends Error {
@@ -78,6 +79,24 @@ export interface DecisionContext {
   omittedElements?: number
 }
 
+/**
+ * Which credential a run's key was read from: its name, its door, and the shape that door's key
+ * is known to have.
+ *
+ * It exists so a refusal can say what was read instead of only what came back. A 401 whose whole
+ * text is the status code cannot be told apart from a wrong address or a wrong model name, and the
+ * reader is left with nothing to check; this is the smallest thing that changes that. A *value*
+ * never travels here — a name, a length and a short prefix are all it can carry.
+ */
+export interface KeyOrigin {
+  /** The credential name the value was read from. Never the value. */
+  ref: string
+  /** The door, as the settings page names it. */
+  label: string
+  /** The shape this door's key has, when it is known. */
+  shape?: DecisionKeyShape
+}
+
 /** Where decisions come from, and with whose credential. */
 export interface DecisionSource {
   /** Full URL of the decision endpoint, for example `https://api.typesafe.ai/v1/systemone`. */
@@ -87,6 +106,11 @@ export interface DecisionSource {
   /** Model the endpoint should route to, for example `jev-latest`. */
   model: string
   timeoutMs?: number
+  /**
+   * Which cell `apiKey` came from, when the caller knows. Absent is allowed — a caller with no
+   * credential to name gets the refusal as it was before this was carried.
+   */
+  keyOrigin?: KeyOrigin
   /**
    * Whether a rejected body may be retried once inside a `decisionsRequest`
    * envelope. OpenRouter's alpha route has been seen to want that envelope;
@@ -453,6 +477,7 @@ export async function choose(
     source.signal,
     source.wrapFallback ?? false,
     source.trace,
+    source.keyOrigin,
   )
   const decision = readDecision(payload, space, questionnaire)
   return {
@@ -482,6 +507,7 @@ async function postJson(
   signal?: AbortSignal,
   wrapFallback = false,
   trace?: TraceSink,
+  keyOrigin?: KeyOrigin,
 ): Promise<Record<string, any>> {
   const began = Date.now()
   let wrapped = false
@@ -530,10 +556,15 @@ async function postJson(
     }
     if (!response.ok) {
       const detail = flatDetail(raw, key)
+      // Only a 401 is taken as "this key was refused": it is the status the decision service uses
+      // for a credential it does not recognize, and the one an end-to-end run hit. Every other
+      // refusal keeps the plain sentence, so the added line stays a diagnosis rather than noise.
+      const keyNote = response.status === 401 && keyOrigin !== undefined ? `。${keyRefusal(keyOrigin, key)}` : ''
       throw new Error(
         `决策服务返回 HTTP ${response.status}，没有执行任何动作` +
           (detail ? `（服务端原话：${detail}）` : '') +
-          (wrapped ? '（已经试过带 decisionsRequest 包裹的写法）' : ''),
+          (wrapped ? '（已经试过带 decisionsRequest 包裹的写法）' : '') +
+          keyNote,
       )
     }
     return reply
@@ -556,6 +587,31 @@ function flatDetail(raw: string, key: string): string {
   const flat = raw.split(key).join('***').replace(/\s+/g, ' ').trim()
   if (flat === '') return ''
   return flat.length > 240 ? `${flat.slice(0, 240)}…` : flat
+}
+
+/**
+ * What a refused key can be told about itself: which cell the value was read from, what shape
+ * that value has, and the shape this door's key is known to have.
+ *
+ * A 401 that says `Missing Authentication header` and nothing else leaves the reader with
+ * nothing to check — which is how a wrong-shaped key sat in one cell through three separate
+ * runs. Naming the cell and the expected shape turns that into one comparison anyone can make
+ * without knowing anything about keys.
+ *
+ * Only two properties of the value are ever named: its length, and — when it is longer than the
+ * fragment shown — its first eight characters. Both are fragments by construction, so neither
+ * can rebuild a key, and the length guard is what keeps "at most eight characters" from becoming
+ * "the whole value" for a value short enough to fit in eight. The value itself stays out, here as
+ * everywhere else in this plugin.
+ */
+function keyRefusal(origin: KeyOrigin, key: string): string {
+  const shown = key.length > 8 ? key.slice(0, 8) : ''
+  const read = `读到的是 ${origin.ref}，长度 ${key.length}${shown === '' ? '' : `、以 ${shown} 开头`}`
+  const should =
+    origin.shape === undefined
+      ? ''
+      : `；${origin.label} 的钥匙应当是 ${origin.shape.length} 个字符、以 ${origin.shape.prefix} 开头`
+  return `${read}${should}——请到设置页「决策服务」那一行重贴。`
 }
 
 /** Copy the listed keys that are actually present. */

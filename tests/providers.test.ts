@@ -40,8 +40,17 @@ describe('decision providers', () => {
       endpoint: 'https://openrouter.ai/api/alpha/decisions',
       model: '~typesafe/jev-latest',
       keyRef: 'OPENROUTER_API_KEY',
+      keyShape: { length: 73, prefix: 'sk-or-v1-' },
       wrapFallback: true,
     })
+  })
+
+  it('claims a key shape only where one is known', () => {
+    // A shape is printed back to a reader as "the key here should look like this", so an
+    // unfounded one is worse than none. OpenRouter's is `sk-or-v1-` plus 64 hex characters;
+    // TypeSafe's has never been in hand on this machine and is therefore not claimed at all.
+    expect(resolveDecisionRoute({ provider: 'openrouter' }).keyShape).toEqual({ length: 73, prefix: 'sk-or-v1-' })
+    expect(resolveDecisionRoute({ provider: 'typesafe' }).keyShape).toBeUndefined()
   })
 
   it('lets a filled-in field win, trimmed', () => {

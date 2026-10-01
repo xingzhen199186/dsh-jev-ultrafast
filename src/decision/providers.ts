@@ -22,6 +22,19 @@
 /** The two doors. Add a member here and both the page and the host follow. */
 export type DecisionProvider = 'typesafe' | 'openrouter'
 
+/**
+ * The shape a door's key has, as far as it is known.
+ *
+ * Two facts only, and both are safe to put in front of a reader: how many characters the key
+ * has, and what it starts with. Together they are what tells "the other door's key ended up in
+ * this cell" apart from "this key was cut short when it was pasted" — and neither can rebuild
+ * a key. Nothing here is ever the value itself.
+ */
+export interface DecisionKeyShape {
+  length: number
+  prefix: string
+}
+
 export interface DecisionProviderSpec {
   id: DecisionProvider
   /** What the settings page calls this door. */
@@ -32,6 +45,11 @@ export interface DecisionProviderSpec {
   model: string
   /** The credential *name* expected to hold the key. Never a key. */
   keyRef: string
+  /**
+   * What this door's own key looks like, when that is known. Absent means "no shape is known
+   * for this door", and a refusal then says less rather than guessing.
+   */
+  keyShape?: DecisionKeyShape
   /** One line the page shows to explain the choice. */
   note: string
   /**
@@ -58,6 +76,10 @@ export const DECISION_PROVIDERS: readonly DecisionProviderSpec[] = [
     endpoint: 'https://openrouter.ai/api/alpha/decisions',
     model: '~typesafe/jev-latest',
     keyRef: 'OPENROUTER_API_KEY',
+    // `sk-or-v1-` plus 64 hex characters, so 73 in all. TypeSafe's own shape is deliberately left
+    // blank: no key of that door has ever been in hand here, and a guessed shape would be worse
+    // than none once it is printed back to a reader who is trying to check a key by eye.
+    keyShape: { length: 73, prefix: 'sk-or-v1-' },
     note: 'OpenRouter 的 alpha 通道，模型名前带一个波浪号。密钥是 OpenRouter 的，不是 TypeSafe 的。',
     wrapFallback: true,
   },
@@ -88,6 +110,8 @@ export interface DecisionRoute {
   endpoint: string
   model: string
   keyRef: string
+  /** The shape this door's key has, when it is known; a refusal names it when it is. */
+  keyShape?: DecisionKeyShape
   wrapFallback: boolean
 }
 
@@ -106,6 +130,7 @@ export function resolveDecisionRoute(overrides: DecisionOverrides = {}): Decisio
     endpoint: filled(overrides.endpoint) ?? spec.endpoint,
     model: filled(overrides.model) ?? spec.model,
     keyRef: filled(overrides.keyRef) ?? spec.keyRef,
+    keyShape: spec.keyShape,
     wrapFallback: spec.wrapFallback,
   }
 }

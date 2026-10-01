@@ -175,6 +175,9 @@ export async function prepareRun(
         model: decisionRoute.model,
         apiKey: await resolveKey(ctx, decisionRoute.keyRef, `决策服务（${decisionRoute.label}）`),
         wrapFallback: decisionRoute.wrapFallback,
+        // Which cell that key came from, so a refusal of it can name the cell and the shape the
+        // door expects there instead of leaving the reader with a status code.
+        keyOrigin: { ref: decisionRoute.keyRef, label: decisionRoute.label, shape: decisionRoute.keyShape },
       },
       text: textSource,
     },

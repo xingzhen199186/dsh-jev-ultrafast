@@ -480,6 +480,69 @@ describe('decision call', () => {
     expect(calls).toBe(1)
   })
 
+  /**
+   * The value this group is about: a 35-character key of the other door's shape sitting in the
+   * OpenRouter cell. Written down once so the assertions can name the fragment they allow.
+   */
+  const stray = `sk-3130b${'x'.repeat(27)}`
+  const origin = { ref: 'OPENROUTER_API_KEY', label: 'OpenRouter', shape: { length: 73, prefix: 'sk-or-v1-' } }
+
+  it('names the cell a refused key came from, and the shape that door expects', async () => {
+    vi.stubGlobal('fetch', async () => new Response('{"error":{"message":"Missing Authentication header"}}', { status: 401 }))
+
+    const error = await choose({ ...source, apiKey: stray, keyOrigin: origin }, space, context).catch(
+      (thrown: Error) => thrown,
+    )
+    const said = String(error)
+    expect(said).toContain('读到的是 OPENROUTER_API_KEY，长度 35、以 sk-3130b 开头')
+    expect(said).toContain('OpenRouter 的钥匙应当是 73 个字符、以 sk-or-v1- 开头')
+    expect(said).toContain('请到设置页「决策服务」那一行重贴')
+
+    // With no cell to name there is nothing to add, so the refusal stays exactly as it was.
+    const unnamed = await choose(source, space, context).catch((thrown: Error) => thrown)
+    expect(String(unnamed)).toMatch(/决策服务返回 HTTP 401/)
+    expect(String(unnamed)).not.toContain('读到的是')
+  })
+
+  it('shows a fragment of the key and never the whole value', async () => {
+    // The service echoes the value back, which is what a message about a key has to survive.
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(JSON.stringify({ error: { message: `Missing Authentication header for ${stray}` } }), {
+          status: 401,
+        }),
+    )
+
+    const said = String(
+      await choose({ ...source, apiKey: stray, keyOrigin: origin }, space, context).catch((thrown: Error) => thrown),
+    )
+    expect(said).toContain(stray.slice(0, 8))
+    expect(said).not.toContain(stray.slice(0, 9))
+    expect(said).not.toContain(stray)
+
+    // A value short enough to fit inside the fragment is not shown as one: a whole key is a whole
+    // key however short it is, so only its length comes back.
+    const short = String(
+      await choose({ ...source, apiKey: 'abc', keyOrigin: origin }, space, context).catch((thrown: Error) => thrown),
+    )
+    expect(short).toContain('长度 3')
+    expect(short).not.toContain('abc')
+  })
+
+  it('adds the key line to nothing but a refusal of the key itself', async () => {
+    vi.stubGlobal('fetch', async () => new Response('bad shape', { status: 422 }))
+    // Same source, same key, same cell, and the status is what decides: a body the service did
+    // not like is not a verdict on the credential, and saying it was would send the reader to
+    // re-paste a key that is already right.
+    const said = String(
+      await choose({ ...source, apiKey: stray, keyOrigin: origin }, space, context).catch((thrown: Error) => thrown),
+    )
+    expect(said).toMatch(/决策服务返回 HTTP 422/)
+    expect(said).not.toContain('读到的是')
+    expect(said).not.toContain('sk-3130b')
+  })
+
   it('waits and tries again only for the statuses that mean "later"', async () => {
     let calls = 0
     vi.stubGlobal('fetch', async () => {
