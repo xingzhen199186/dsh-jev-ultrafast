@@ -17,8 +17,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { discoverBrowser } from './browser/discover'
+import { BROWSER_LABELS, DailyBrowserError, discoverBrowser } from './browser/discover'
 import { launchBrowser } from './browser/launch'
+import { probeDailyLogins } from './browser/login-probe'
 import { BrowserSession } from './browser/session'
 import type { Config as ConfigShape } from './config'
 import { changeKey, describeKey, resolveKey, storableNames } from './credentials'
@@ -39,6 +40,7 @@ import type {
   BrowserReport,
   DecisionTestReport,
   LaunchReport,
+  LoginProbeReport,
   StorableKey,
   StatusReport,
   TextModelReport,
@@ -220,6 +222,16 @@ async function handle(
       send(res, 200, report)
       return
     }
+    if (path === '/login-probe') {
+      // Read-only, and it stays that way: it counts what the reader's own browser is holding and
+      // opens nothing. It is a GET because it changes nothing on either side.
+      if (req.method !== 'GET') {
+        send(res, 405, { error: '这个接口只接受 GET。' })
+        return
+      }
+      send(res, 200, await loginProbe(config))
+      return
+    }
     if (path === '/text-models') {
       // The page sends what its own boxes currently hold, which may not be saved yet: asking the
       // saved address just after someone typed a new one would read as a bug. Anything missing
@@ -382,6 +394,43 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
     }
   } catch (error) {
     return { ok: false, connection, message: describe(error) }
+  }
+}
+
+/**
+ * Count the logins the reader's own browser could bring along, and touch nothing else.
+ *
+ * A read, not a copy: the browser is asked how many cookies it holds and which domains they belong
+ * to, and no cookie value ever leaves it — the answer is four counts and a list of domain names, so
+ * there is nothing in it worth writing down, and nothing here writes anything down. No tab is
+ * opened either: see src/browser/login-probe.ts for why that is a property of the route rather than
+ * a promise.
+ *
+ * The four ways the reader's own browser cannot be reached come back as an answer rather than as an
+ * error, because each one is a sentence about something to do in that browser; the page shows it
+ * under the button that asked.
+ */
+async function loginProbe(config: ConfigShape): Promise<LoginProbeReport> {
+  const kind = config.browserKind.get()
+  const label = BROWSER_LABELS[kind]
+  try {
+    // 数据目录 is honoured here for the same reason the daily route honours it: a browser started
+    // with `--user-data-dir` keeps its profile — and its `DevToolsActivePort` — somewhere else.
+    const summary = await probeDailyLogins({ kind, profileDir: config.userDataDir.get() || undefined })
+    return { ok: true, label, ...summary }
+  } catch (error) {
+    if (error instanceof DailyBrowserError) {
+      return {
+        ok: false,
+        label,
+        total: 0,
+        sites: 0,
+        sessionCookies: 0,
+        bySite: [],
+        message: error.message,
+      }
+    }
+    throw error
   }
 }
 

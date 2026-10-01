@@ -389,8 +389,13 @@ export async function remoteDebuggingEnabled(dir: string): Promise<boolean | nul
   }
 }
 
-/** The one sentence that sends the reader to the place this failure is fixed in. */
-function dailyFailure(kind: BrowserKind, problem: DailyBrowserProblem): DailyBrowserError {
+/**
+ * The one sentence that sends the reader to the place this failure is fixed in.
+ *
+ * Exported because the login probe hits the same four walls and must say the same four things:
+ * one place for the wording, so a sentence fixed here is fixed on both routes.
+ */
+export function dailyFailure(kind: BrowserKind, problem: DailyBrowserProblem): DailyBrowserError {
   const label = BROWSER_LABELS[kind]
   const page = inspectPageUrl(kind)
   const messages: Record<DailyBrowserProblem, string> = {
@@ -409,7 +414,7 @@ function dailyFailure(kind: BrowserKind, problem: DailyBrowserProblem): DailyBro
 }
 
 /** Whether something is listening on a loopback port right now. */
-async function isPortListening(port: number, timeoutMs = 500): Promise<boolean> {
+export async function isPortListening(port: number, timeoutMs = 500): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = createConnection({ host: '127.0.0.1', port })
     socket.setTimeout(timeoutMs)

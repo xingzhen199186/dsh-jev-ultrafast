@@ -170,6 +170,37 @@ export interface StatusReport {
   keys: StorableKey[]
 }
 
+/** One site in the login probe's answer: a domain name and how many cookies sit under it. */
+export interface LoginProbeSite {
+  domain: string
+  count: number
+}
+
+/**
+ * What the browser block's 「看看能带走多少登录」 button found in the reader's own browser.
+ *
+ * Counts and domain names only. The cookies themselves stay in that browser — this is a survey of
+ * how much login is there, not a copy of it — and the answer exists only in this one response: the
+ * probe writes no trace, no log and no file. A failure is a normal answer rather than an error
+ * response, because each of the four ways the daily route cannot be reached is something the reader
+ * fixes in their own browser; `message` then carries that sentence and every count is zero.
+ */
+export interface LoginProbeReport {
+  ok: boolean
+  /** Which browser was probed, so the page's sentence can name it. */
+  label: string
+  /** How many cookies the browser handed over. */
+  total: number
+  /** How many distinct domains those cookies span. */
+  sites: number
+  /** How many are session cookies, which a closed browser may drop. */
+  sessionCookies: number
+  /** One entry per domain, most cookies first. */
+  bySite: LoginProbeSite[]
+  /** Why nothing could be read, in the same four sentences the daily route uses. */
+  message?: string
+}
+
 /** One real decision round trip, for the page's connectivity button. */
 export interface DecisionTestReport {
   ok: boolean

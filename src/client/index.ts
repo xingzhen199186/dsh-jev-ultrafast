@@ -33,6 +33,7 @@ import type {
   DecisionTestReport,
   KeyState,
   LaunchReport,
+  LoginProbeReport,
   StatusReport,
   StorableKey,
   TextModelReport,
@@ -181,6 +182,9 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   /** The text block's own connectivity check, and what it answered. */
   const [textTesting, setTextTesting] = useState(false)
   const [textTest, setTextTest] = useState<TextTestReport>()
+  /** The browser block's login probe, and what it found in the reader's own browser. */
+  const [probing, setProbing] = useState(false)
+  const [loginProbe, setLoginProbe] = useState<LoginProbeReport>()
 
   const check = useCallback(async () => {
     setChecking(true)
@@ -461,6 +465,28 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setLaunching(false)
     }
   }, [filled, save])
+
+  /**
+   * Ask the host to count what the reader's own browser could bring along.
+   *
+   * A read of the browser the reader is already using: nothing is started, nothing is opened, and
+   * nothing is written. It can only be done on the host, because only the host can reach a DevTools
+   * socket — and it waits on the 「允许远程调试？」 box that browser raises, so this button may sit in
+   * 正在探测… for as long as that box is on screen. That waiting is the whole behaviour, not a hang.
+   */
+  const runLoginProbe = useCallback(async () => {
+    setProbing(true)
+    setError('')
+    setNotice('')
+    setLoginProbe(undefined)
+    try {
+      setLoginProbe(await ask<LoginProbeReport>('/login-probe'))
+    } catch (failure) {
+      setError(message(failure))
+    } finally {
+      setProbing(false)
+    }
+  }, [])
 
   /** The name a value pasted into a block would be stored under, defaults included. */
   const decisionName = filled('decisionKeyRef') || routeDefault('keyRef', filled('decisionProvider'))
@@ -832,6 +858,41 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
     return null
   }
 
+  /**
+   * What the login probe found, in one sentence and a list.
+   *
+   * Counts only: the browser's cookies never leave it, so there is no name, no value and no expiry
+   * here even if someone wanted one. The list arrives sorted — most cookies first — and the closing
+   * sentence is there because the number is easy to over-read: a site can hold a dozen cookies and
+   * still ask for a password again in another browser.
+   */
+  const probeResult = (probe: LoginProbeReport): ReactNode =>
+    createElement(
+      'div',
+      { style: S.stateDetail },
+      probe.ok
+        ? [
+            createElement(
+              'div',
+              { key: 'line' },
+              `能带走 ${probe.sites} 个站、${probe.total} 条 cookie，其中 ${probe.sessionCookies} 条是关掉浏览器后可能失效的。`,
+            ),
+            probe.bySite.length > 0
+              ? createElement(
+                  'div',
+                  { key: 'sites' },
+                  probe.bySite.map((site) => `${site.domain}（${site.count} 条）`).join('\n'),
+                )
+              : null,
+            createElement(
+              'div',
+              { key: 'honest' },
+              'cookie 多不等于一定免登录，有些站换浏览器后还要再验一次。',
+            ),
+          ]
+        : probe.message ?? '这次没探测成。',
+    )
+
   const visibleGroups = FIELD_GROUPS.filter((group) => group.id !== 'advanced')
   const advancedGroup = FIELD_GROUPS.find((group) => group.id === 'advanced')
   const advancedFields = FIELDS.filter((field) => field.group === 'advanced')
@@ -884,14 +945,33 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         ? createElement(
             'div',
             { style: S.actions },
-            // The two routes need different things here. On 「你正在用的浏览器」 there is no
-            // button at all: nothing on this page may start, close or write to the reader's own
-            // browser, so the sentence says what to do in that browser instead of offering a
-            // control the host would only refuse. On 「插件自己的浏览器」 the button starts it,
-            // and only the launch itself blocks it: the page's own check opens a tab and can
-            // take a while, and letting that disable this would make a press do nothing at all.
+            // The two routes need different things here. On 「你正在用的浏览器」 the plugin may not
+            // start, close or write to that browser, so the only control is the probe — a read —
+            // and the sentences say what to do in the browser itself. On 「插件自己的浏览器」 the
+            // button starts it, and only the launch itself blocks it: the page's own check opens a
+            // tab and can take a while, and letting that disable this would make a press do nothing
+            // at all.
             ...(dailyConnection
               ? [
+                  // A read of the reader's own browser: it counts what is already there and opens
+                  // nothing. The host does the connecting, so this button is the only control on the
+                  // page that touches a browser the plugin does not own — which is exactly why it
+                  // says what it does, and why it waits.
+                  createElement(
+                    'button',
+                    {
+                      key: 'probe',
+                      type: 'button',
+                      onClick: () => void runLoginProbe(),
+                      disabled: probing,
+                    },
+                    probing ? '正在探测…' : '看看能带走多少登录',
+                  ),
+                  createElement(
+                    'span',
+                    { key: 'probe-hint', style: S.actionsHint },
+                    '浏览器里会弹出「允许远程调试？」的框，要在框上点「允许」，不点它就会一直等。',
+                  ),
                   createElement(
                     'span',
                     { key: 'how', style: S.actionsHint },
@@ -918,6 +998,9 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
                 ]),
           )
         : null,
+      // Only where its own button is: a result with no button above it would be a number the
+      // reader cannot ask for again, and one from a route the page is no longer showing.
+      group.id === 'browser' && dailyConnection && loginProbe !== undefined ? probeResult(loginProbe) : null,
       group.id === 'decision'
         ? createElement(
             'div',
