@@ -40,9 +40,9 @@ import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/
 import { BrowserSession, StalePage } from './browser/session'
 import { nestedNote } from './browser/nested'
 import type { ActResult } from './browser/act'
-import { act } from './browser/act'
+import { TargetCovered, act } from './browser/act'
 import type { DiscoverOptions } from './browser/discover'
-import { frameAction, openArtifacts, type TraceSink } from './artifacts'
+import { frameAction, openArtifacts, recordable, type TraceSink } from './artifacts'
 import { verify, type Verification } from './verify'
 
 /** How a run ended. `blocked` means the loop stopped itself, `failed` means the environment did. */
@@ -413,15 +413,19 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
    * Count one retry that re-observed the page and asked again without recording a step, and say why
    * the run stops once there have been too many. See `MAX_STALE_RETRIES` for why the three paths
    * that do this share this one count, and for the number itself. The sentence names the target the
-   * run could not get past, the way the repeated-action rule names the action it was stuck on.
+   * run could not get past, the way the repeated-action rule names the action it was stuck on, and
+   * takes `why` — what the page said about the refusal it just made, in one short phrase — for the
+   * case where there is more to say than "it did not work": the count is the same either way, and
+   * a refusal with nothing to add leaves the sentence exactly as it was.
    */
-  const staleRetryStop = (operation: string, target: string | null, label: string): string | null => {
+  const staleRetryStop = (operation: string, target: string | null, label: string, why = ''): string | null => {
     staleRetries += 1
     if (staleRetries <= MAX_STALE_RETRIES) return null
     const what = `${operation}${target ? ` 目标 ${target}` : ''}${label ? `「${label}」` : ''}`
     return (
-      `页面在你要执行的目标上连着变了 ${MAX_STALE_RETRIES + 1} 次，每次重新看过都没能执行，先停下——` +
-      `它卡在这个目标上了：${what}`
+      `在你要执行的目标上连着试了 ${MAX_STALE_RETRIES + 1} 次，每次重新看过都没能执行，` +
+      (why ? `这次是${why}，` : '') +
+      `先停下——它卡在这个目标上了：${what}`
     )
   }
 
@@ -721,12 +725,25 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         await deps.execute(session, page, action, text ?? undefined, artifacts?.trace)
       } catch (error) {
         if (error instanceof StalePage) {
-          const stopped = staleRetryStop(decision.operation, decision.target, action.label)
+          // A target something else is standing over is the one refusal a fresh look cannot explain:
+          // the next screen has the same element, the same number and the same hit test, so the
+          // sentence the refusal carries is the only new fact the model can be given. It goes into
+          // the existing one-off hint, which is what the next request carries as its note, and it is
+          // a fact rather than a step: nothing here presses Escape, clicks the gap or scrolls, and
+          // what to do about the cover stays the model's decision to make from the next screen.
+          const covered = error instanceof TargetCovered ? error : null
+          const stopped = staleRetryStop(
+            decision.operation,
+            decision.target,
+            action.label,
+            covered ? `目标被${covered.coverNote}盖住了` : '',
+          )
           if (stopped) {
             status = 'blocked'
             reason = stopped
             break
           }
+          if (covered) hint = covered.message
           // Reset and re-observe. The paid value is kept: the same field, the same
           // goal, so the same text is still the right answer.
           emit({ type: 'executed', step: history.length + 1, action: action.label, elapsedMs: elapsedMs(), pageChanged: true })
@@ -811,16 +828,26 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // writes down the focus reading it is the only witness to (`browser/act.ts`). A step that
         // opened nothing writes nothing, so an ordinary run's trace is exactly what it always was.
         if (found.appeared.length > 0) {
-          artifacts?.trace.write({
-            at: Date.now(),
-            kind: 'follow',
-            step,
-            // Every page that appeared, the followed one included, and which of them the run moved
-            // onto. `followed_tab: null` is the case worth the record: a window was opened and the
-            // run stayed where it was, which is what a run that looks stuck is doing.
-            new_tabs: found.appeared.map((opened) => opened.url),
-            followed_tab: adopted?.url ?? null,
-          })
+          // The record carries addresses, and an address is where a credential hides — a page that
+          // appears can be a login callback, whose own address holds the code that proves the login
+          // (`?code=…`). This is a bare write with no request or response body around it to be made
+          // safe on the way past, so the whole record goes through `recordable`, which is the same
+          // rule `decision/typesafe.ts` and `decision/text-helper.ts` apply to the bodies they write:
+          // it strips every address inside the record of its credential-carrying parameters, wherever
+          // one sits. Whole record rather than the two fields, so a field added here later cannot
+          // quietly arrive unredacted; the shape and the names are exactly what they were.
+          artifacts?.trace.write(
+            recordable({
+              at: Date.now(),
+              kind: 'follow',
+              step,
+              // Every page that appeared, the followed one included, and which of them the run moved
+              // onto. `followed_tab: null` is the case worth the record: a window was opened and the
+              // run stayed where it was, which is what a run that looks stuck is doing.
+              new_tabs: found.appeared.map((opened) => opened.url),
+              followed_tab: adopted?.url ?? null,
+            }) as Record<string, unknown>,
+          )
         }
       }
       // Judged by that same state, not by the whole-page fingerprint: a page whose banner carousel

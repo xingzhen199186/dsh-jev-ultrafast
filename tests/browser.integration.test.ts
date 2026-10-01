@@ -12,7 +12,7 @@ import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { act } from '../src/browser/act'
+import { TargetCovered, act } from '../src/browser/act'
 import { readPage } from '../src/browser/read'
 import { BrowserSession, StalePage, type PageState, type SnapshotAction } from '../src/browser/session'
 import type { Decision } from '../src/decision/typesafe'
@@ -86,13 +86,24 @@ describe.skipIf(!enabled)('browser layer', () => {
     await session.call('Page.navigate', { url: fixtureUrl })
   })
 
-  it('refuses a target that is covered by another element', async () => {
+  it('refuses a target that is covered by another element, and says what covered it', async () => {
     const page = await session.observe()
     const covered = byLabel(page, 'Covered button')
     // Observed, because it is a visible control in the viewport...
     expect(covered).toBeDefined()
-    // ...but not executable, because the hit test at its centre lands elsewhere.
-    await expect(act(session, page, covered!)).rejects.toBeInstanceOf(StalePage)
+    // ...but not executable, because the hit test at its centre lands elsewhere. The refusal is the
+    // stale-page one every caller already re-observes for, narrowed to the case that has a culprit,
+    // and it names the culprit: the fixture covers the button with `#veil`, an empty `<span>` with
+    // no role and no words, which is still the element the click would have landed on.
+    const refusal = await act(session, page, covered!).then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(refusal).toBeInstanceOf(TargetCovered)
+    expect(refusal).toBeInstanceOf(StalePage)
+    const message = refusal instanceof Error ? refusal.message : ''
+    expect(message).toContain('盖住了')
+    expect(message).toContain('SPAN')
   })
 
   it('refuses a node the page never handed out', async () => {

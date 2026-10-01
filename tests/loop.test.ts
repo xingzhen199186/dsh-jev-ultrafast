@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
+import { TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import { actionSpace, type ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
@@ -1024,6 +1025,39 @@ describe('run loop', () => {
     }
   })
 
+  it('scrubs the addresses a step opened, the way every other trace write does', async () => {
+    // An address is where a credential hides, and a page that appears can be the login callback that
+    // holds one (`?code=…`). The step record is a bare write with no request body to be made safe on
+    // the way past, so it goes through `recordable` like every other trace write, and what has to be
+    // in the file is the address with that parameter blanked. The raw text is read as well as the
+    // parsed record, because a credential in the file is a credential whatever shape it is in.
+    const popup = { url: 'https://ads.test/cb?code=abc123&state=keep', title: 'Popup' }
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/next' })],
+      choices: ['e1', 'DONE'],
+      adopt: [{ adopted: null, appeared: [popup] }],
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      const written = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+      const follow = written
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .find((record) => record.kind === 'follow')
+      expect(follow).toMatchObject({
+        kind: 'follow',
+        step: 1,
+        new_tabs: ['https://ads.test/cb?code=REDACTED&state=keep'],
+        followed_tab: null,
+      })
+      expect(written).not.toContain('abc123')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
   it('leaves the trace of a run that opened no window exactly as it was', async () => {
     // Nothing was opened, so nothing is written: the field is absent rather than `null`, which keeps
     // a trace from before this change readable by the same reader as one from after it.
@@ -1618,15 +1652,80 @@ describe('retries that buy no step', () => {
     expect(result.status).toBe('blocked')
     // The element the run could not get past, named the way the repeated-action stop names the
     // action it was stuck on: the operation, the number the decision chose, and the page's label
-    // for it. Six refusals were allowed and the seventh is the stop.
+    // for it. Six refusals were allowed and the seventh is the stop. Nothing here says the page was
+    // changing — it was not, and the run's own record of this round says so: what failed was the
+    // execution, seven times over, so that is what the sentence says.
     expect(result.reason).toBe(
-      '页面在你要执行的目标上连着变了 7 次，每次重新看过都没能执行，先停下——' +
+      '在你要执行的目标上连着试了 7 次，每次重新看过都没能执行，先停下——' +
         '它卡在这个目标上了：CLICK 目标 1「Search」',
     )
+    // A refusal with nothing of its own to say leaves the next request exactly as it was: no note.
+    expect(h.seen.contexts.every((context) => context.note === undefined)).toBe(true)
     // Seven decisions and nothing recorded: the run stops on its own rule, not on the model-call
     // budget the diagnosis found the old unbounded retry burning through.
     expect(result.decisions).toBe(7)
     expect(result.steps).toBe(0)
+  })
+
+  it('tells the next request what was standing over a target the page would not be clicked through', async () => {
+    // The one refusal a fresh observation cannot explain: the next screen has the same element, the
+    // same number and the same hit test, so the sentence the page left behind is the only new fact
+    // there is to give the model. It reaches the next question as that question's note — and it is
+    // only a fact: nothing here presses a key, clicks the gap or scrolls, which is what the browser
+    // call list below is asserting.
+    const covered = new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置' })
+    const h = harness({
+      pages: [pageState('f0'), pageState('f0')],
+      choices: ['e1', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw covered
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(h.seen.contexts[0]?.note).toBeUndefined()
+    expect(h.seen.contexts[1]?.note).toBe('目标被DIV(role=dialog)「位置」盖住了，点击落不到它身上，请重新观察')
+    expect(h.seen.contexts[1]?.note).toBe(covered.message)
+    expect(h.seen.calls).toEqual(['observe', 'observe'])
+    // The refusal cost a decision and no step, exactly as every other refused execution does.
+    expect(result.decisions).toBe(2)
+    expect(result.steps).toBe(0)
+  })
+
+  it('names what was standing over the target in the sentence the run stops on', async () => {
+    // The same count as a refusal with nothing to add, and the one thing that refusal does have to
+    // add: who was in the way, in the words the page itself gave. The stop sentence has to read as
+    // one sentence with it and as one without it, so the covered case is written out verbatim too.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: Array.from({ length: 10 }, () => 'e1'),
+      execute: () => {
+        throw new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置' })
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe(
+      '在你要执行的目标上连着试了 7 次，每次重新看过都没能执行，' +
+        '这次是目标被DIV(role=dialog)「位置」盖住了，' +
+        '先停下——它卡在这个目标上了：CLICK 目标 1「Search」',
+    )
+    expect(result.decisions).toBe(7)
+    expect(result.steps).toBe(0)
+  })
+
+  it('says a cover with no role and no name by its tag alone', async () => {
+    // What the page gives is what the sentence uses: a tag always, a role only when the element
+    // declares one, a name only when it has one. Nothing is invented to fill the gaps.
+    expect(new TargetCovered({ tag: 'SPAN', role: '', label: '' }).coverNote).toBe('SPAN')
+    expect(new TargetCovered({ tag: 'DIV', role: 'dialog', label: '位置' }).coverNote).toBe(
+      'DIV(role=dialog)「位置」',
+    )
+    expect(new TargetCovered({ tag: 'SPAN', role: '', label: '' }).message).toBe(
+      '目标被SPAN盖住了，点击落不到它身上，请重新观察',
+    )
   })
 
   it('counts a terminal answer refused by a moved page and an action refused by the page in one count', async () => {
@@ -1649,7 +1748,7 @@ describe('retries that buy no step', () => {
     const result = await run(h.deps)
 
     expect(result.status).toBe('blocked')
-    expect(result.reason).toContain('连着变了 7 次')
+    expect(result.reason).toContain('连着试了 7 次')
     // The seventh refusal is one of the action's, so the target it names is that action's own.
     expect(result.reason).toContain('目标 1「Search」')
     expect(result.decisions).toBe(7)

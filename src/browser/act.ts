@@ -24,6 +24,62 @@ export class ExecutionInterrupted extends Error {
   }
 }
 
+/**
+ * The element the hit test found on top of a target, when it found one.
+ *
+ * `tag` and `role` are how the page spells the element, and `label` is a short name for it — the
+ * words it shows, or the name it carries — cut to 40 characters, so that a whole dialog's text
+ * cannot end up inside a sentence about one click. A cover the page gives no role and no name for is
+ * still a cover: those two fields go empty rather than the fact being dropped.
+ */
+export interface Covering {
+  tag: string
+  role: string
+  label: string
+}
+
+/**
+ * The answer to "press this element" when the element is there and pressable in principle, but
+ * something else is standing over it, so the press would have landed on that instead.
+ *
+ * Kept apart from the `null` the same lookup answers for every other kind of refusal — gone,
+ * disabled, hidden, off-screen, the wrong kind of control — because only this one has a culprit,
+ * and naming a culprit the page never pointed at is worse than saying nothing.
+ */
+export interface CoveredTarget {
+  reason: 'covered'
+  covering: Covering
+}
+
+/**
+ * A target that is on the page and would be clickable, except that another element is over it.
+ *
+ * A `StalePage` rather than a new kind of failure, so every place that already re-observes the page
+ * for a stale target does the same here without changing a line — the run's `catch` in `../loop.ts`
+ * is the caller this is written for. What it adds is the one thing a re-observation cannot show:
+ * who was in the way.
+ */
+export class TargetCovered extends StalePage {
+  /** What stood over the target, as one short phrase: `DIV(role=dialog)「位置」`. */
+  readonly coverNote: string
+  constructor(covering: Covering) {
+    const note = coverNote(covering)
+    super(`目标被${note}盖住了，点击落不到它身上，请重新观察`)
+    this.name = 'TargetCovered'
+    this.coverNote = note
+  }
+}
+
+/**
+ * What stood over the target, in one phrase: the tag, its role when it has one, and its name when it
+ * has one. An element the page would not identify at all is still a cover and is said as one.
+ */
+function coverNote(covering: Covering): string {
+  const named = covering.tag || '页面上的其它元素'
+  const what = covering.role ? `${named}(role=${covering.role})` : named
+  return covering.label ? `${what}「${covering.label}」` : what
+}
+
 export interface ActResult {
   /** The id of the action that was executed, for the run log. */
   executed: string
@@ -140,6 +196,12 @@ async function execute(
     if (action.kind === 'select') throw new ExecutionInterrupted('下拉框的执行没有得到确认，重试前请先重新观察')
     throw new StalePage('目标已经变化或被遮挡，请重新观察')
   }
+  if ('reason' in target) {
+    // The element is there and in view; what kept the press off it is something standing on top.
+    // Said with the tag, the role and a short name of whatever that was, because "it is covered"
+    // on its own leaves the reader nothing on the page to look at.
+    throw new TargetCovered(target.covering)
+  }
   if (action.kind === 'select') return { executed: action.id }
 
   const { x, y } = target
@@ -249,10 +311,17 @@ function focusSource(action: SnapshotAction): string {
  * Re-resolve the target against the live document. A native `<select>` is set
  * here, inside the same evaluation that validated it, so nothing can slip in
  * between the check and the change.
+ *
+ * Three answers rather than two, because "this number is not a pressable element any more" and
+ * "this number is exactly where it was, with something else over it" are different facts about the
+ * page, and only the second one has an element to name.
  */
-async function resolveTarget(session: BrowserPort, action: SnapshotAction): Promise<{ x: number; y: number } | null> {
+async function resolveTarget(
+  session: BrowserPort,
+  action: SnapshotAction,
+): Promise<{ x: number; y: number } | CoveredTarget | null> {
   const response = await session.call<{
-    result?: { value?: { x: number; y: number } | null }
+    result?: { value?: { x: number; y: number } | CoveredTarget | null }
     exceptionDetails?: unknown
   }>('Runtime.evaluate', { expression: targetSource(action), returnByValue: true })
   if (response.exceptionDetails) {
@@ -262,6 +331,17 @@ async function resolveTarget(session: BrowserPort, action: SnapshotAction): Prom
   return response.result?.value ?? null
 }
 
+/**
+ * The lookup that both validates a target and answers where its centre is.
+ *
+ * The last check is the one worth telling apart from all the others: every refusal above it says
+ * the element cannot be pressed on its own account, while the hit test says the element is fine and
+ * the page has put something else over it — the same geometry the model was shown, the same element
+ * still on the page, and a press that would land on a different element entirely. The words and the
+ * name of whatever that is go back with the refusal, since nothing the run observes next will show
+ * the model that this is what happened. A point no element answers for is a refusal like the rest
+ * and not a cover: there is an element to name only when the point has one on it.
+ */
 function targetSource(action: SnapshotAction): string {
   return `(action => {
   const e=window.__jevFast?.nodes.get(action.node);
@@ -270,7 +350,13 @@ function targetSource(action: SnapshotAction): string {
   if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
   const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
   if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-  if (!e.contains(document.elementFromPoint(x,y))) return null;
+  const hit=document.elementFromPoint(x,y);
+  if (!hit) return null;
+  if (!e.contains(hit)) {
+    const seen=(hit?.innerText||hit?.textContent||'').replace(/\\s+/g,' ').trim();
+    return {reason:'covered',covering:{tag:hit?.tagName||'',role:hit?.getAttribute('role')||'',
+      label:(seen||hit?.getAttribute('aria-label')||'').slice(0,40)}};
+  }
   if (action.kind==='select') {
     if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
         !o.disabled && !o.closest('optgroup[disabled]'))) return null;
