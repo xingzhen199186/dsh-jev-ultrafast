@@ -668,13 +668,14 @@ describe('run loop', () => {
     expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: true })
   })
 
-  it('reads a churning guessed element as the page changing, the native controls standing still', async () => {
-    // What widening the table costs, measured on the rule that reads it: "did the screen move?" is the
-    // address plus the table of `[id, role, label]`, so one more entry is one more thing that can move
-    // on its own. Here the only movement between steps is the guessed row's own words — the same two
-    // native controls on every screen, the same address — and every step reads as a change, so the
-    // three-in-a-row brake never sees three quiet steps and the run goes on to its step budget. The
-    // page on the left, with no such row, stops on step 3 exactly as it always has.
+  it('reads a churning guessed element as the page standing still, the native controls standing still too', async () => {
+    // The scene the commit that widened the table used as its counter-example, kept for what it
+    // measured and given the opposite expectation. "Did the screen move?" is the address plus the
+    // native controls, so a guessed row rewriting its own words cannot move it: the same two native
+    // controls and the same address on every screen, the guessed row the only thing that changes.
+    // Read the old way — with the guessed entries inside `repeatedActionState` — every step counted as
+    // a change, the three-in-a-row brake never saw three quiet steps, and the run went on to spend its
+    // whole budget; that is the regression this expectation is written against.
     const guessed = (label: string): SnapshotAction => ({
       id: 'e10',
       kind: 'click',
@@ -695,11 +696,93 @@ describe('run loop', () => {
     expect(stopped.status).toBe('blocked')
     expect(stopped.reason).toMatch(/连续 3 步/)
 
+    // The budget is left generous on purpose below: the brake, not the budget, is what stops this run
+    // now, and the guessed row that churns is what used to hold the brake off.
     const longer = await run(noisy.deps, { maxSteps: 4 })
-    expect(longer.history.map((entry) => entry.page_changed)).toEqual([true, true, true, true])
-    expect(longer.steps).toBe(4)
-    expect(longer.reason).toMatch(/动作上限/)
-    expect(noisy.seen.executed).toHaveLength(4)
+    expect(longer.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+    expect(longer.steps).toBe(3)
+    expect(longer.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
+    expect(noisy.seen.executed).toHaveLength(3)
+  })
+
+  it('still reads a change in the native controls as the page changing with a guessed row beside them', async () => {
+    // The other half of the same judgement, so the exclusion cannot be read as "the table no longer
+    // counts": the guessed row is the same on both screens and the address stands still, and the one
+    // thing that moved is a native control the second screen added.
+    const guessed = (): SnapshotAction => ({
+      id: 'e10',
+      kind: 'click',
+      node: 10,
+      label: '酒店 A',
+      guess: 'listener',
+    })
+    const h = harness({
+      pages: [
+        pageState('f0', { actions: [...actions, guessed()] }),
+        pageState('f1', { actions: [...actions, guessed(), button('e9', 9, 'Saved searches')] }),
+      ],
+      choices: ['e1', 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.history[0]).toMatchObject({ page_changed: true })
+    expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: true })
+  })
+
+  it('leaves the native entries with the numbers and the order they had when guessed rows join the table', async () => {
+    // The guessed block is appended after the native controls and the numbers are minted from that
+    // order (`actionSpace`), so widening the table cannot renumber a native control — the property
+    // the churn above relies on, checked at the table the decision is asked about rather than in the
+    // snapshot alone.
+    const guessed = (node: number, label: string): SnapshotAction => ({
+      id: `e${node}`,
+      kind: 'click',
+      node,
+      label,
+      guess: 'react0',
+    })
+    const native = harness({ pages: [pageState('f0')], choices: ['DONE'] })
+    const widened = harness({
+      pages: [pageState('f0', { actions: [...actions, guessed(10, '酒店 A'), guessed(11, '酒店 B')] })],
+      choices: ['DONE'],
+    })
+    await run(native.deps)
+    await run(widened.deps)
+
+    const shape = (space: ActionSpace): Array<[string, string, string[]]> =>
+      space.elements.map((element) => [element.index, element.label, element.operations])
+    expect(shape(widened.seen.spaces[0]!).slice(0, actions.length)).toEqual(shape(native.seen.spaces[0]!))
+    // The guessed rows take the tail and nothing more: two entries more than the page without them.
+    expect(widened.seen.spaces[0]!.elements).toHaveLength(actions.length + 2)
+    expect(widened.seen.spaces[0]!.targets.CLICK!['3']?.id).toBe('e10')
+    expect(widened.seen.spaces[0]!.targets.CLICK!['4']?.id).toBe('e11')
+  })
+
+  it('leaves a run whose table carries no guessed entry the run it always was', async () => {
+    // The switch's off position is the reading every page had before the deep scan, and the filter is
+    // the only thing this change touches: with no guessed entry in the table it removes nothing, so
+    // the step report is the record it always was. The two runs below are the same scripted scene read
+    // with and without the deep scan, which is the difference the switch is for.
+    const pages = [pageState('f0'), pageState('f1'), pageState('f2'), pageState('f3')]
+    const off = harness({ pages, choices: ['e1', 'e1', 'e1', 'e1'] })
+    const on = harness({ pages, choices: ['e1', 'e1', 'e1', 'e1'] })
+    const without = await run(off.deps, { guessClickableElements: false })
+    const withScan = await run(on.deps, { guessClickableElements: true })
+
+    const report = (history: typeof without.history) =>
+      history.map((entry) => ({
+        step: entry.step,
+        action: entry.action,
+        kind: entry.kind,
+        target: entry.target,
+        page_changed: entry.page_changed,
+        url: entry.url,
+      }))
+    expect(report(without.history)).toEqual(report(withScan.history))
+    expect(without.reason).toBe(withScan.reason)
+    expect(without.steps).toBe(withScan.steps)
+    expect(without.steps).toBe(3)
   })
 
   it('does not stop when the element table keeps producing a state the run has not shown', async () => {

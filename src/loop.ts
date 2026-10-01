@@ -322,11 +322,29 @@ export interface TaskResult {
  * one and the same field 31 times before the rule could see the page come round again, where six
  * was the number it was written to stop on. What a reader would call "the same screen" is the
  * controls standing on it and the address it is at, not the words inside the ads.
+ *
+ * The entries the deep scan guessed at are left out for the same reason, carried one step further
+ * out. A guessed entry is our own inference rather than the page declaring a control, and what it
+ * points at can be a carousel slide, an ad, or a price rewritten in place under it — and because
+ * those entries are appended after the native controls, one of them churning is exactly the entry
+ * most likely to move while nothing a reader would call the screen does. What makes the exclusion
+ * worth it is that this state is not only the repeated-action rule's input: `page_changed` is read
+ * from it as well (`record.page_changed` below), and the two brakes that read those two things
+ * judge the same string — three steps in a row that changed nothing, and the dead ends those steps
+ * produce. One guessed row that moves on every paint therefore takes out both at once: no step ever
+ * reads as unchanged, the three-in-a-row brake never sees three quiet steps, and the run spends its
+ * whole budget on a page that stood still the entire time. The cost is taken knowingly. Movement
+ * that happened among the guessed entries alone is invisible here, so a click that only moved such
+ * a row reads as having moved nothing — accepted because the address and the native controls are
+ * still there to say when the screen really moved, and a guessed row rewriting its own words is the
+ * very case this judgement is written to see past.
  */
 function repeatedActionState(page: PageState): string {
   return JSON.stringify({
     url: page.url,
-    elements: page.actions.map((action) => [action.id, action.role ?? '', action.label]),
+    elements: page.actions
+      .filter((action) => action.guess === undefined)
+      .map((action) => [action.id, action.role ?? '', action.label]),
   })
 }
 
