@@ -119,13 +119,19 @@ export interface TrimmedSpace {
  * The order is the rule, and it is applied to one element at a time rather than taken from the
  * element's position on the page:
  *
- *  1. an element the run has just acted on is kept first — a loop that loses the very target it
- *     was working on is not a smaller loop, it is a loop that cannot finish;
- *  2. then an element that carries a visible label of its own, rather than only its role as a
- *     stand-in name, and that can be operated at all;
+ *  1. the run's own standing reasons come first, together: an element the run has just acted on — a
+ *     loop that loses the very target it was working on is not a smaller loop, it is a loop that
+ *     cannot finish — one that carries a visible label of its own rather than only its role as a
+ *     stand-in name, and one that can be operated at all;
+ *  2. at that same standing, an entry the snapshot guessed at (see `browser/snapshot.ts`) goes after
+ *     one the page declared: the guess is the project's own inference, and its label is often the
+ *     page's own words, which is exactly what the closeness test below rewards — so at equal
+ *     standing the page's own control is the safer survivor and the guess is what goes first;
  *  3. only then does distance from the goal's own words decide, and elements equally close keep
  *     the page's own order.
  *
+ * Rule 1 outranks rule 2, so an element the run has just acted on is kept even when it was a guess;
+ * what rule 2 decides is a tie between entries the run has the same reasons to keep, and only that.
  * Unlabelled, non-interactive entries are therefore what goes first. Every element that survives
  * survives entire — no label is cut in half, and no element is left in `elements` without its
  * targets, or the other way round.
@@ -142,13 +148,21 @@ export function trimActionSpace(
   const recentIndices = new Set(
     recent.filter((target): target is string => typeof target === 'string').map((target) => elementIndexOf(target)),
   )
+  const guessed = guessedIndices(space)
   const scored = space.elements.map((element, order) => ({
     element,
     order,
     keep: (recentIndices.has(element.index) ? 4 : 0) + (labelled(element) ? 2 : 0) + (element.operations.length > 0 ? 1 : 0),
     near: closeness(element, tokens),
+    guessed: guessed.has(element.index),
   }))
-  scored.sort((a, b) => b.keep - a.keep || b.near - a.near || a.order - b.order)
+  scored.sort(
+    (a, b) =>
+      b.keep - a.keep ||
+      Number(a.guessed) - Number(b.guessed) ||
+      b.near - a.near ||
+      a.order - b.order,
+  )
   const kept = new Set(scored.slice(0, limit).map((entry) => entry.element.index))
 
   const elements = space.elements.filter((element) => kept.has(element.index))
@@ -206,6 +220,23 @@ export function withoutElements(space: ActionSpace, excluded: ReadonlySet<string
 /** The element a target key belongs to: `7`, `7:2` and `7:enter` are all element `7`. */
 export function elementIndexOf(target: string): string {
   return target.split(':')[0]!
+}
+
+/**
+ * The elements the deep scan guessed at rather than the page declaring them (see `browser/snapshot.ts`).
+ *
+ * Read off the click target at the element's own index rather than carried on `ElementEntry`: the
+ * entries are what the decision request carries — `state.elements` is that array, whole — so a field
+ * added there would change every body this project sends, byte for byte. A guessed entry is a click
+ * and nothing else, and `actionSpace` hangs it on the element's own index, so the target at that
+ * index is the entry itself.
+ */
+function guessedIndices(space: ActionSpace): Set<string> {
+  const guessed = new Set<string>()
+  for (const [target, action] of Object.entries(space.targets.CLICK ?? {})) {
+    if (action.guess !== undefined) guessed.add(elementIndexOf(target))
+  }
+  return guessed
 }
 
 /** Whether an element carries a name of its own rather than only its role as a stand-in. */

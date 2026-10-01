@@ -867,7 +867,7 @@ describe('run loop', () => {
 
     const disagreeing = await run(harness({ pages: looks(), choices: ['e1', 'e2'], confidences: [0.2, 0.6] }).deps)
     expect(disagreeing.status).toBe('blocked')
-    expect(disagreeing.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+    expect(disagreeing.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
     expect(disagreeing.steps).toBe(0)
     expect(disagreeing.reasks).toHaveLength(1)
 
@@ -1571,7 +1571,10 @@ describe('run loop', () => {
     ])
   })
 
-  it('stops when the two answers disagree, and keeps what each one said', async () => {
+  it('stops when the two answers name different operations, whatever element each one picked', async () => {
+    // A disagreement about what to do is the one this rule still stops on: no rule below can settle
+    // "click this" against "type into that", so the run keeps its sentence and spends no step. The
+    // two answers here name `e1` and `e2`, which are a click and a fill — different operations.
     const h = harness({
       pages: [pageState('f0')],
       choices: ['e1', 'e2', 'DONE'],
@@ -1580,7 +1583,7 @@ describe('run loop', () => {
     const result = await run(h.deps)
 
     expect(result.status).toBe('blocked')
-    expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+    expect(result.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
     expect(result.steps).toBe(0)
     expect(result.decisions).toBe(2)
     expect(h.seen.executed).toHaveLength(0)
@@ -1724,7 +1727,8 @@ describe('run loop', () => {
   it('says the same thing whether or not the second answer was sure', async () => {
     // The sentence is about the first answer's confidence because the second one may well be
     // certain — certain and different is the case it exists for. Two unsure answers get the same
-    // sentence rather than a second wording to keep in step.
+    // sentence rather than a second wording to keep in step. The two answers here are a click and a
+    // fill, so they disagree about the operation: that is what this sentence still stops.
     for (const [second, confident] of [
       [0.6, true],
       [0.3, false],
@@ -1737,27 +1741,62 @@ describe('run loop', () => {
       const result = await run(h.deps)
 
       expect(result.status).toBe('blocked')
-      expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
+      expect(result.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
       expect(result.reasks[0]).toMatchObject({ agreed: false, second: { confidence: second } })
       expect(confident ? second >= 0.5 : second < 0.5).toBe(true)
     }
   })
 
-  it('stops when the two answers name one operation but a different element', async () => {
-    // Two answers that agree about what to do and disagree about where to do it are the same
-    // jitter the re-ask exists for: the two best elements sat 0.01–0.05 apart in the audit.
+  it('runs the first answer when the two answers name one operation and a different element', async () => {
+    // Two answers that agree about what to do and disagree about where to do it are the jitter the
+    // re-ask exists for — the two best elements sat 0.01–0.05 apart in the audit — so the step is
+    // taken on the first answer, the one the run was about to act on before it asked again, and the
+    // run goes on. The 携程 home page of 2026-10 is where this was measured: there the two answers
+    // named the search button and the search field itself, both under the floor, and stopping on that
+    // difference voided a 60-step run at its third step.
     const two = [button('e1', 1, 'Search'), button('e9', 9, 'Search again')]
     const h = harness({
-      pages: [pageState('f0', { actions: two })],
-      choices: ['e1', 'e9'],
+      pages: [pageState('f0', { actions: two }), pageState('f1')],
+      choices: ['e1', 'e9', 'DONE'],
       targets: { e1: '1', e9: '2' },
-      confidences: [0.3, 0.4],
+      confidences: [0.3, 0.4, 0.9],
     })
     const result = await run(h.deps)
 
-    expect(result.status).toBe('blocked')
-    expect(result.reason).toBe('决策服务两次给的答案不一样（第一次把握低于 0.5），先停下')
-    expect(result.reasks[0]).toMatchObject({ agreed: false, first: { choice: 'e1' }, second: { choice: 'e9' } })
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // The first answer's element, never the second's: `choice` is the action id the loop executes.
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.history[0]).toMatchObject({ target: '1', confidence: 0.3, operation: 'CLICK' })
+    // What each asking said is still recorded, with `agreed: false` — the record is about what the
+    // service said, and it did not say the same choice twice.
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'low-confidence',
+        agreed: false,
+        first: { choice: 'e1', confidence: 0.3, probabilities: { e1: 0.3 } },
+        second: { choice: 'e9', confidence: 0.4, probabilities: { e9: 0.4 } },
+      },
+    ])
+  })
+
+  it('runs the first answer even when the second one is sure, as long as the operation is the same', async () => {
+    // The sentence this rule used to stop on said the second answer may well be sure, and certain and
+    // different was the case it was written for. Certain and different about a *target* is still the
+    // same operation, so the run acts and lets the cheaper brakes judge it.
+    const two = [button('e1', 1, 'Search'), button('e9', 9, 'Search again')]
+    const h = harness({
+      pages: [pageState('f0', { actions: two }), pageState('f1')],
+      choices: ['e1', 'e9', 'DONE'],
+      targets: { e1: '1', e9: '2' },
+      confidences: [0.2, 0.95, 0.9],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.reasks[0]).toMatchObject({ agreed: false, second: { confidence: 0.95 } })
   })
 
   it('keeps a single answer that is at or above the floor', async () => {
@@ -1848,6 +1887,57 @@ describe('run loop', () => {
           },
         ],
       })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the guessed marker in the step record and the run trace, and out of the request', async () => {
+    // One row the deep scan guessed at (`browser/snapshot.ts`) and one control the page declared. The
+    // marker cannot ride on the element table, because that table is the request body whole, so a run
+    // that acted on a guessed row has to say so somewhere else: the step record says it per step, and
+    // the run's last word lists the steps that acted on one. The 携程 diagnosis of 2026-10 needed
+    // exactly this and had to infer it instead — the trace showed only a table that had grown by seven
+    // entries at its tail, and nothing in it said which of the 47 the snapshot had guessed.
+    const guessedRow: SnapshotAction = { id: 'e9', kind: 'click', node: 9, label: '酒店 A', guess: 'listener' }
+    const h = harness({
+      pages: [
+        pageState('f0', { actions: [...actions, guessedRow] }),
+        pageState('f1', { url: 'https://example.test/results' }),
+      ],
+      choices: ['e9', 'e1', 'DONE'],
+      targets: { e9: '3' },
+    })
+    const result = await run(h.deps, { record: true })
+    try {
+      // The step record: the clue on the step that acted on the guessed row, `null` on the ordinary one.
+      expect(result.history.map((entry) => `${entry.action}:${entry.guess}`)).toEqual(['酒店 A:listener', 'Search:null'])
+      // The request the service was given, as the whole string: the marker is not in it.
+      const [space, asked] = [h.seen.spaces[0]!, h.seen.contexts[0]!]
+      expect(JSON.stringify(buildQuestionnaire(space, asked, decision.model).request)).not.toContain('"guess"')
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(trace[trace.length - 1]).toMatchObject({
+        kind: 'run',
+        status: 'done',
+        guessed_steps: [{ step: 1, target: '3', action: '酒店 A', guess: 'listener' }],
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes no guessed marker at all when every step was on a control the page declared', async () => {
+    // The ordinary run's last word has to stay what it always was: a run with nothing guessed in it
+    // writes no `guessed_steps` at all, the way it writes no `stuck_on` or `dead_ends`.
+    const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+    const result = await run(h.deps, { record: true })
+    try {
+      expect(result.history.map((entry) => entry.guess)).toEqual([null])
+      const last = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8').trim().split('\n').pop()!
+      expect(last).not.toContain('guessed_steps')
     } finally {
       rmSync(result.recordDir, { recursive: true, force: true })
     }

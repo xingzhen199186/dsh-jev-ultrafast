@@ -50,6 +50,20 @@ export interface HistoryEntry {
   text_latency_ms: number
   operation: string
   target: string | null
+  /**
+   * The clue that made this step's element a guess rather than a control the page declared — the
+   * name `browser/snapshot.ts` gives it (`listener`, `inline`, `react0`…`react3`), and `null` on an
+   * ordinary step.
+   *
+   * Kept on the step record because that record is the right place for it, and the only one: it is
+   * deliberately not a field the request carries — `state.elements` is the element table itself,
+   * whole, so a marker on an entry would change every body this project sends (`./action-space.ts`
+   * says the same where the entries are minted) — and a guessed row is otherwise indistinguishable
+   * from a declared control afterwards, arriving with the same role, the same label and the same
+   * index. A run reviewed from its record has no other way to see that a step acted on one of our
+   * own inferences; `loop.ts` reads this field back for the trace's `guessed_steps`.
+   */
+  guess: string | null
   /** Whether the page changed afterwards; `null` until it has been observed. */
   page_changed: boolean | null
   url: string

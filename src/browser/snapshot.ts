@@ -174,11 +174,16 @@ const SNAPSHOT_BODY = String.raw`(() => {
   //
   // An entry here is about 67 characters compact, so the allowance below is under 1k characters of
   // the request body and the table's own 48-entry cap is what really decides. That is why the pool is
-  // capped, why it is appended after the native controls, and why the tie-break inside
-  // trimActionSpace still prefers them: a guess only takes a slot from a control that reads as less
-  // relevant to the goal's own words.
+  // capped, why it is appended after the native controls, and why the table's own cut drops a
+  // guessed entry before a native one of the same standing: with the slots short, a slot a guess
+  // does not take is a slot the page's own controls keep.
   if (__JEV_DEEP_SCAN__) {
-    const GUESS_LIMIT=12, REACT_UP=3;
+    // Six, where it was twelve. The pool is what grows a request, and the request is already at its
+    // own ceiling: on the 携程 home page (2026-10) the seven entries the pool produced beside the
+    // native table were worth 4 real targets and 3 rows that repeated the page's navigation and
+    // account text, while the widest request of that run came within 100 characters of the 20,000
+    // the service is given. Halving the pool halves the worst case that ceiling has to absorb.
+    const GUESS_LIMIT=6, REACT_UP=3;
     const events=['click','mousedown','mouseup','pointerdown','pointerup','DOMActivate'];
     const inline=['onclick','onmousedown','onmouseup','onpointerdown','onpointerup'];
     const listeners=typeof getEventListeners==='function' ? getEventListeners : null;

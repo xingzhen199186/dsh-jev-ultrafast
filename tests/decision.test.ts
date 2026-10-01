@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
 import { actionSpace, trimActionSpace } from '../src/decision/action-space'
@@ -141,6 +142,70 @@ describe('element table cap', () => {
     // The candidate survives whole: its own click target is in the table with it.
     expect(trimmed.space.targets.CLICK![kept[0]!.index]!.label).toBe('中关村生命科学园 北京, 中国')
   })
+
+  it('cuts a guessed entry before a native one of the same standing, even when the guessed one reads closer to the goal', () => {
+    // Two halves of one page: forty-four controls the page declared, and six rows the deep scan
+    // guessed at — six, which is the pool's own cap (`browser/snapshot.ts`). A guessed row is made of
+    // the page's words, so it can beat a native control on the goal's own words alone, and a slot a
+    // guess takes is a slot a declared control loses. What decides first is the standing the run has
+    // for keeping an entry at all (the element it just acted on, a name of its own, an operation it
+    // supports); at that same standing the page's own control is the survivor, and only then do the
+    // goal's words come into it.
+    const natives = buttons(44, (index) => `控制 ${index}`)
+    const goal = '在北京的中关村生命科学园附近订一间酒店'
+    const guesses: SnapshotAction[] = Array.from({ length: 6 }, (_unused, at) => ({
+      id: `e${45 + at}`,
+      kind: 'click',
+      node: 45 + at,
+      role: 'button',
+      label: `中关村生命科学园 候选 ${at + 1}`,
+      guess: 'listener',
+    }))
+    const trimmed = trimActionSpace(actionSpace([...natives, ...guesses]), goal, [])
+    const kept = trimmed.space.elements
+
+    // Two slots short, and both of them guessed rows — the two furthest down, since every guessed row
+    // is equally close to the goal. Not one of the page's own controls went.
+    expect(trimmed.omitted).toBe(2)
+    expect(kept.map((element) => element.index)).toEqual(
+      Array.from({ length: 48 }, (_unused, at) => String(at + 1)),
+    )
+    expect(kept.filter((element) => element.label.startsWith('控制'))).toHaveLength(44)
+    expect(kept.filter((element) => element.label.startsWith('中关村')).map((element) => element.label)).toEqual([
+      '中关村生命科学园 候选 1',
+      '中关村生命科学园 候选 2',
+      '中关村生命科学园 候选 3',
+      '中关村生命科学园 候选 4',
+    ])
+    // Every survivor's own click target survives with it.
+    expect(Object.keys(trimmed.space.targets.CLICK!).sort((a, b) => Number(a) - Number(b))).toEqual(
+      Array.from({ length: 48 }, (_unused, at) => String(at + 1)),
+    )
+  })
+
+  it('still keeps the guessed element the run has just acted on, because that standing outranks the guess', () => {
+    // The rule above is not allowed to weaken the first one: a loop that loses the very target it was
+    // working on is a loop that cannot finish, and a site whose rows are all guessed rows is exactly
+    // where that would happen. The guessed row the run just acted on is kept, and the slot it takes
+    // is one of its own kind's: two other guessed rows are cut instead.
+    const natives = buttons(44, (index) => `控制 ${index}`)
+    const guesses: SnapshotAction[] = Array.from({ length: 6 }, (_unused, at) => ({
+      id: `e${45 + at}`,
+      kind: 'click',
+      node: 45 + at,
+      role: 'button',
+      label: `中关村生命科学园 候选 ${at + 1}`,
+      guess: 'listener',
+    }))
+    const trimmed = trimActionSpace(actionSpace([...natives, ...guesses]), '订一间酒店', ['50'])
+    const kept = trimmed.space.elements.map((element) => element.index)
+
+    expect(trimmed.omitted).toBe(2)
+    // The recent target was the last guessed row on the page, which is what the guess rule alone would
+    // have cut first.
+    expect(kept).toEqual([...Array.from({ length: 47 }, (_unused, at) => String(at + 1)), '50'])
+    expect(trimmed.space.elements.filter((element) => element.label.startsWith('控制'))).toHaveLength(44)
+  })
 })
 
 describe('questionnaire', () => {
@@ -166,6 +231,32 @@ describe('questionnaire', () => {
     const state = request.state as { elements: unknown }
     expect(JSON.stringify(state)).not.toContain('rect')
     expect(JSON.stringify(state)).not.toContain('"node"')
+  })
+
+  it('never lets the guessed marker reach the request body, byte for byte', () => {
+    // The marker the deep scan puts on an element it inferred (`browser/snapshot.ts`) is what a run
+    // reviewed afterwards needs to tell a guessed row from a control the page declared, and the step
+    // record is where it is kept (`HistoryEntry.guess`). It must not reach the service: the element
+    // table is `state.elements` whole, so a field on an entry would change every body this project
+    // sends. Two checks, because "a field was not added" and "the bytes are what they always were"
+    // are different claims: the same page with the marker stripped builds the same string, and the
+    // whole string's hash is the one taken before the marker existed (6505 characters).
+    const page: SnapshotAction[] = [
+      { id: 'e1', kind: 'click', node: 1, role: 'button', label: 'Search' },
+      { id: 'e2', kind: 'fill', node: 2, role: 'combobox', label: 'Where from?', value: '' },
+      { id: 'e3', kind: 'click', node: 3, role: 'button', label: '酒店级别 不限', guess: 'listener' },
+      { id: 'e4', kind: 'click', node: 4, role: 'button', label: '旅游地图', guess: 'inline' },
+    ]
+    const stripped = page.map(({ guess, ...rest }) => rest as SnapshotAction)
+    const body = (actions: SnapshotAction[]): string =>
+      JSON.stringify(buildQuestionnaire(actionSpace(actions), context, 'jev-latest').request)
+    const withGuesses = body(page)
+
+    expect(withGuesses).not.toContain('"guess"')
+    expect(withGuesses).toBe(body(stripped))
+    expect(createHash('sha256').update(withGuesses).digest('hex')).toBe(
+      '1fa8398391cf562c565915a9f262c2daa555ce4a22ed78c852d01370a1ea93eb',
+    )
   })
 
   it('carries the run\'s one-off sentence into the request, and nothing when there is none', () => {

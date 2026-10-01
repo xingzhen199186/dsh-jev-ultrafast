@@ -38,6 +38,9 @@ function entry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
     text_latency_ms: 0,
     operation: 'click',
     target: null,
+    // The deep scan's marker on the step's element: `null` for a control the page declared, which is
+    // the ordinary case these fixtures are about.
+    guess: null,
     page_changed: true,
     url: 'https://example.test/',
     usage: {},

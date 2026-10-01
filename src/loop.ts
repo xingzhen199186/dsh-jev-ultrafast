@@ -582,10 +582,21 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // A confidence under the floor is the service saying it is not sure, and this run used to
       // record that and then act on it anyway — 49 of the 71 decisions in the 2026-10 audit came
       // back this way. The same question is asked once more instead, and only an answer that can
-      // stand is executed: two that disagree stop the step rather than pick one of them, and so
-      // does a second asking that cannot be read, which leaves the step nothing to act on at all.
-      // This is judged here, before the answers are acted on and before the brakes below: the
-      // question is what the service thinks, not what the page did.
+      // stand is executed; a second asking that cannot be read leaves the step nothing to act on
+      // at all. Two answers that disagree are a conflict about the operation, not about the target:
+      // naming one operation with two different elements is the jitter this second question exists
+      // for — the service's two best elements sat 0.01–0.05 apart in the audit — so the first
+      // answer is executed and the brakes below judge the step that was actually taken. Only two
+      // different operations still stop the run, because that is a disagreement about what to do,
+      // which no cheaper rule can settle. This is judged here, before the answers are acted on and
+      // before the brakes below: the question is what the service thinks, not what the page did.
+      //
+      // The narrowing is measured rather than supposed. On the 携程 home page (2026-10) one step was
+      // asked the same question twice, byte for byte: the first answer named element 17 (the search
+      // button), the second element 16 (the search field itself), both under 0.5 and both CLICK, and
+      // the disagreement voided the whole run at its third step after 24.4 seconds of a planned 60.
+      // The page did not move for either element and the dead-end rule had already written the target
+      // down, so the cheaper brake was the one that should have settled it.
       let decision = first.decision
       if (decision === null || decision.confidence < CONFIDENCE_FLOOR) {
         // The second question is a second decision like any other, so it is only asked while the
@@ -630,15 +641,27 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           break
         }
         if (first.decision !== null && !agreed) {
-          status = 'blocked'
-          // Said about the first answer's confidence, because the second one may well be sure —
-          // certain and different is exactly the disagreement this stops on.
-          reason = `决策服务两次给的答案不一样（第一次把握低于 ${CONFIDENCE_FLOOR}），先停下`
-          break
+          // Two answers that name different operations are a real conflict about what the step
+          // should do, and no rule below can settle that: the run stops, with the sentence it always
+          // used. Said about the first answer's confidence, because the second one may well be sure
+          // — certain and different is exactly the disagreement this stops on.
+          if (second.decision.operation !== first.decision.operation) {
+            status = 'blocked'
+            reason = `决策服务两次给的操作不一样（第一次把握低于 ${CONFIDENCE_FLOOR}），先停下`
+            break
+          }
+          // Same operation, different target: the two answers agree about what to do and disagree
+          // only about where. That is the answer the step already had — the first one, the unsure
+          // one — and it is executed rather than thrown away. Whether it moves the goal forward is
+          // then judged by the rules that cost less than the whole run: the dead end the element
+          // earns when the screen does not move for it, the repeated-action rule, and the three
+          // steps that changed nothing.
+          decision = first.decision
+        } else {
+          // The second answer is the one that stands: either the two name the same choice, or the
+          // first one could not be read at all and this is the only answer the step has.
+          decision = second.decision
         }
-        // The second answer is the one that stands: either the two name the same choice, or the
-        // first one could not be read at all and this is the only answer the step has.
-        decision = second.decision
       }
 
       emit({
@@ -812,6 +835,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         text_latency_ms: helper?.latencyMs ?? 0,
         operation: decision.operation,
         target: decision.target,
+        // The clue that made this element a guess, when the deep scan was the one that offered it;
+        // `null` for a control the page declared. The element table itself cannot carry the marker —
+        // it goes into the request body whole — so the step record says it, and the run's last word
+        // says it again for the steps that acted on one (see `HistoryEntry.guess`).
+        guess: typeof action.guess === 'string' ? action.guess : null,
         page_changed: null,
         url: observed,
         usage: decision.usage,
@@ -995,6 +1023,24 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // And the dead ends the run judged for itself: which elements, at which step, and whether they
       // were taken out of the candidates or only written down.
       ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
+      // Likewise, the steps that acted on an element the page did not declare but the deep scan
+      // offered as a guess (`browser/snapshot.ts`), so the record answers on its own which of the
+      // table's entries were our own inference — what the 携程 diagnosis of 2026-10 had to work out
+      // by comparing the table's tail against a baseline instead, because the marker is left out of
+      // the table before the table becomes a request. Written only when there was one, so an
+      // ordinary run's last word is what it always was.
+      ...(history.some((entry) => entry.guess !== null)
+        ? {
+            guessed_steps: history
+              .filter((entry) => entry.guess !== null)
+              .map((entry) => ({
+                step: entry.step,
+                target: entry.target,
+                action: entry.action,
+                guess: entry.guess,
+              })),
+          }
+        : {}),
       // Likewise: how many pages it opened in a window it stayed away from, when there were any.
       ...(unfollowedTabs > 0 ? { unfollowed_tabs: unfollowedTabs } : {}),
     }) as Record<string, unknown>,

@@ -306,7 +306,9 @@ export class BrowserSession implements BrowserPort {
    * A tab the site has only just opened often still reads as `about:blank`, and its
    * URL is what decides whether it is worth following, so a blank newcomer is given
    * a short moment to say where it is going. Everything that appeared is remembered
-   * either way, so a page the run deliberately does not follow is not reported twice.
+   * either way, so a page the run deliberately does not follow is not reported twice —
+   * everything with an address, that is: a target that still has none is not remembered,
+   * because a page that cannot be named yet is not a page this session has seen (below).
    */
   async adoptNewPage(options: { onlyIfSameUrl?: boolean } = {}): Promise<AdoptResult | null> {
     let pages = await this.#pageTargets()
@@ -319,7 +321,18 @@ export class BrowserSession implements BrowserPort {
         appeared = this.#unseen(pages)
       }
     }
-    for (const page of pages) this.#knownPages.add(page.targetId)
+    // Remembered as a page this session has seen only when it has an address to be seen at. A target
+    // the browser has listed before it has committed a navigation answers with an empty address, and
+    // remembering one here loses it for good: `#unseen` skips every known target, so a page that was
+    // still blank when the run first looked can never be picked up once it lands — which is how a
+    // window a click opened went missing (携程, 2026-10: the page the run was on had moved, the new
+    // window's address read as an empty string, and the record of having seen it left it out of every
+    // later look). Left out of that record instead, it appears as a newcomer on the first look that
+    // finds it with an address, and can be followed then. What it costs: a window that stays blank is
+    // reported as appeared on each look until it gets an address, so a run that opened one counts it
+    // more than once — the alternative was not reporting it at all, and the record of a click that
+    // opened a window the run did not follow is worth more than the count being exact.
+    for (const page of pages) if (page.url !== '') this.#knownPages.add(page.targetId)
     if (appeared.length === 0) return null
     // One list of reportable pages, and `adopted` is the very object listed in it, so a
     // caller can tell which of them the session moved onto without comparing URLs.

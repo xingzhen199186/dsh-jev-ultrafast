@@ -383,9 +383,12 @@ describe('elements a page made clickable with its own script', () => {
     )
     const guesses = offered(state).filter((action) => action.guess !== undefined)
 
-    expect(guesses).toHaveLength(12)
+    // Six, where the pool used to allow twelve: twenty candidates are on the page and the six it takes
+    // are the first six it walks into, which is the tail of the table and nothing more (2026-10: the
+    // 携程 home page's seven pooled entries cost a request already within 100 characters of its limit).
+    expect(guesses).toHaveLength(6)
     expect(guesses.map((action) => action.label)).toEqual(
-      Array.from({ length: 12 }, (_unused, index) => `可选 ${index + 1}`),
+      Array.from({ length: 6 }, (_unused, index) => `可选 ${index + 1}`),
     )
   })
 
@@ -491,7 +494,9 @@ describe('elements a page made clickable with its own script', () => {
       { consoleApi: true },
     )
     const space = actionSpace(state.actions)
-    expect(space.elements).toHaveLength(67)
+    // Fifty-five declarations and the pool's full six guessed rows, not the fifteen the page offers: the
+    // pool is capped inside the snapshot (`browser/snapshot.ts`), before anything else sees the table.
+    expect(space.elements).toHaveLength(61)
 
     // What the loop does, in the same order and with the same arithmetic: the cap first, then the
     // request body measured and the table cut again a few entries at a time until it fits.
@@ -502,8 +507,8 @@ describe('elements a page made clickable with its own script', () => {
     }
     let limit = MAX_ELEMENTS
     let trimmed = trimActionSpace(space, context.goal, [], limit)
-    // At the element cap the guessed block is what goes: it sits behind every native control at
-    // equal relevance, which is the ordering the table is built in.
+    // At the element cap the guessed block is what goes: a guessed row is cut before a declaration of
+    // the same standing, and these two halves have the same standing.
     expect(trimmed.space.elements.every((element) => element.label.startsWith('控制'))).toBe(true)
     while (limit > 1 && requestChars(trimmed.space, context, 'jev-latest') > MAX_REQUEST_CHARS) {
       limit -= 4
@@ -514,8 +519,8 @@ describe('elements a page made clickable with its own script', () => {
     expect(trimmed.space.elements.length).toBeGreaterThan(0)
     expect(requestChars(trimmed.space, context, 'jev-latest')).toBeLessThanOrEqual(MAX_REQUEST_CHARS)
     expect(MAX_REQUEST_CHARS).toBe(20_000)
-    // The body really did overshoot on the page's own long labels, so the second cut ran — and what
-    // it took, at equal relevance, is the guessed block: it sits behind every native control.
+    // The body really did overshoot on the page's own long labels, so the second cut ran — and what it
+    // took, at equal standing, is the guessed block: no declaration is cut before a guess.
     expect(limit).toBeLessThan(MAX_ELEMENTS)
     expect(trimmed.space.elements.every((element) => element.label.startsWith('控制'))).toBe(true)
   })
