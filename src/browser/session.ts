@@ -31,11 +31,13 @@ export const VIEWPORT = { width: 1120, height: 780 } as const
 export interface SnapshotAction {
   /** Code-owned index such as `e7`, or a fixed name such as `scroll_down`. */
   id: string
-  kind: 'click' | 'fill' | 'select' | 'scroll' | 'wait'
+  kind: 'click' | 'fill' | 'select' | 'press_key' | 'scroll' | 'wait'
   /** Code-owned node identity; present for element-level actions. */
   node?: number
   label: string
   value?: string
+  /** For `press_key`: one of `browser/act.ts`'s key names, such as `arrowdown`. */
+  key?: string
   delta?: number
   [key: string]: unknown
 }

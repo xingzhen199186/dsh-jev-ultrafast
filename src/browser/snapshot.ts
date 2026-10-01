@@ -75,6 +75,10 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
   const actions=[];
+  // A field can be driven on the keyboard as well as by typing, and that is not decoration: an
+  // autocomplete list is usually plain markup the selector above cannot name, so a key is the
+  // only way to pick from one. One action per key, so each gets its own target.
+  const keys=['enter','escape','tab','arrowdown','arrowup'];
   for (const e of document.querySelectorAll(selector)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
     const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
@@ -98,7 +102,11 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       actions.push({...base,kind:editable?'fill':'click',value});
-      if (editable) actions.push({...base,kind:'click',value,label:'Open '+base.label});
+      if (editable) {
+        actions.push({...base,kind:'click',value,label:'Open '+base.label});
+        for (const key of keys)
+          actions.push({...base,kind:'press_key',key,value,label:base.label+' → '+key});
+      }
     }
   }
   // Structures every query above cannot reach into: a visible frame, and an open shadow

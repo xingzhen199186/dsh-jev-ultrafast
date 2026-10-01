@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
 import { BROWSER_CONNECTIONS, BROWSER_KINDS, BROWSER_LABELS } from '../src/browser/launch'
-import { FIELDS, FIELD_GROUPS, KEY_BLOCKS, SELF_SAVING_BLOCKS, fieldsOfBlock } from '../src/client/fields'
+import { FIELDS, FIELD_GROUPS, KEY_BLOCKS, SELF_SAVING_BLOCKS, fieldsOfBlock, saveOwnsKey } from '../src/client/fields'
 import { INSPECTOR_URL } from '../src/command'
 import { DECISION_PROVIDER_IDS } from '../src/decision/providers'
 import { INSPECTOR_PATH, ROUTE, inspectorUrl } from '../src/protocol'
@@ -185,6 +185,23 @@ describe('settings page fields', () => {
       // A block with its own save button needs somewhere to put a value, too.
       expect(KEY_BLOCKS, id).toContain(id)
       expect(fieldsOfBlock(id).map((field) => field.key), id).toContain(`${id}KeyRef`)
+    }
+  })
+
+  it('keeps a block save off every credential but its own', () => {
+    // 2026-10-01: the browser block's buttons save that block first, so a connection goes to the
+    // browser the dropdown names. The fields were scoped; the pasted key values were not, so
+    // 启动并连接 / 连接你的浏览器 committed every value box on the page — a key meant for 决策服务
+    // or 文本模型 could be stored, under a name the reader was not looking at, by a press that
+    // had nothing to do with it. A block with no value box owns no credential at all.
+    expect(saveOwnsKey(undefined, undefined, 'OPENROUTER_API_KEY')).toBe(true) // the page's own 保存
+    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY')).toBe(true)
+    expect(saveOwnsKey('decision', 'OPENROUTER_API_KEY', 'TYPESAFE_API_KEY')).toBe(false)
+    expect(saveOwnsKey('text', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY')).toBe(false)
+    for (const id of ['browser', 'run'] as const) {
+      expect(KEY_BLOCKS, id).not.toContain(id)
+      expect(saveOwnsKey(id, undefined, 'OPENROUTER_API_KEY'), id).toBe(false)
+      expect(saveOwnsKey(id, undefined, 'DEEPSEEK_API_KEY'), id).toBe(false)
     }
   })
 })

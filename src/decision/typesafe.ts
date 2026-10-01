@@ -125,11 +125,14 @@ export interface Decision {
   latencyMs: number
 }
 
-/** Human-readable descriptions of the three element operations. */
+/** Human-readable descriptions of the four element operations. */
 const OPERATION_LABELS: Record<string, string> = {
   CLICK: 'Click an element, button, menu option, autocomplete suggestion, or calendar day.',
   TYPE_TEXT: 'Enter or replace text in an editable field. A small LLM will supply the value from the goal.',
   SELECT: 'Select an observed dropdown value.',
+  PRESS_KEY:
+    'Press one key on an element — Enter, Escape, Tab, ArrowDown or ArrowUp — to choose from the list ' +
+    'that element opened or to dismiss it; the element is clicked first.',
 }
 
 /**

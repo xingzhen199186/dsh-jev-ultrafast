@@ -59,6 +59,7 @@ import {
   KEY_BLOCKS,
   SELF_SAVING_BLOCKS,
   fieldsOfBlock,
+  saveOwnsKey,
   type FieldGroup,
   type FieldGroupId,
   type FieldSpec,
@@ -324,9 +325,11 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
    * Save the page's drafts: the fields, then any pasted key values.
    *
    * Given a block, only that block's own fields and its own credential are written —
-   * `ownKey` is the name its value box stores under. Without a block, everything on the
-   * page is written, which is what the button at the bottom still does. A draft sitting
-   * in the other block therefore stays a draft until its own button is pressed.
+   * `ownKey` is the name its value box stores under, and a block with no value box
+   * (浏览器 / 任务) owns no credential at all. Without a block, everything on the page is
+   * written, which is what the button at the bottom still does. A draft sitting in the
+   * other block therefore stays a draft until its own button is pressed, whichever
+   * button was pressed on this one.
    *
    * The order is not cosmetic. A credential name typed into a field only becomes
    * storable once the config that mentions it is saved — the host checks the name
@@ -362,7 +365,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         for (const [name, value] of Object.entries(keyDrafts)) {
           if (value.trim().length === 0) continue
           // A block owns one name: its own. Any other pasted value is left where it is.
-          if (ownKey !== undefined && name !== ownKey) continue
+          if (!saveOwnsKey(scope, ownKey, name)) continue
           const after = await ask<{ keys: StorableKey[] }>('/credential', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

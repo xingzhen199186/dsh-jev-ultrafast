@@ -36,7 +36,12 @@ export interface ActionSpace {
 }
 
 /** Snapshot action kinds that map to a model-chosen operation. */
-const OPERATIONS: Record<string, string> = { click: 'CLICK', fill: 'TYPE_TEXT', select: 'SELECT' }
+const OPERATIONS: Record<string, string> = {
+  click: 'CLICK',
+  fill: 'TYPE_TEXT',
+  select: 'SELECT',
+  press_key: 'PRESS_KEY',
+}
 
 /** Element fields the model is allowed to see. */
 const ELEMENT_FIELDS = ['role', 'value', 'checked', 'selected', 'expanded'] as const
@@ -86,6 +91,9 @@ export function actionSpace(actions: SnapshotAction[]): ActionSpace {
       target = `${index}:${element.options.length + 1}`
       element.options.push({ index: target, label: action.label, value: String(action.value ?? '') })
     }
+    // One key is one action on the same element, so the key has to be in the target key —
+    // otherwise the five keys of one field would all collide on the element's own index.
+    if (action.kind === 'press_key') target = `${index}:${String(action.key ?? '').toLowerCase()}`
     const group = (targets[operation] ??= {})
     group[target] = action
   }

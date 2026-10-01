@@ -257,3 +257,16 @@ export const SELF_SAVING_BLOCKS: readonly FieldGroupId[] = ['decision', 'text']
 export const fieldsOfBlock = (id: FieldGroupId): readonly FieldSpec[] =>
   FIELDS.filter((field) => field.group === id || (field.group === 'advanced' && field.section === id))
 
+/**
+ * Whether one save may write the credential called `name`.
+ *
+ * The same "exactly this set" rule as the fields, and for the same reason: 浏览器 and
+ * 任务 own no value box, so a save of theirs owns no credential at all. Without this a
+ * browser button carried every paste box on the page out with it — the block's own
+ * fields stayed scoped, but a key meant for 决策服务 or 文本模型 could be committed by a
+ * press that had nothing to do with it, under a name the reader was not looking at.
+ *
+ * No scope at all is the page's own 保存 at the bottom, which still writes every name.
+ */
+export const saveOwnsKey = (scope: FieldGroupId | undefined, ownKey: string | undefined, name: string): boolean =>
+  scope === undefined || (ownKey !== undefined && ownKey === name)

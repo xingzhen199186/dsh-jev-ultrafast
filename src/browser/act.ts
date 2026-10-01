@@ -31,6 +31,37 @@ export interface ActResult {
 /** Where the wheel lands. Upstream used one fixed point; scroll position is not a target. */
 export const WHEEL = { x: 550, y: 650 } as const
 
+/**
+ * The keys a field can be driven with, as CDP wants them spelled.
+ *
+ * They exist because a site's autocomplete list is often plain markup the snapshot cannot
+ * name: on 携程 the candidate rows never entered the element table, so the only way to pick
+ * one was the keyboard the page itself advertises.
+ */
+export const PRESS_KEYS: Record<string, { key: string; code: string; windowsVirtualKeyCode: number }> = {
+  enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 },
+  escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+  tab: { key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40 },
+  arrowup: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38 },
+}
+
+/**
+ * The CDP events for one named key: the press and then the release.
+ *
+ * A name outside the table is refused rather than quietly dropped, because a key that never
+ * lands is indistinguishable from a page that ignored the step.
+ */
+export function keyEvents(name: string): Array<Record<string, unknown>> {
+  const spec = PRESS_KEYS[name]
+  if (!spec) throw new Error(`不支持的按键：${name || '(未给出)'}；只支持 ${Object.keys(PRESS_KEYS).join('、')}`)
+  const params = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode }
+  return [
+    { type: 'keyDown', ...params },
+    { type: 'keyUp', ...params },
+  ]
+}
+
 /** Check freshness, execute, and record that a mutation just happened. */
 export async function act(
   session: BrowserPort,
@@ -84,6 +115,13 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
     })
     await session.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers })
     await session.call('Input.insertText', { text: text ?? '' })
+  }
+  if (action.kind === 'press_key') {
+    // The click above is what puts the focus on the observed element — a page's own popup
+    // list listens for keys on the field it hangs off, not on the document.
+    for (const params of keyEvents(String(action.key ?? ''))) {
+      await session.call('Input.dispatchKeyEvent', params)
+    }
   }
   return { executed: action.id }
 }
