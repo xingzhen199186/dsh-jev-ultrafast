@@ -798,7 +798,12 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
               createElement('input', {
                 type: 'password',
                 'aria-label': `${name} 的密钥值`,
-                autoComplete: 'off',
+                // `off` is ignored on a password field — browsers fill one from their own saved
+                // values regardless of it — so a value the browser remembers for this origin could
+                // appear in the box and then be stored by the next save as if the reader had typed
+                // it. `new-password` is the wording browsers do honour for "do not fill this".
+                // 2026-10-02: the OpenRouter cell was found holding a key nobody had pasted.
+                autoComplete: 'new-password',
                 spellCheck: false,
                 placeholder: '把密钥粘贴到这里',
                 style: S.keyInput,

@@ -9,7 +9,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, isCredentialRefName } from '@deepseek-ai/dsh-credentials'
-import { DECISION_PROVIDERS } from './decision/providers'
+import { DECISION_PROVIDERS, type DecisionKeyShape } from './decision/providers'
 import { TEXT_PROVIDERS } from './decision/text-providers'
 import type { KeyState } from './protocol'
 
@@ -105,10 +105,13 @@ export function storableNames(decisionKeyRef: string, textKeyRef: string): Stora
  * Store one value under a name, or remove it.
  *
  * The write goes to DSH's own credential file and is picked up by the very next
- * operation, so there is nothing to restart. Two refusals get the user's words
+ * operation, so there is nothing to restart. Three refusals get the user's words
  * rather than the store's: a read-only layer already supplying the name (the write
- * would appear to succeed while resolution kept returning the other value), and an
- * empty value (removal is the operation that means that).
+ * would appear to succeed while resolution kept returning the other value), an empty
+ * value (removal is the operation that means that), and a value whose shape is not the
+ * one the door owning that name declares — which is what keeps the other door's key, or
+ * one cut short by a half-finished paste, out of the file. A refusal never repeats the
+ * value it refused.
  *
  * The value is trimmed at its ends: keys pasted from a browser or a password
  * manager routinely arrive with a stray newline, and no key legitimately has one.
@@ -134,9 +137,62 @@ export async function changeKey(
   if (value.length === 0) {
     throw new Error('密钥不能是空的。想删掉它就点「清除」。')
   }
+  // A value that cannot be the key of the door owning this name is refused before the store is
+  // asked anything. The check is lenient by construction: a name no door declares a shape for
+  // saves exactly as it always has.
+  const declared = declaredShape(name)
+  if (declared !== undefined && !fitsShape(value, declared.shape)) {
+    throw new Error(shapeMismatchMessage(name, declared, value))
+  }
   const state = await describeKey(ctx, name)
   if (!state.writable) throw new Error(shadowedMessage(name, state.configured, credentialsFile))
   await ctx.credentials.set(ref, value)
+}
+
+/**
+ * The shape the door owning a name declares for its key, read from the door tables themselves.
+ *
+ * Nothing is restated here: a door that gains a shape in `providers.ts` gains this check with it,
+ * and the tables stay the one place a shape is ever written down. `undefined` means no door has
+ * anything to say about that name, which is the case for every name but OpenRouter's today.
+ */
+function declaredShape(name: string): { label: string; shape: DecisionKeyShape } | undefined {
+  const doors: readonly { keyRef: string; label: string; keyShape?: DecisionKeyShape }[] = [
+    ...DECISION_PROVIDERS,
+    ...TEXT_PROVIDERS,
+  ]
+  const spec = doors.find((door) => door.keyRef === name)
+  if (spec?.keyShape === undefined) return undefined
+  return { label: spec.label, shape: spec.keyShape }
+}
+
+/** Whether a value looks like the key a door describes: the same length, and the same opening. */
+function fitsShape(value: string, shape: DecisionKeyShape): boolean {
+  return value.length === shape.length && value.startsWith(shape.prefix)
+}
+
+/**
+ * Why a value was refused for its shape, and how to get past the refusal.
+ *
+ * It never repeats the refused value, nor any part of it. The only two things it says about what
+ * arrived are how many characters it had and whether it began with the expected prefix; between
+ * them a reader can tell "this is the other door's key" and "this paste lost its tail" apart
+ * without the value ever being handed back to anyone who can read the page.
+ */
+function shapeMismatchMessage(
+  name: string,
+  declared: { label: string; shape: DecisionKeyShape },
+  value: string,
+): string {
+  const { label, shape } = declared
+  const opening = value.startsWith(shape.prefix) ? '开头是对的，长度不对' : `开头也不是 ${shape.prefix}`
+  return (
+    `${name} 这次没有存：它看起来不是 ${label} 的密钥。` +
+    `${label} 的密钥是 ${shape.length} 个字符、以 ${shape.prefix} 开头；这次送来的值有 ${value.length} 个字符，${opening}。` +
+    `插件不会替你改这个值，也不会替你猜它是哪一家的。要存进去：如果这一格已经存着不对的值，先点它旁边的「清除」，` +
+    `再从 ${label} 重新复制一把完整的密钥贴进来；要是你手上的确是一把形状不同、但 ${label} 也认的钥匙，` +
+    `就把它的凭据名换成一个插件不认识的名字（在「高级设置」里改），那个名字不检查形状。`
+  )
 }
 
 /** Why a write was refused, in terms of what the user can do about it. */

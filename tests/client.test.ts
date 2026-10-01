@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
 import { BROWSER_CONNECTIONS, BROWSER_KINDS, BROWSER_LABELS } from '../src/browser/launch'
@@ -112,6 +113,20 @@ describe('settings page fields', () => {
       'textKeyRef',
       'textModel',
     ])
+  })
+
+  it('keeps the browser from filling the key box, in the wording it honours', () => {
+    // A password field ignores `autoComplete: 'off'` — browsers fill it from the values they have
+    // saved for this origin anyway — so a value nobody typed can appear in the box and then be
+    // written into the credential file by the next save. `new-password` is the wording that stops
+    // the fill. The page draws its own inputs inline, so the source is the only place to pin it;
+    // the window runs from the field's type to its handler, which is its whole props object.
+    const source = readFileSync(new URL('../src/client/index.ts', import.meta.url), 'utf8')
+    const from = source.indexOf("type: 'password'")
+    expect(from).toBeGreaterThan(-1)
+    const props = source.slice(from, source.indexOf('onChange', from))
+    expect(props).toContain("autoComplete: 'new-password'")
+    expect(source).not.toMatch(/autoComplete:\s*'off'/)
   })
 
   it('files every field under a declared block, and leaves no block empty', () => {

@@ -146,3 +146,89 @@ describe('changeKey', () => {
     expect(store.refs).toEqual([])
   })
 })
+
+/**
+ * The OpenRouter cell was found holding a 35-character `sk-3130b…` key that nobody had pasted there
+ * (2026-09-29, and again 2026-10-02), and the next run answered 401. The value can only have come
+ * from the box, so no code path is fixed by a check here alone — but a value that is not this door's
+ * key by length or by opening is refused rather than written, which is what turns that class of
+ * accident into a sentence the reader can act on instead of a silent 401 later.
+ *
+ * The shape is read from the door table, never copied: `DECLARED` below is what the guard is
+ * supposed to consult, so a table that gained or changed a shape moves these tests with it.
+ */
+describe('changeKey refuses a value whose shape is not the one the name declares', () => {
+  const DECLARED = DECISION_PROVIDERS.find((spec) => spec.keyRef === 'OPENROUTER_API_KEY')?.keyShape
+  /** The value the real incident left in the cell: 35 characters, `sk-3130b` in front. */
+  const STRAY = `sk-3130b${'x'.repeat(27)}`
+  /** A key of the declared shape: the prefix, then exactly as many characters as remain of the length. */
+  const FITTING = `${DECLARED?.prefix ?? ''}${'a'.repeat((DECLARED?.length ?? 0) - (DECLARED?.prefix.length ?? 0))}`
+
+  const refusal = async (
+    name: string,
+    value: string,
+  ): Promise<{ error: Error | undefined; store: ReturnType<typeof fakeStore> }> => {
+    const store = fakeStore({ configured: false, writable: true })
+    const error = await changeKey(store.ctx, name, { kind: 'store', value }, FILE).then(
+      () => undefined,
+      (failure: unknown) => failure as Error,
+    )
+    return { error, store }
+  }
+
+  it('takes the shape it enforces from the door table, not from a second copy of it', () => {
+    expect(DECLARED).toEqual({ length: 73, prefix: 'sk-or-v1-' })
+    expect(STRAY).toHaveLength(35)
+    expect(FITTING).toHaveLength(DECLARED?.length ?? 0)
+  })
+
+  it('refuses the stray value for OpenRouter, does not write it, and never repeats it', async () => {
+    const { error, store } = await refusal('OPENROUTER_API_KEY', STRAY)
+    expect(error?.message).toBeDefined()
+    expect(store.written).toEqual([])
+    // Refused before the store was asked anything: a shape that cannot belong is answered here.
+    expect(store.refs).toEqual([])
+    // The value must not reach the reader, not even its first characters.
+    expect(error?.message).not.toContain(STRAY)
+    expect(error?.message).not.toContain('sk-3130b')
+    expect(error?.message).not.toContain('3130')
+    // What it may say: what this door's key looks like, that this is not it, and how to get past.
+    expect(error?.message).toContain('OPENROUTER_API_KEY')
+    expect(error?.message).toContain('73')
+    expect(error?.message).toContain('sk-or-v1-')
+    expect(error?.message).toContain('35')
+    expect(error?.message).toMatch(/不是 OpenRouter 的密钥/)
+    expect(error?.message).toContain('清除')
+  })
+
+  it('refuses a paste that lost its tail, and says which half was wrong', async () => {
+    const cut = `${DECLARED?.prefix ?? ''}${'a'.repeat((DECLARED?.length ?? 0) - (DECLARED?.prefix.length ?? 0) - 2)}`
+    const { error, store } = await refusal('OPENROUTER_API_KEY', cut)
+    // The opening is right, so the sentence names the length rather than the prefix — the one
+    // judgement about the value the refusal is allowed to make.
+    expect(error?.message).toContain('开头是对的，长度不对')
+    expect(store.written).toEqual([])
+  })
+
+  it('stores a value of the declared shape', async () => {
+    const store = fakeStore({ configured: false, writable: true })
+    await changeKey(store.ctx, 'OPENROUTER_API_KEY', { kind: 'store', value: FITTING }, FILE)
+    expect(store.written).toEqual([FITTING])
+  })
+
+  it('stores under a name no door declares a shape for, exactly as before', async () => {
+    // TypeSafe's own door declares no shape, and a made-up custom name belongs to no table at all:
+    // both keep the permissive behaviour this function has always had.
+    for (const name of ['TYPESAFE_API_KEY', 'MY_ROUTE_KEY', 'DEEPSEEK_API_KEY']) {
+      const store = fakeStore({ configured: false, writable: true })
+      await changeKey(store.ctx, name, { kind: 'store', value: STRAY }, FILE)
+      expect(store.written, name).toEqual([STRAY])
+    }
+  })
+
+  it('clears a wrongly shaped value without arguing about its shape', async () => {
+    const store = fakeStore({ configured: true, source: 'file', writable: true })
+    await changeKey(store.ctx, 'OPENROUTER_API_KEY', { kind: 'clear' }, FILE)
+    expect(store.removed).toEqual(['OPENROUTER_API_KEY'])
+  })
+})
