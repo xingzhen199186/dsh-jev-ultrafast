@@ -662,7 +662,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         lostTargets += 1
         if (lostTargets > MAX_LOST_TARGETS) {
           status = 'failed'
-          reason = `页面在你选的元素前后自己刷新了，连续 ${MAX_LOST_TARGETS + 1} 次都没对上，这次先停下`
+          // The fact is only that the number the answer named is not in the table it was given —
+          // whether the page redrew under the answer or the number was never there is not something
+          // this branch can tell apart, so the sentence says what was seen and leaves the cause a
+          // possibility, the way the hint below does.
+          reason = `你选的编号在页面里找不到，页面可能自己刷新过，连续 ${MAX_LOST_TARGETS + 1} 次都没对上，这次先停下`
           break
         }
         hint = '你上次选的编号在页面里已经找不到了，页面可能自己刷新过，请重新选'
@@ -935,25 +939,38 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   )
   // The run's own last word goes into the trace too, so the file explains how it ended
   // without the reader having to match it against the conversation.
-  artifacts?.trace.write({
-    at: Date.now(),
-    kind: 'run',
-    status,
-    reason,
-    steps: history.length,
-    decisions: decisionCalls,
-    elapsed_ms: elapsedMs(),
-    // Only present when that is how it ended: what it was repeating, and how often.
-    ...(stuckOn ? { stuck_on: stuckOn } : {}),
-    // Likewise: what the service said on the steps it was not sure about, and whether the two
-    // answers it gave agreed.
-    ...(reasks.length > 0 ? { reasks } : {}),
-    // And the dead ends the run judged for itself: which elements, at which step, and whether they
-    // were taken out of the candidates or only written down.
-    ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
-    // Likewise: how many pages it opened in a window it stayed away from, when there were any.
-    ...(unfollowedTabs > 0 ? { unfollowed_tabs: unfollowedTabs } : {}),
-  })
+  //
+  // Three of its fields are text this plugin did not write. `reason` is an error message on a
+  // failed run, and a service's own words ride inside it (`decision/typesafe.ts` puts the
+  // server's reply in, `decision/text-helper.ts` the vendor's message). `stuck_on.action` and
+  // `dead_ends[].label` are the page's own wording, and a link's label is often the address it
+  // points at. Either one can be a login callback's address, whose `?code=…` is the credential
+  // it carries, and this is a bare write with no request or response body to be made safe on
+  // the way past — so the whole record goes through `recordable`, the rule the step record
+  // above and every exchange body already pass. Whole record rather than the three fields, so
+  // a field added here later cannot quietly arrive unredacted; the shape and the names are
+  // exactly what they were.
+  artifacts?.trace.write(
+    recordable({
+      at: Date.now(),
+      kind: 'run',
+      status,
+      reason,
+      steps: history.length,
+      decisions: decisionCalls,
+      elapsed_ms: elapsedMs(),
+      // Only present when that is how it ended: what it was repeating, and how often.
+      ...(stuckOn ? { stuck_on: stuckOn } : {}),
+      // Likewise: what the service said on the steps it was not sure about, and whether the two
+      // answers it gave agreed.
+      ...(reasks.length > 0 ? { reasks } : {}),
+      // And the dead ends the run judged for itself: which elements, at which step, and whether they
+      // were taken out of the candidates or only written down.
+      ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
+      // Likewise: how many pages it opened in a window it stayed away from, when there were any.
+      ...(unfollowedTabs > 0 ? { unfollowed_tabs: unfollowedTabs } : {}),
+    }) as Record<string, unknown>,
+  )
   artifacts?.finish(elapsedMs())
   return {
     goal: options.goal,

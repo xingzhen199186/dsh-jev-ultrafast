@@ -52,7 +52,11 @@ function fakeRun(): string {
     [
       JSON.stringify({ at: 1700000000000, kind: 'decision', url: 'https://x.test/v1', status: 200, attempt: 0, took_ms: 800 }),
       JSON.stringify({ at: 1700000000500, kind: 'text', door: 'preset', url: 'https://t.test/v1', status: 200, took_ms: 300 }),
-      JSON.stringify({ at: 1700000001500, kind: 'run', status: 'done', reason: '', steps: 1, decisions: 2, elapsed_ms: 1500 }),
+      // A step that opened a window, once without the run moving onto it and once with — the two
+      // cases the tab record is written for.
+      JSON.stringify({ at: 1700000000800, kind: 'follow', step: 1, new_tabs: ['https://ads.test/popup'], followed_tab: null }),
+      JSON.stringify({ at: 1700000001200, kind: 'follow', step: 2, new_tabs: ['https://example.test/two'], followed_tab: 'https://example.test/two' }),
+      JSON.stringify({ at: 1700000001500, kind: 'run', status: 'done', reason: '', steps: 2, decisions: 3, elapsed_ms: 1500 }),
     ].join('\n') + '\n',
   )
   return dir
@@ -153,12 +157,17 @@ describe('the inspector page', () => {
 
     const run = JSON.parse((await ask(`/run?run=${RUN}`)).body)
     expect(run.frames.map((frame: { file: string }) => frame.file)).toEqual(['000000.jpg', '001500.jpg'])
-    expect(run.trace).toHaveLength(3)
+    expect(run.trace).toHaveLength(5)
     // Each line is a sentence about one real round trip; the raw record stays next to it.
     expect(run.trace[0].line).toContain('决策请求 → HTTP 200')
     expect(run.trace[0].raw.kind).toBe('decision')
     expect(run.trace[1].line).toContain('文本模型请求（预设供应商）')
-    expect(run.trace[2].line).toContain('本次运行结束：done')
+    // The tab record is a kind of its own, and a reader gets a sentence for it rather than the raw
+    // record: which step opened a window, and whether the run went there.
+    expect(run.trace[2].line).toContain('第 1 步开出了新页面：没有跟过去')
+    expect(run.trace[2].line).not.toContain('new_tabs')
+    expect(run.trace[3].line).toContain('第 2 步开出了新页面：跟过去了')
+    expect(run.trace[4].line).toContain('本次运行结束：done')
 
     const frame = await ask(`/frame?run=${RUN}&file=001500.jpg`)
     expect(frame.status).toBe(200)

@@ -487,5 +487,12 @@ function describeRecord(record: Record<string, unknown>): string {
       record.decisions,
     )} 次决策，共 ${seconds} 秒${record.reason ? `（${String(record.reason)}）` : ''}`
   }
+  if (record.kind === 'follow') {
+    // Which pages a step opened, and whether the run moved onto one of them, is what the tab
+    // record is for — a click whose effect lands elsewhere leaves the page it was made on
+    // saying nothing about it.
+    const followed = record.followed_tab ? '跟过去了' : '没有跟过去'
+    return `${prefix}第 ${String(record.step)} 步开出了新页面：${followed}`
+  }
   return `${prefix}${JSON.stringify(record).slice(0, 160)}`
 }

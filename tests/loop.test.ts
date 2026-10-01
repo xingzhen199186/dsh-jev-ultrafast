@@ -831,7 +831,11 @@ describe('run loop', () => {
     const result = await run(h.deps)
 
     expect(result.status).toBe('failed')
-    expect(result.reason).toBe('页面在你选的元素前后自己刷新了，连续 3 次都没对上，这次先停下')
+    // The evidence this branch has is only that the chosen number is not in the table it was
+    // given; a page that redrew and an answer that named a number never there look the same from
+    // here, so the sentence says what was seen and keeps the cause a possibility.
+    expect(result.reason).toBe('你选的编号在页面里找不到，页面可能自己刷新过，连续 3 次都没对上，这次先停下')
+    expect(result.reason).not.toContain('页面自己刷新了')
     expect(result.decisions).toBe(3)
     expect(h.seen.executed).toHaveLength(0)
     expect(h.seen.closed).toBe(true)
@@ -1052,6 +1056,131 @@ describe('run loop', () => {
         new_tabs: ['https://ads.test/cb?code=REDACTED&state=keep'],
         followed_tab: null,
       })
+      expect(written).not.toContain('abc123')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('scrubs a failure sentence of the address it carries, the way every other trace write does', async () => {
+    // `reason` is what a failed run stopped for, and another party's words ride inside it:
+    // `decision/typesafe.ts` puts the server's reply into its sentence and `decision/text-helper.ts`
+    // the vendor's message, so an address — and an address is where a credential hides — can arrive
+    // there. The run record is a bare write with no request or response body to be made safe on the
+    // way past, so the whole record goes through `recordable`, like the step record above.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: ['e1'],
+      execute: () => {
+        throw new Error('文本模型返回 HTTP 401（服务端原话：https://vendor.test/auth?token=abc123&state=keep）')
+      },
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      // The sentence the run reports is the failure's own, word for word: this is about the file,
+      // not about the report the caller gets.
+      expect(result.reason).toBe(
+        '文本模型返回 HTTP 401（服务端原话：https://vendor.test/auth?token=abc123&state=keep）',
+      )
+
+      const written = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+      const run1 = written
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .find((record) => record.kind === 'run')
+      expect(run1).toMatchObject({ kind: 'run', status: 'failed' })
+      expect(run1.reason).toBe(
+        '文本模型返回 HTTP 401（服务端原话：https://vendor.test/auth?token=REDACTED&state=keep）',
+      )
+      // Read as raw text as well as parsed, because a credential in the file is a credential
+      // whatever shape it is in.
+      expect(written).not.toContain('abc123')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('scrubs the page s own words out of a dead end the run judged', async () => {
+    // The other text of the run record the plugin did not write is the page's: a dead end is kept
+    // with what the element was called when it was judged, and a link's label is often the address
+    // it points at. A page that appears can be the login callback whose address holds the code that
+    // proves the login (`?code=…`) — the same address the step record above carries. The report the
+    // run hands back keeps the page's own words; the file is the copy made safe.
+    const link = button('e1', 1, 'https://site.test/cb?code=abc123&state=keep')
+    const crowd = [
+      link,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 2}`, at + 2, `Option ${at + 1}`)),
+    ]
+    const h = harness({
+      // The same address and the same table on every look: the click moved nothing, which is what
+      // makes the element a dead end, and three such steps are the run's own stop.
+      pages: Array.from({ length: 4 }, (_unused, index) => pageState(`t${index}`, { actions: crowd })),
+      choices: ['e1', 'e1', 'e1'],
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.deadEnds).toEqual([
+        { step: 1, element: '1', target: '1', label: 'https://site.test/cb?code=abc123&state=keep' },
+      ])
+
+      const written = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+      const run1 = written
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .find((record) => record.kind === 'run')
+      expect(run1.dead_ends).toEqual([
+        { step: 1, element: '1', target: '1', label: 'https://site.test/cb?code=REDACTED&state=keep' },
+      ])
+      expect(written).not.toContain('abc123')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('scrubs the page s own words out of the action the run got stuck on', async () => {
+    // The same wording in the other field the run record takes from the page: `stuck_on.action` is
+    // the label of the element the run kept repeating. It is a bare write like the dead end record
+    // above, so the whole record goes through `recordable`.
+    const link = button('e1', 1, 'https://site.test/cb?code=abc123&state=keep')
+    const crowd = [
+      link,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 2}`, at + 2, `Option ${at + 1}`)),
+    ]
+    const states = ['w1', 'w2', 'w3']
+    const h = harness({
+      // A page that keeps coming round to the states it has already shown, the way the run this
+      // rule was written for did, with the link standing at the number the run keeps choosing.
+      pages: [
+        pageState('t0', { actions: crowd }),
+        ...Array.from({ length: 12 }, (_unused, index) =>
+          pageState(states[index % 3]!, { actions: [...crowd, button('e9', 9, states[index % 3]!)] }),
+        ),
+      ],
+      choices: Array.from({ length: 12 }, () => 'e1'),
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.status).toBe('blocked')
+
+      const written = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+      const run1 = written
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .find((record) => record.kind === 'run')
+      expect(run1.stuck_on).toEqual({
+        operation: 'CLICK',
+        target: '1',
+        action: 'https://site.test/cb?code=REDACTED&state=keep',
+        times: 6,
+      })
+      // The sentence beside it quotes the same label, so it is covered by the same pass.
+      expect(String(run1.reason)).toContain('https://site.test/cb?code=REDACTED&state=keep')
       expect(written).not.toContain('abc123')
     } finally {
       rmSync(result.recordDir, { recursive: true, force: true })
