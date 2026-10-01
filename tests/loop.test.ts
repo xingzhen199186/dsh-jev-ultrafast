@@ -517,9 +517,11 @@ describe('run loop', () => {
   it('takes a dead end out of the next request when the removal is on', async () => {
     // The same carousel, on a page with enough elements to leave the floor room: the click moved
     // nothing a reader would call the screen — the controls and the address stood still while the
-    // page rewrote its own text — so the element the step acted on comes out of the table the next
-    // request is built from and is nowhere in it. The model is not told to avoid it; it simply is
-    // not offered it, and the run does not steer what it picks instead.
+    // page rewrote its own text — so the element the step acted on comes out of the questions the
+    // next request is built from. The model is not told to avoid it; it is simply not offered it, and
+    // the run does not steer what it picks instead. The element table itself is untouched: the page's
+    // own structure is what the model reads the screen from, and only the question decides what is
+    // chosen (see `withoutElements`).
     const crowd = [
       ...actions,
       ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
@@ -532,12 +534,26 @@ describe('run loop', () => {
 
     expect(result.status).toBe('blocked')
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
-    // The page itself is untouched — the element is still there to act on — while the table handed
-    // over is not: the first request carries the page whole, and every request after the step does not.
-    expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
-    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
-    expect(h.seen.spaces[2]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
+    // Every request carries the page's own table, whole — first request and all the ones after the step.
+    const whole = ['1', '2', '3', '4', '5', '6', '7']
+    expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toEqual(whole)
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(whole)
+    expect(h.seen.spaces[2]!.elements.map((element) => element.index)).toEqual(whole)
+    // What changed is the question: element 1 is nowhere among the candidates, and the rest are.
     expect(h.seen.spaces[1]!.targets.CLICK!['1']).toBeUndefined()
+    expect(h.seen.spaces[2]!.targets.CLICK!['1']).toBeUndefined()
+    expect(Object.keys(h.seen.spaces[2]!.targets.CLICK!)).toEqual(['3', '4', '5', '6', '7'])
+    // Read back the way the run read it: the number is in the table and in no criterion, so the body
+    // the service receives names it exactly once, where it describes the page rather than the choice.
+    const { request } = buildQuestionnaire(h.seen.spaces[2]!, h.seen.contexts[2]!, decision.model)
+    expect(JSON.stringify(request)).toContain('"index":"1"')
+    expect(JSON.stringify(request.questions)).not.toMatch(/"1(:[^"]*)?"\s*:/)
+    // And the exclusion is not counted as elements left out: nothing left the table, so the service is
+    // not told it is reading a selection, and what the run reports still adds up to the page's own two
+    // numbers — sent plus omitted.
+    expect(h.seen.contexts[2]!.omittedElements).toBeUndefined()
+    expect(result.omittedElements).toBe(0)
+    expect(result.sentElements + result.omittedElements).toBe(whole.length)
     expect(result.elements.map((element) => element.index)).toContain('1')
   })
 
@@ -558,10 +574,12 @@ describe('run loop', () => {
     const result = await run(h.deps, { excludeDeadEndElements: true })
 
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+    // Set aside for a step, not forbidden: the element is still in the table the next request carries,
+    // and only the one question that offered it went with the candidate.
     expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toContain('2')
-    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).not.toContain('2')
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toContain('2')
     expect(h.seen.spaces[1]!.targets.TYPE_TEXT).toBeUndefined()
-    // Set aside for a step, not forbidden: the page still offers it, and the model already answered.
+    // The page still offers it, and the model already answered.
     expect(h.seen.executed.map((action) => action.id)).toEqual(['e2', 'e2', 'e2'])
     // The judgement that took it away is reported as well, not only acted on.
     expect(result.deadEndsExcluded).toBe(true)
@@ -589,7 +607,8 @@ describe('run loop', () => {
     const result = await run(h.deps, { excludeDeadEndElements: settings.excludeDeadEndElements })
 
     expect(result.deadEndsExcluded).toBe(true)
-    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+    expect(h.seen.spaces[1]!.targets.CLICK!['1']).toBeUndefined()
   })
 
   it('counts a step as a change when the element table moves, the text standing still', async () => {

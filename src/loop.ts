@@ -442,14 +442,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         })
       }
       deadEnds = judged
-      // Taken out of the table itself, before the cap and the request budget below read it, so the
-      // room one request has is never spent on an element the run has already ruled out. Which
-      // elements they are is never said — they are simply not there — while how many of the page's
-      // own elements they account for joins the count below, because that count is what tells the
-      // service it is reading a selection of the page rather than the whole of it. With the removal
+      // Taken out of the questions before the cap and the request budget below read the table, so the
+      // room one request has is never spent on a candidate the run has already ruled out. Only the
+      // candidates go: the element entries stay, because the page's own structure is what the model
+      // reads the screen from, and the comparison behind this rule found the question to be the half
+      // that decides whether the number is chosen (see `withoutElements`). Which elements they are is
+      // never said — they are simply not offered — and they are not counted as left out either: the
+      // table still carries every element the page had, so the count below is the cap's own arithmetic
+      // and `sentElements + omittedElements` is still the page's own element count. With the removal
       // off, nothing is taken away at all and the request is the page's own table.
       const live = excludeDeadEnds ? withoutElements(full, deadEnds) : full
-      const dead = full.elements.length - live.elements.length
       const recent = history.map((entry) => entry.target)
       // Fixed while the table is cut, so the request measured below is the request that is sent.
       const viewed = page
@@ -472,7 +474,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // that is sent is sent whole.
       while (
         limit > 1 &&
-        requestChars(trimmed.space, contextFor(trimmed.omitted + dead), decisionSource.model) > MAX_REQUEST_CHARS
+        requestChars(trimmed.space, contextFor(trimmed.omitted), decisionSource.model) > MAX_REQUEST_CHARS
       ) {
         limit -= 4
         trimmed = trimActionSpace(live, options.goal, recent, limit)
@@ -481,11 +483,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // Kept for the run's own report, so a reader can see that the last page the run decided on was
       // bigger than one request could carry instead of having to take it on trust.
       sentElements = space.elements.length
-      omittedElements = omitted + dead
+      omittedElements = omitted
       textCut = textLeftOut(viewed.text)
       // Built once because the same question may be asked twice: a re-ask is the same request
       // against the same page, not a new one.
-      const asked = contextFor(omitted + dead)
+      const asked = contextFor(omitted)
       // One asking of the question. An answer the decision layer refuses to hand over — a
       // distribution whose stated winner is not its most probable choice, a field the service left
       // out — is neither a crash nor a page failure: it is the same "ask once more" as a confidence

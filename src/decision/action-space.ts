@@ -167,33 +167,40 @@ export function trimActionSpace(
 }
 
 /**
- * The same table with the named elements taken out of it — the element entries, and every target key
- * that belongs to them, so `7`, `7:2` and `7:enter` all leave together.
+ * The same table with the named elements taken out of every question that offers one as a candidate —
+ * the target keys, so `7`, `7:2` and `7:enter` all leave together. The element entries stay.
  *
- * What decides the set is in `../dead-ends.ts`. What matters here is that it is applied to the whole
- * table rather than to the element list: a request that carried an element's label but dropped it
- * from the question asked about it is the failure this exists to prevent — the run then reads back
- * an answer naming the number it took out, and acts on it. An operation whose every candidate went
- * with them is not offered at all, for the reason `trimActionSpace` drops one: a question with no
- * choices is one the service has no answer to.
+ * That the entries stay is the point rather than an oversight, and the offline comparison behind this
+ * rule (2026-10, ten runs on each of two frames, replayed byte for byte) measured the two halves apart
+ * rather than together as the earlier round had. With the entry cut and the candidate left in, 15 of
+ * 15 answers still named the number and 3 acted on it; with the entry kept and the candidate cut, 10
+ * of 10 runs stopped choosing it, not one named it, and the model went and chose something else. The
+ * entry is what tells the model what the screen is made of, and cutting it bought nothing — what
+ * decides whether a number is chosen is the question that offers it.
+ *
+ * What decides the set is in `../dead-ends.ts`. An operation whose every candidate went with them is
+ * not offered at all, for the reason `trimActionSpace` drops one: a question with no choices is one
+ * the service has no answer to, and an offered operation with an empty target list would leave the
+ * chosen action without a target.
  *
  * The same object comes back when nothing was named or nothing matched, so a caller that reads
  * identity — a re-ask of the same question, for one — sees the table it already had.
  */
 export function withoutElements(space: ActionSpace, excluded: ReadonlySet<string>): ActionSpace {
   if (excluded.size === 0) return space
-  const elements = space.elements.filter((element) => !excluded.has(element.index))
-  if (elements.length === space.elements.length) return space
 
   const targets: Record<string, Record<string, SnapshotAction>> = {}
+  let cut = false
   for (const [operation, group] of Object.entries(space.targets)) {
     const survivors: Record<string, SnapshotAction> = {}
     for (const [target, action] of Object.entries(group)) {
-      if (!excluded.has(elementIndexOf(target))) survivors[target] = action
+      if (excluded.has(elementIndexOf(target))) cut = true
+      else survivors[target] = action
     }
     if (Object.keys(survivors).length > 0) targets[operation] = survivors
   }
-  return { elements, targets, controls: space.controls }
+  if (!cut) return space
+  return { elements: space.elements, targets, controls: space.controls }
 }
 
 /** The element a target key belongs to: `7`, `7:2` and `7:enter` are all element `7`. */

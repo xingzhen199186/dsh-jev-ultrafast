@@ -336,7 +336,7 @@ describe('what the reader is told afterwards', () => {
     expect(kept).toContain('第 2 步的 [4]「搜索」')
 
     const removed = summaryText(result({ deadEnds: judged, deadEndsExcluded: true }), 'https://example.test')
-    expect(removed).toContain('本次识别到 1 个死路（已排除，不再交给决策服务）')
+    expect(removed).toContain('本次识别到 1 个死路（已排除，不再列为候选）')
 
     // A run that judged none says nothing about them, which is the ordinary run.
     expect(summaryText(result(), 'https://example.test')).not.toContain('死路')

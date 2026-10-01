@@ -8,25 +8,27 @@
  * element is a dead end. A step that really changed the screen empties the set, and the run starts
  * over from the page it landed on.
  *
- * Whether a dead end then comes out of the candidate table is the setting's business rather than this
+ * Whether a dead end then comes out of the candidates is the setting's business rather than this
  * judgement's. `excludeDeadEndElements` is off by default, and while it is off the run judges and
  * writes the dead ends down without taking anything away (see `deadEndNote`, and `TaskResult.deadEnds`
  * in `./loop.ts`). It is off because the test behind the judgement — the address and the element table
  * both standing still — is much weaker than the removal it would feed: a step that showed nothing is
- * not proof that the element can never matter, and taking away the one element that did costs the run
- * more than leaving a dead end in the table for a few steps, which the stopping rules already catch.
- * That is also why the judgement is recorded either way: it is the thing a reader has to be able to
- * check before the removal is ever turned on.
+ * not proof that the element can never matter, and cutting the one candidate that did costs the run
+ * more than leaving a dead end among the candidates for a few steps, which the stopping rules already
+ * catch. That is also why the judgement is recorded either way: it is the thing a reader has to be able
+ * to check before the removal is ever turned on.
  *
  * This is the plugin's own decision rather than a sentence to the model because two sets of offline
- * experiments said so (2026-10, four rounds). Telling the service in words not to repeat itself
- * changed nothing — 15 runs of 15, whether the rule was written into the next-step rules or the
- * honest "nothing moved" fact was put in the state, and the run kept picking the element it had just
- * wasted a step on. A straight, unconditional sentence does bind, but only for the question it sits
- * in: the run changed its operation and picked the same element again. Taking the element out of the
- * candidate table is what worked — 5 runs of 5 stopped choosing it — and only when the number left
- * *every* copy of the table: with just the element list cut, 15 of 20 answers still named it and 3 of
- * them acted on it as the live target. Taking the copies out together is what `withoutElements` does.
+ * experiments said so (2026-10). Telling the service in words not to repeat itself changed nothing —
+ * 15 runs of 15, whether the rule was written into the next-step rules or the honest "nothing moved"
+ * fact was put in the state, and the run kept picking the element it had just wasted a step on. A
+ * straight, unconditional sentence does bind, but only for the question it sits in: the run changed
+ * its operation and picked the same element again. What works is taking the number out of the
+ * questions that offer it: 5 runs of 5 and then 10 of 10 stopped choosing it, with no answer naming it
+ * at all. The element *entry* is not what has to go, which the second round measured by itself: with
+ * the entry cut and the candidate left in, 15 of 15 answers still named the number and 3 acted on it,
+ * while with the entry kept and the candidate cut, 10 of 10 runs chose something else. Cutting the
+ * questions is what `withoutElements` does.
  *
  * Two things this rule deliberately is not:
  *
@@ -119,6 +121,6 @@ export function deadEndNote(deadEnds: readonly DeadEndRecord[], excluded: boolea
     .join('、')
   return (
     `本次识别到 ${deadEnds.length} 个死路` +
-    `（${excluded ? '已排除，不再交给决策服务' : '未排除，仍照原样交给决策服务'}）：${where}`
+    `（${excluded ? '已排除，不再列为候选' : '未排除，仍照原样交给决策服务'}）：${where}`
   )
 }

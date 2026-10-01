@@ -6,8 +6,9 @@ import type { DecisionContext } from '../src/decision/typesafe'
 import { buildQuestionnaire } from '../src/decision/typesafe'
 
 /**
- * The dead ends the run keeps out of the candidate table, and the one thing that has to be true of
- * the request it builds from it: the number that was taken out is nowhere in it, in any copy.
+ * The dead ends the run keeps out of the questions that offer candidates, and the one thing that has
+ * to be true of the request it builds from it: the number is still in the element table and is nowhere
+ * among the criteria, in any question.
  *
  * Why this rule exists at all, and why a sentence to the model is not the way to do it, is written
  * down in `src/dead-ends.ts`; these tests pin the judgement itself and the removal it feeds.
@@ -103,7 +104,7 @@ describe('what a run says about the dead ends it judged', () => {
 
   it('says the same count when they were taken out', () => {
     expect(deadEndNote(judged, true)).toBe(
-      '本次识别到 2 个死路（已排除，不再交给决策服务）：第 2 步的 [4]「Search」、第 3 步的 [5]',
+      '本次识别到 2 个死路（已排除，不再列为候选）：第 2 步的 [4]「Search」、第 3 步的 [5]',
     )
   })
 
@@ -143,10 +144,10 @@ const bodyOf = (excluded: ReadonlySet<string>): string =>
   JSON.stringify(buildQuestionnaire(withoutElements(actionSpace(observed), excluded), context, 'jev-latest').request)
 
 describe('the table a request is built from', () => {
-  it('takes a whole element out of every operation, not only out of the element list', () => {
+  it('takes the element out of every operation and leaves the element list whole', () => {
     const live = withoutElements(actionSpace(observed), new Set(['3']))
 
-    expect(live.elements.map((element) => element.index)).toEqual(['1', '2'])
+    expect(live.elements.map((element) => element.index)).toEqual(['1', '2', '3'])
     expect(Object.keys(live.targets.CLICK!)).toEqual(['1', '2'])
     expect(Object.keys(live.targets.TYPE_TEXT!)).toEqual(['2'])
     expect(Object.keys(live.targets.PRESS_KEY!)).toEqual(['2:enter'])
@@ -156,11 +157,12 @@ describe('the table a request is built from', () => {
 
   it('does not offer an operation whose every candidate went with the element', () => {
     // Node 2 removed from the page, so element 2 is the only one that can be typed into, pressed a
-    // key on or selected from: taking it out has to take those three questions with it rather than
-    // leave questions with no choices in them.
+    // key on or selected from: taking it out of the questions has to take those three questions with
+    // it rather than leave questions with no choices in them. The element itself is still listed.
     const only = actionSpace(observed.filter((action) => action.node !== 2))
     const live = withoutElements(only, new Set(['2']))
 
+    expect(live.elements.map((element) => element.index)).toEqual(['1', '2'])
     expect(Object.keys(live.targets.CLICK!)).toEqual(['1'])
     expect(live.targets.TYPE_TEXT).toBeUndefined()
     expect(live.targets.PRESS_KEY).toBeUndefined()
@@ -174,8 +176,8 @@ describe('the table a request is built from', () => {
     expect(withoutElements(space, new Set(['99']))).toBe(space)
   })
 
-  it('leaves no trace of the number it took out, in the element list or in any question', () => {
-    // What the number looks like when it is still there, so the assertions below are known to be
+  it('keeps the number in the element list and leaves it in no question at all', () => {
+    // What the number looks like when it is still offered, so the assertions below are known to be
     // about this page rather than passing on a request that never had it.
     const whole = bodyOf(new Set())
     expect(whole).toContain('"index":"3"')
@@ -186,9 +188,14 @@ describe('the table a request is built from', () => {
     const { request } = buildQuestionnaire(withoutElements(actionSpace(observed), new Set(['3'])), context, 'jev-latest')
     const body = JSON.stringify(request)
 
-    // The element list, and all four questions that name targets, are read one by one...
+    // The element list is the page's own, so the number is still in it — once, where it belongs...
     const table = (request.state as { elements: Array<{ index: string }> }).elements
-    expect(table.map((element) => element.index)).toEqual(['1', '2'])
+    expect(table.map((element) => element.index)).toEqual(['1', '2', '3'])
+    expect(body.split('"index":"3"')).toHaveLength(2)
+    // ...and nowhere else as a key: a criterion is written `"3":` or `"3:enter":`, and no entry in
+    // the element table ever writes one, so the whole body may be searched as one string.
+    expect(body).not.toMatch(/"3(:[^"]*)?"\s*:/)
+    // Read one by one as well, so a failure says which question still offers it.
     const questions = request.questions as Record<string, { criteria: Record<string, unknown> }>
     expect(Object.keys(questions)).toEqual([
       'operation',
@@ -203,11 +210,14 @@ describe('the table a request is built from', () => {
         expect(key === '3' || key.startsWith('3:'), `${name} still offers ${key}`).toBe(false)
       }
     }
-    // ...and then the body as one string, which is where a copy someone forgot would show up.
-    expect(body).not.toContain('"index":"3"')
-    expect(body).not.toMatch(/"3(:[^"]*)?"\s*:/)
-    expect(body).not.toContain('Open Arrive')
-    expect(body).not.toContain('Cabin → Business')
-    expect(body).not.toContain('Arrive → Enter')
+    // And then the questions as one string, where the labels only a candidate carried are gone too.
+    const questionText = JSON.stringify(request.questions)
+    expect(questionText).not.toMatch(/"3(:[^"]*)?"\s*:/)
+    expect(questionText).not.toContain('Open Arrive')
+    expect(questionText).not.toContain('Cabin → Business')
+    expect(questionText).not.toContain('Arrive → Enter')
+    // The labels do stay where the element table carries them, so the check above is about the
+    // questions rather than about the page being gone.
+    expect(body).toContain('Open Arrive')
   })
 })
