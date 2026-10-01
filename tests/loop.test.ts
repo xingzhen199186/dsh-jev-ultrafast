@@ -206,7 +206,9 @@ function run(
 describe('run loop', () => {
   it('runs actions until the decision says DONE', async () => {
     const h = harness({
-      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      // The screen the first step lands on is a different screen by the same test the stopping
+      // rules use — the address — so the step really is reported as a change.
+      pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/results' }), pageState('f2')],
       choices: ['e1', 'e2', 'DONE'],
     })
     const result = await run(h.deps)
@@ -420,13 +422,14 @@ describe('run loop', () => {
     }
   })
 
-  it('stops a repeated action even when the page text changes on every step', async () => {
+  it('reads a page whose text churns under a carousel as one screen, and says so to the service', async () => {
     // The 携程 home page of 2026-10: the banner carousel rewrote the body on every paint, so the
     // page's text — and with it the whole-page fingerprint — was a different string on every step,
     // while the screen a reader would call "the same screen" never moved: the controls and the
-    // address stayed put. Judged on the text, the run came back to a state it had never shown 31
-    // times in a row and this rule never fired. Judged on the element table and the address, the
-    // window closes on the sixth step, which is what it was written to stop on.
+    // address stayed put. The step report, judged on that text, said `true` on every step, which
+    // told the decision service that the click it had chosen was making progress while nothing
+    // moved — and that is how the run came to click one and the same field 31 times. Judged on the
+    // element table and the address, no step here is a change, and that is what the service is told.
     const frames = Array.from({ length: 12 }, (_unused, index) =>
       pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧` }),
     )
@@ -436,14 +439,43 @@ describe('run loop', () => {
     })
     const result = await run(h.deps)
 
+    // Read back from the requests themselves, not only from the run's own history: the fact the
+    // service is given is the one this change is about. Every step of this run is a step the service
+    // was told nothing had moved on, though the page text was a new string every time.
+    expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: false })
+    expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+    // Three steps with nothing moving is the run's own stop, and this page — which the run kept
+    // coming back to without ever leaving it — is now seen for what it is.
     expect(result.status).toBe('blocked')
-    expect(result.steps).toBe(6)
-    expect(result.reason).toBe(
-      '同一个动作连着做了 6 次、页面只是在几个老样子之间打转，先停下——它卡在这个动作上了：CLICK 目标 1「Search」',
-    )
-    // The step's own report is untouched by the narrower state: the whole-page fingerprint really
-    // did move, and that is still what `page_changed` says.
+    expect(result.steps).toBe(3)
+    expect(result.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
+  })
+
+  it('counts a step as a change when the element table moves, the text standing still', async () => {
+    // The other half of the same test: the screen the run landed on offers a control the page it
+    // came from did not, and the table is what says so — the page's own text never moved.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1', { actions: [...actions, button('e9', 9, 'Saved searches')] })],
+      choices: ['e1', 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
     expect(result.history[0]).toMatchObject({ page_changed: true })
+    expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: true })
+  })
+
+  it('counts a step as a change when only the address moves, the table standing still', async () => {
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/next' })],
+      choices: ['e1', 'DONE'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.history[0]).toMatchObject({ page_changed: true, url: 'https://example.test/next' })
+    expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: true })
   })
 
   it('does not stop when the element table keeps producing a state the run has not shown', async () => {
@@ -482,31 +514,41 @@ describe('run loop', () => {
     expect(result.steps).toBe(9)
   })
 
-  it('stops on the sixth repeat and not on the fifth', async () => {
-    // The threshold, pinned where it has always been: five repeats are still allowed to be a slow
-    // run, the sixth is the run going round in circles. The screens are the carousel's — only the
-    // text moves — which is exactly the page that used to hold this rule off for good.
+  it('stops on the sixth repeat in the window and not on the fifth', async () => {
+    // The threshold, pinned where it has always been: five repeats are still allowed to be a slow run,
+    // the sixth is the run going round in circles. The address stands still and the text churns under
+    // the carousel, while the table cycles between two states a reader can tell apart — so every step
+    // really does move the page, which is the page that used to hold this rule off for good. The step
+    // report is a change on every step here, so the rule below, which counts steps that changed
+    // nothing, never fires: the stop is this rule's own.
     const frames = (count: number): PageState[] =>
       Array.from({ length: count }, (_unused, index) =>
-        pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧` }),
+        pageState(`t${index + 1}`, {
+          text: `广告轮播第 ${index + 1} 帧`,
+          actions: [...actions, button('e9', 9, index % 2 === 0 ? 'Page one' : 'Page two')],
+        }),
       )
 
-    const five = await run(
+    // Seven frames: the sixth step's window holds five replays of states already shown, which is
+    // still allowed, and the run ends on the answer it was given.
+    const fiveRepeats = await run(
       harness({
-        pages: [pageState('t0'), ...frames(5)],
-        choices: [...Array.from({ length: 5 }, () => 'e1'), 'DONE'],
+        pages: [pageState('t0'), ...frames(7)],
+        choices: [...Array.from({ length: 7 }, () => 'e1'), 'DONE'],
       }).deps,
     )
-    expect(five.status).toBe('done')
-    expect(five.reason).toBe('')
-    expect(five.steps).toBe(5)
+    expect(fiveRepeats.status).toBe('done')
+    expect(fiveRepeats.reason).toBe('')
+    expect(fiveRepeats.steps).toBe(7)
 
-    const six = await run(
-      harness({ pages: [pageState('t0'), ...frames(6)], choices: Array.from({ length: 6 }, () => 'e1') }).deps,
+    // Eight frames: the window is six replays wide and one and the same control was used for all of
+    // them, so the run stops on the sentence this rule has always written.
+    const sixRepeats = await run(
+      harness({ pages: [pageState('t0'), ...frames(8)], choices: Array.from({ length: 8 }, () => 'e1') }).deps,
     )
-    expect(six.status).toBe('blocked')
-    expect(six.steps).toBe(6)
-    expect(six.reason).toContain('同一个动作连着做了 6 次')
+    expect(sixRepeats.status).toBe('blocked')
+    expect(sixRepeats.steps).toBe(8)
+    expect(sixRepeats.reason).toContain('同一个动作连着做了 6 次')
   })
 
   it('leaves the other stopping reasons alone on a screen that looks the same on every look', async () => {
@@ -1220,7 +1262,11 @@ describe('run loop', () => {
 
   it('does not ask again once the step budget is spent', async () => {
     const h = harness({
-      pages: [pageState('f0'), pageState('f1'), pageState('f2'), pageState('f3')],
+      // A different address on every look, so each step is a change and the budget is what stops
+      // this run rather than the rule that counts steps that changed nothing.
+      pages: ['f0', 'f1', 'f2', 'f3'].map((id, index) =>
+        pageState(id, { url: `https://example.test/page-${index}` }),
+      ),
       choices: ['e1', 'e1', 'e1', 'e1'],
       confidences: [0.9, 0.9, 0.9, 0.3],
     })

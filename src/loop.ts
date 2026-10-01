@@ -615,7 +615,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // Cleared only on a successful mutation, which is what makes the retry above cheap.
       pendingText = null
 
-      const previous = page.fingerprint
+      // The screen this step started from, read the way the repeated-action rule reads a screen:
+      // the address and the element table, never the page's own text (see `repeatedActionState`).
+      const previous = repeatedActionState(page)
       const observed = page.url
       const step = history.length + 1
       // Written before the observation, not after it: the action has already landed, so
@@ -673,7 +675,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         }
         follows.push({ step, appeared: found.appeared, adopted })
       }
-      record.page_changed = page.fingerprint !== previous
+      // Judged by that same state, not by the whole-page fingerprint: a page whose banner carousel
+      // rewrites its own text on every paint is one screen to a reader, and telling the decision
+      // service otherwise is what had it click one and the same field 31 times (携程, 2026-10). One
+      // case this reads as "no change" and cannot help reading that way: a click that lands in a new
+      // tab leaves this page and its table exactly as they were, which is the 2026-09-29 false
+      // "three steps changed nothing" — three clicks that had each opened a tab.
+      record.page_changed = repeatedActionState(page) !== previous
       record.url = page.url
       record.elapsed_ms = elapsedMs()
       emit({
