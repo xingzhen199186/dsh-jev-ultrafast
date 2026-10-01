@@ -47,6 +47,14 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
     'option','gridcell','combobox','textbox','searchbox','spinbutton'];
   const selector='a[href],button,input,textarea,select,summary,[contenteditable="true"],'+
     roles.map(role=>'[role="'+role+'"]').join(',');
+  // The choices a popup offers — the autocomplete list under a field, a suggestion dropdown, a
+  // picker — are usually plain markup: no control tag and no role, so nothing above names them and
+  // the model reads their text in the page while having nothing to click. These are the shapes that
+  // do name them, and only shapes that say what the item is: a row of a listbox, an item that
+  // records its own selection, or a list row that carries its value in a data-* attribute.
+  const choices='[aria-selected],[role="listbox"] li,[role="listbox"] [data-value],'+
+    '[role="listbox"] [data-index],[role="listbox"] [data-key],[role="listbox"] [data-id],'+
+    'ul li[data-value],ul li[data-index],ul li[data-key],ul li[data-id],ul li[data-code]';
   const role = e => {
     const explicit=e.getAttribute('role');
     if (roles.includes(explicit)) return explicit;
@@ -76,15 +84,22 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
   };
   const actions=[];
   // A field can be driven on the keyboard as well as by typing, and that is not decoration: an
-  // autocomplete list is usually plain markup the selector above cannot name, so a key is the
-  // only way to pick from one. One action per key, so each gets its own target.
+  // autocomplete list is often plain markup in a shape the selectors above still cannot name, so a
+  // key stays the only way to pick from one. One action per key, so each gets its own target.
   const keys=['enter','escape','tab','arrowdown','arrowup'];
-  for (const e of document.querySelectorAll(selector)) {
+  for (const e of document.querySelectorAll(selector+','+choices)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
-    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
+    // A popup choice is not a native control, so its shape is what names it — an option again only
+    // while it is shown and says something. A hidden list, a row kept for later, a row with no text
+    // at all and a row scrolled out of view each fail one of these instead of spending a slot in the
+    // element table; a row whose own click target is already listed — the anchor or button inside it
+    // — is left to that element, the same way a gridcell holding a button is.
+    const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, own=name(e),
+      rname=role(e)||(e.matches(choices) && own.trim()!=='' ? 'option' : null);
     if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
-    const base={node:identity(e),role:rname,label:name(e)||rname,
+    if (rname==='option' && !role(e) && e.querySelector('a[href],button,[role="button"]')) continue;
+    const base={node:identity(e),role:rname,label:own||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);

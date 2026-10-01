@@ -120,6 +120,27 @@ describe('element table cap', () => {
     expect(trimmed.space.targets.TYPE_TEXT).toBeUndefined()
     expect(Object.keys(trimmed.space.targets.CLICK!)).toHaveLength(48)
   })
+
+  it('keeps the popup candidate the goal names when the list is longer than the table', () => {
+    // An autocomplete list of 60 rows is more choices than one request can carry, and every row of
+    // it looks the same to the cut: same role, same kind, same length of label. The goal's own words
+    // are what separates the row to keep from the 59 it is shown next to.
+    const rows: SnapshotAction[] = Array.from({ length: 60 }, (_unused, at) => ({
+      id: `e${at + 1}`,
+      kind: 'click',
+      node: at + 1,
+      role: 'option',
+      label: at === 41 ? '中关村生命科学园 北京, 中国' : `第 ${at + 1} 号候选项`,
+    }))
+    const trimmed = trimActionSpace(actionSpace(rows), '在北京的中关村生命科学园附近订一间酒店', [])
+
+    expect(trimmed.omitted).toBe(12)
+    expect(trimmed.space.elements).toHaveLength(48)
+    const kept = trimmed.space.elements.filter((element) => element.label === '中关村生命科学园 北京, 中国')
+    expect(kept).toHaveLength(1)
+    // The candidate survives whole: its own click target is in the table with it.
+    expect(trimmed.space.targets.CLICK![kept[0]!.index]!.label).toBe('中关村生命科学园 北京, 中国')
+  })
 })
 
 describe('questionnaire', () => {
