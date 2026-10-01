@@ -50,7 +50,7 @@ Offline, use a locally packed tarball: `pnpm pack`, then `dsh plugin --profile <
 
 **The desktop app takes a different route.** Its profile belongs to the application and the command line refuses it outright (`profile "desktop" is managed exclusively by the Electron application`). In the app, open **插件 → 添加插件**, paste the tarball's absolute path, press 立即启用, then **restart the app once** — the desktop boot payload is sent once at app start, and without a restart the plugin's page cannot get its own token (the tools themselves are fine).
 
-After installing, set up three things in the settings page (decision service, text model, browser) and press **Launch and connect** in the browser block before a run.
+After installing, set up three things in the settings page (decision service, text model, browser) and press **Connect your browser** in the browser block before a run (the plugin's own browser uses **Launch and connect** instead).
 
 To build from source: `pnpm install && pnpm build`; `pnpm test` runs the unit tests, `JEV_BROWSER=1 pnpm test` also runs the real-browser integration tests.
 
@@ -82,7 +82,7 @@ Under **Advanced** you can set the decision output cap (default `393216`; when a
 - "Content arrived" is judged from page text, not from the network: a page that only swaps images takes the no-change branch.
 - Frame-by-frame screenshots are off by default; when on, the trace directory holds `frames/NNNNNN.jpg`.
 - Content inside page frames (iframes) or shadow DOM is invisible to the plugin, and it says so instead of guessing; it also tries to give you the address of the page inside.
-- Logins from your everyday browser cannot move into the plugin's own browser — on Windows the credential key is bound to the profile's location, so a copy cannot unwrap it. Log in once there and the login stays.
+- Copying a profile cannot move logins into the plugin's own browser — on Windows the credential key is bound to the profile's location, so a copy cannot unwrap it. Use "Copy the logins into the plugin browser" above instead (it reads and writes through the debugging channel and never touches the profile files), or just log in once in the plugin's own browser. Only cookies travel: a site that keeps its login elsewhere still asks again.
 - With your own browser chosen, you cannot use it while the plugin is working, and while that debugging switch is on any local program could in principle connect to it.
 
 ## Relationship to upstream
