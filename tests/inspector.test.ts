@@ -166,6 +166,38 @@ describe('the inspector page', () => {
     expect(frame.bytes).toEqual(readFileSync(join(ARTIFACTS, RUN, 'frames', '001500.jpg')))
   })
 
+  it('reads frames named by step, and hands the step and action on to the page', async () => {
+    // The reader's question is "what did step 3 look like", so the step has to survive the trip
+    // from disk to the page. A run recorded before frames were named by step is still readable:
+    // the test above reads exactly that one.
+    const dir = join(ARTIFACTS, RUN)
+    created.push(dir)
+    mkdirSync(join(dir, 'frames'), { recursive: true })
+    writeFileSync(join(dir, 'frames', 'step-000-start.jpg'), Buffer.from([0xff, 0xd8, 1, 2, 3]))
+    writeFileSync(join(dir, 'frames', 'step-001-press.jpg'), Buffer.from([0xff, 0xd8, 4, 5, 6]))
+    writeFileSync(
+      join(dir, 'frames.json'),
+      JSON.stringify({
+        frames: [
+          { file: 'step-000-start.jpg', step: 0, action: 'start', at_ms: 0 },
+          { file: 'step-001-press.jpg', step: 1, action: 'press', at_ms: 900 },
+        ],
+        run_ms: 900,
+      }),
+    )
+
+    const run = JSON.parse((await ask(`/run?run=${RUN}`)).body)
+    expect(run.frames).toEqual([
+      { file: 'step-000-start.jpg', step: 0, action: 'start', at_ms: 0 },
+      { file: 'step-001-press.jpg', step: 1, action: 'press', at_ms: 900 },
+    ])
+
+    const frame = await ask(`/frame?run=${RUN}&file=step-001-press.jpg`)
+    expect(frame.status).toBe(200)
+    expect(frame.headers['content-type']).toBe('image/jpeg')
+    expect(frame.bytes).toEqual(readFileSync(join(ARTIFACTS, RUN, 'frames', 'step-001-press.jpg')))
+  })
+
   it('only serves names the writer itself would produce', async () => {
     fakeRun()
 
@@ -173,6 +205,10 @@ describe('the inspector page', () => {
     // written form is refused before a path is built from it.
     expect((await ask(`/frame?run=${RUN}&file=${encodeURIComponent('../../secret.jpg')}`)).status).toBe(400)
     expect((await ask(`/frame?run=${RUN}&file=000000.png`)).status).toBe(400)
+    // A step-named frame is held to the same rule as the millisecond one it replaced: the step
+    // pads to three digits, the action is lowercase, and nothing else gets past the pattern.
+    expect((await ask(`/frame?run=${RUN}&file=step-01-press.jpg`)).status).toBe(400)
+    expect((await ask(`/frame?run=${RUN}&file=${encodeURIComponent('step-001-press.jpg/../../secret')}`)).status).toBe(400)
     expect((await ask('/frame?run=../..&file=000000.jpg')).status).toBe(400)
     expect((await ask('/run?run=run-1-x')).status).toBe(400)
     expect((await ask('/run?run=' + encodeURIComponent('../../..'))).status).toBe(400)

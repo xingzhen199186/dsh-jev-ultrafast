@@ -31,9 +31,11 @@ import { hasLastWord } from './run-history'
 
 /** Where every run's artifacts live. `openArtifacts` owns that layout; this only reads it. */
 const ARTIFACTS_ROOT = join(tmpdir(), 'dsh-jev-ultrafast')
-/** The only names this module will touch: exactly what `openArtifacts` writes, nothing else. */
+/** The only names this module will touch: exactly what `openArtifacts` writes, nothing else.
+ *  Frames carry the step they were taken after; the millisecond names are what a run recorded
+ *  before that left behind, and are still this module's to read and serve. */
 const RUN_NAME = /^run-[0-9]+-[a-z0-9]{4}$/
-const FRAME_NAME = /^[0-9]{6}\.jpg$/
+const FRAME_NAME = /^(step-[0-9]{3}-[a-z]+|[0-9]{6})\.jpg$/
 /** How many lines the page keeps. A run is a few hundred events at most; older ones drop. */
 const MAX_LINES = 600
 
@@ -392,30 +394,47 @@ function modifiedAt(dir: string): number {
   }
 }
 
+/** One frame as `frames.json` records it. `step` and `action` are absent on a run recorded
+ *  before frames carried them, which is why the page falls back to the elapsed time. */
+interface FrameRecord {
+  file: string
+  at_ms: number
+  step?: number
+  action?: string
+}
+
 /**
  * The step frames of one run, in order, as the loop left them.
  *
  * Every name is checked against the same pattern the writer uses before it is read or served:
  * a directory the user can open is also a directory something else could drop a file into.
  */
-function frameManifest(dir: string): { frames: Array<{ file: string; at_ms: number }>; run_ms?: number } {
+function frameManifest(dir: string): { frames: FrameRecord[]; run_ms?: number } {
   try {
     const parsed = JSON.parse(readFileSync(join(dir, 'frames.json'), 'utf8')) as {
       frames?: unknown
       run_ms?: unknown
     }
-    const frames = Array.isArray(parsed.frames)
-      ? parsed.frames
-          .filter(
-            (item): item is { file: string; at_ms: number } =>
-              typeof item === 'object' &&
-              item !== null &&
-              typeof (item as { file?: unknown }).file === 'string' &&
-              FRAME_NAME.test((item as { file: string }).file) &&
-              typeof (item as { at_ms?: unknown }).at_ms === 'number',
-          )
-          .sort((left, right) => left.at_ms - right.at_ms)
-      : []
+    const frames: FrameRecord[] = []
+    if (Array.isArray(parsed.frames)) {
+      for (const item of parsed.frames) {
+        if (typeof item !== 'object' || item === null) continue
+        const { file, at_ms, step, action } = item as {
+          file?: unknown
+          at_ms?: unknown
+          step?: unknown
+          action?: unknown
+        }
+        if (typeof file !== 'string' || !FRAME_NAME.test(file) || typeof at_ms !== 'number') continue
+        frames.push({
+          file,
+          at_ms,
+          ...(typeof step === 'number' ? { step } : {}),
+          ...(typeof action === 'string' ? { action } : {}),
+        })
+      }
+      frames.sort((left, right) => left.at_ms - right.at_ms)
+    }
     return typeof parsed.run_ms === 'number' ? { frames, run_ms: parsed.run_ms } : { frames }
   } catch {
     return { frames: [] }

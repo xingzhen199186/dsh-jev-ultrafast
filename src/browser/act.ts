@@ -12,6 +12,7 @@
  *     handler; repeating it would double-apply it.
  *  3. The action is logged by the caller before the result is observed.
  */
+import type { TraceSink } from '../artifacts'
 import type { BrowserPort, PageState, SnapshotAction } from './session'
 import { StalePage } from './session'
 
@@ -27,6 +28,17 @@ export interface ActResult {
   /** The id of the action that was executed, for the run log. */
   executed: string
 }
+
+/**
+ * What the page answered when a press asked which element it had focused.
+ *
+ * Three values rather than two, because "this element is not the focus" and "the question could
+ * not be answered" are different facts about the page and the same decision for the press: only
+ * `yes` skips the click, while `no` and `unknown` both fall back to it. Running the two together
+ * is what leaves the 携程 question — did the key even reach the field? — unanswerable after the
+ * fact, so the trace keeps them apart even though the branch does not need them apart.
+ */
+export type FocusReading = 'yes' | 'no' | 'unknown'
 
 /** Where the wheel lands. Upstream used one fixed point; scroll position is not a target. */
 export const WHEEL = { x: 550, y: 650 } as const
@@ -88,17 +100,28 @@ export async function act(
   page: PageState,
   action: SnapshotAction,
   text?: string,
+  /**
+   * The run's own trace channel, the same one the model exchanges are written to. Optional
+   * because a run that is not recording has no directory to write into, and because a press
+   * is the only action with something here worth saying.
+   */
+  trace?: TraceSink,
 ): Promise<ActResult> {
   if (!(await session.fresh(page, action))) {
     throw new StalePage('页面已经变化，这次决定不能再执行，请重新观察')
   }
   if (action.kind === 'wait') await delay(100)
-  const result = await execute(session, action, text)
+  const result = await execute(session, action, text, trace)
   session.noteInput(action)
   return result
 }
 
-async function execute(session: BrowserPort, action: SnapshotAction, text?: string): Promise<ActResult> {
+async function execute(
+  session: BrowserPort,
+  action: SnapshotAction,
+  text?: string,
+  trace?: TraceSink,
+): Promise<ActResult> {
   if (action.kind === 'scroll') {
     await session.call('Input.dispatchMouseEvent', {
       type: 'mouseWheel',
@@ -123,12 +146,30 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
   // A key lands on whatever the page itself has focused, and the click is only one way of getting
   // there. On 携程 (2026-10-02) the field the run had just typed into was still that focus, and the
   // click aimed at it again is what brought the candidate list back a moment later with nothing in
-  // it highlighted. So a press asks first: a target that already is the page's focus is pressed
-  // where it is, and only a target that is not is clicked into it.
-  if (action.kind !== 'press_key' || !(await isFocused(session, action))) {
+  // it highlighted. So a press asks first: a target the page already has focused is pressed where it
+  // is, and every other answer — a target that is not the focus, and a question that could not be
+  // answered at all — is clicked into it, exactly as this path did before it could ask.
+  const focus: FocusReading | null = action.kind === 'press_key' ? await isFocused(session, action) : null
+  const clicked = focus !== 'yes'
+  if (clicked) {
     for (const type of ['mousePressed', 'mouseReleased'] as const) {
       await session.call('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
     }
+  }
+  // What the branch just decided, written down before the key is dispatched: "the field already had
+  // the focus, so no click was sent" and "it did not, so one was" leave the same page behind, and a
+  // reader who wants to tell them apart afterwards has nothing on the page to tell them apart with.
+  // A press is the only kind of step that reaches here with an answer, so this is the only kind that
+  // writes a record; the fields are the branch's own, and nothing off the page goes in.
+  if (focus !== null) {
+    trace?.write({
+      at: Date.now(),
+      kind: 'press_key',
+      node: action.node,
+      key: String(action.key ?? ''),
+      focus,
+      clicked,
+    })
   }
   if (action.kind === 'fill') {
     // Select what is already in the field first, so typing replaces rather than appends.
@@ -155,7 +196,8 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
 }
 
 /**
- * Whether the observed element is what the page has focused right now.
+ * Whether the observed element is what the page has focused right now — and whether that could be
+ * asked at all.
  *
  * Read through the same channel the target itself comes from, and only for a press: a target that
  * is already the focus is pressed where it stands, so the click that used to precede every press
@@ -163,26 +205,43 @@ async function execute(session: BrowserPort, action: SnapshotAction, text?: stri
  * — is not sent at all.
  *
  * A query that cannot be answered (the element detached, the page mid-navigation, the connection
- * refusing) comes back `false` rather than throwing: a focus nobody can read is not evidence of
- * one, and the click it falls back to is what this path did before it could ask.
+ * refusing) comes back `unknown` rather than throwing, and does not skip the click: a focus nobody
+ * can read is not evidence of one, and the click it falls back to is what this path did before it
+ * could ask. `unknown` is kept apart from `no` for whoever reads the run's trace rather than for
+ * the branch — the two act alike, and only one of them means the page answered.
  */
-async function isFocused(session: BrowserPort, action: SnapshotAction): Promise<boolean> {
+async function isFocused(session: BrowserPort, action: SnapshotAction): Promise<FocusReading> {
   try {
-    const response = await session.call<{ result?: { value?: unknown } }>('Runtime.evaluate', {
-      expression: focusSource(action),
-      returnByValue: true,
-    })
-    return response.result?.value === true
+    const response = await session.call<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
+      'Runtime.evaluate',
+      {
+        expression: focusSource(action),
+        returnByValue: true,
+      },
+    )
+    // A page that answered with an exception did not answer the question: it is the same "cannot
+    // tell" as a connection that refused, and no more evidence of a focus than that.
+    if (response.exceptionDetails) return 'unknown'
+    const value = response.result?.value
+    if (value === true) return 'yes'
+    return value === false ? 'no' : 'unknown'
   } catch {
-    return false
+    return 'unknown'
   }
 }
 
-/** The same element lookup the target comes from, asked the one question the press cares about. */
+/**
+ * The same element lookup the target comes from, asked the one question the press cares about.
+ *
+ * An element that is no longer in the page's own table answers `null` rather than `false`: "not
+ * there" is a question that could not be answered, while `false` is the element being there and
+ * simply not being the focus. Both are clicked into, and only a trace can tell them apart.
+ */
 function focusSource(action: SnapshotAction): string {
   return `(action => {
   const e=window.__jevFast?.nodes.get(action.node);
-  return !!e && e === document.activeElement;
+  if (!e) return null;
+  return e === document.activeElement;
 })(${JSON.stringify(action)})`
 }
 

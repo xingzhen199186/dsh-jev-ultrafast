@@ -667,11 +667,14 @@ describe('run loop', () => {
     })
     const recorded = await run(h.deps, { record: true, screenshots: true })
     try {
-      // One frame before the first action and one after it, in the order they happened.
+      // One frame before the first action and one after it, in the order they happened, each
+      // named by the step it belongs to.
       const manifest = JSON.parse(readFileSync(join(recorded.recordDir, 'frames.json'), 'utf8'))
       expect(manifest.frames).toHaveLength(2)
-      expect(manifest.frames[0].file).toBe('000000.jpg')
+      expect(manifest.frames[0]).toMatchObject({ file: 'step-000-start.jpg', step: 0, action: 'start', at_ms: 0 })
+      expect(manifest.frames[1]).toMatchObject({ file: 'step-001-click.jpg', step: 1, action: 'click' })
       expect(readFileSync(join(recorded.recordDir, 'frames', manifest.frames[0].file), 'utf8')).toBe('hello')
+      expect(readFileSync(join(recorded.recordDir, 'frames', manifest.frames[1].file), 'utf8')).toBe('world')
 
       // The fake decision layer writes no exchanges, so the trace holds exactly the run's
       // own last word — which is what a reader needs to make sense of the rest of it.
@@ -683,6 +686,90 @@ describe('run loop', () => {
       expect(trace[0]).toMatchObject({ kind: 'run', status: 'done', steps: 1 })
     } finally {
       rmSync(recorded.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('hands the run s own trace sink to the action, so a step can write down what only it knows', async () => {
+    // A press is the one step with something to say that the page does not keep afterwards —
+    // whether the field already had the focus, so whether a click was paid for on the way in. The
+    // record itself belongs to the executor (see `browser/act.ts`); what is checked here is only
+    // that the loop hands its sink over, because a sink nobody receives is a trace with the line
+    // missing, and every executor-level check would still pass.
+    const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+    const own = h.deps.execute
+    let handed: unknown
+    h.deps.execute = async (session, page, action, text, trace) => {
+      handed = trace
+      trace?.write({ at: 1, kind: 'press_key', node: action.node, key: 'enter', focus: 'yes', clicked: false })
+      return own(session, page, action, text, trace)
+    }
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(handed).toBeDefined()
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(trace.filter((record) => record.kind === 'press_key')).toEqual([
+        { at: 1, kind: 'press_key', node: 1, key: 'enter', focus: 'yes', clicked: false },
+      ])
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('takes the screen after a step whose action threw, without changing the failure', async () => {
+    // A step that threw is the one a reader most wants to look at, and no observation of its
+    // aftermath exists yet: the ordinary path never reached the line that takes one. The run
+    // still fails for the action's own reason — the picture is evidence, not a verdict.
+    const h = harness({
+      pages: [pageState('f0', { screenshot: 'aGVsbG8=' }), pageState('f1', { screenshot: 'd29ybGQ=' })],
+      choices: ['e1', 'DONE'],
+      execute: () => {
+        throw new Error('点击没落地')
+      },
+    })
+    const result = await run(h.deps, { record: true, screenshots: true })
+    try {
+      expect(result.status).toBe('failed')
+      expect(result.reason).toBe('点击没落地')
+
+      const manifest = JSON.parse(readFileSync(join(result.recordDir, 'frames.json'), 'utf8'))
+      expect(manifest.frames.map((frame: { file: string }) => frame.file)).toEqual([
+        'step-000-start.jpg',
+        'step-001-click.jpg',
+      ])
+      expect(manifest.frames[1]).toMatchObject({ step: 1, action: 'click' })
+      expect(readFileSync(join(result.recordDir, 'frames', 'step-001-click.jpg'), 'utf8')).toBe('world')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the failure of the action itself when the screen after it cannot be read', async () => {
+    // The observation taken for that last frame is the one that fails, which is the state a page
+    // that will not settle leaves the run in. One failure must not be replaced by the failure of
+    // reporting it: the reader gets the action's own sentence and the frames that did land.
+    const h = harness({
+      pages: [pageState('f0', { screenshot: 'aGVsbG8=' }), pageState('f1', { screenshot: 'd29ybGQ=' })],
+      choices: ['e1', 'DONE'],
+      execute: () => {
+        throw new Error('点击没落地')
+      },
+      observe: (index) => {
+        if (index === 1) throw new Error('页面读不出来')
+      },
+    })
+    const result = await run(h.deps, { record: true, screenshots: true })
+    try {
+      expect(result.status).toBe('failed')
+      expect(result.reason).toBe('点击没落地')
+
+      const manifest = JSON.parse(readFileSync(join(result.recordDir, 'frames.json'), 'utf8'))
+      expect(manifest.frames.map((frame: { file: string }) => frame.file)).toEqual(['step-000-start.jpg'])
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
     }
   })
 

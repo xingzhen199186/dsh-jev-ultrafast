@@ -11,7 +11,8 @@
  * These checks drive the real `act` over a scripted CDP connection, the way the freshness checks
  * next door do: the connection answers the expressions `act` sends by their shape, reports whether
  * the observed element is the focus, and remembers every input event that reached it. Nothing here
- * touches a browser.
+ * touches a browser. The second half of the file reads the record the press left about the same
+ * question: which element, which key, what the page answered, and whether a click was paid for.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { act } from '../src/browser/act'
@@ -22,7 +23,7 @@ import { BrowserSession, type PageState, type SnapshotAction } from '../src/brow
 const CDP = 'ws://127.0.0.1:9222/devtools/browser/press-key-focus'
 
 /** How the scripted page answers the one question this file is about. */
-type FocusMode = 'focus' | 'elsewhere' | 'throw' | 'exception'
+type FocusMode = 'focus' | 'elsewhere' | 'missing' | 'throw' | 'exception'
 
 /** The page as one run observed it: one editable field, with the key a candidate list is picked with. */
 function observed(): PageState {
@@ -83,6 +84,8 @@ class ScriptedConnection implements HeldSocket {
       if (expression.includes('document.activeElement')) {
         if (this.focus === 'throw') throw new Error('the connection went away')
         if (this.focus === 'exception') return { exceptionDetails: { text: 'the page refused' } } as T
+        // The element the expression asked about is not in the page's own table any more.
+        if (this.focus === 'missing') return { result: { value: null } } as T
         return { result: { value: this.focus === 'focus' } } as T
       }
       return { result: { value: 'complete' } } as T
@@ -99,6 +102,22 @@ class ScriptedConnection implements HeldSocket {
   }
 
   close(): void {}
+}
+
+/**
+ * The run's own trace channel, kept in memory.
+ *
+ * A press writes what it asked the page and what it did with the answer, and nothing on the page
+ * keeps that afterwards — which is the whole reason the record exists (see `src/browser/act.ts`).
+ * The sink is the same interface the model exchanges are written through; the test only needs to
+ * hold what it was handed.
+ */
+class ScriptedTrace {
+  readonly records: Array<Record<string, unknown>> = []
+
+  write(record: Record<string, unknown>): void {
+    this.records.push(record)
+  }
 }
 
 /** A session attached over the scripted connection, and the connection it attached over. */
@@ -205,6 +224,80 @@ describe('a key on a field the page has already focused', () => {
         'keyUp',
       ])
       expect(connection.evaluated.some((expression) => expression.includes('document.activeElement'))).toBe(false)
+    } finally {
+      await session.close()
+    }
+  })
+})
+
+/**
+ * What the branch leaves behind for a reader who was not there.
+ *
+ * The click and the key leave the same page behind whichever way the branch went, so "did the key
+ * reach the field at all?" cannot be answered from the page afterwards. These checks are about the
+ * trace record alone: which element, which key, what the page answered about the focus, and
+ * whether the press paid for a click on the way in.
+ */
+describe('the record a press leaves about the focus it asked for', () => {
+  it('says the target already had the focus, and that no click was sent for it', async () => {
+    const { session, page, enter } = await attached('focus')
+    const trace = new ScriptedTrace()
+    try {
+      await act(session, page, enter, undefined, trace)
+
+      expect(trace.records).toEqual([
+        { at: expect.any(Number), kind: 'press_key', node: 7, key: 'enter', focus: 'yes', clicked: false },
+      ])
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('says the focus was somewhere else, and that a click was sent for it', async () => {
+    const { session, page, enter } = await attached('elsewhere')
+    const trace = new ScriptedTrace()
+    try {
+      await act(session, page, enter, undefined, trace)
+
+      expect(trace.records).toHaveLength(1)
+      expect(trace.records[0]).toMatchObject({ kind: 'press_key', node: 7, key: 'enter', focus: 'no', clicked: true })
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('says the question could not be answered, rather than that the target is not the focus', async () => {
+    // The three ways the question goes unanswered, and the one thing they share: the record says
+    // `unknown`, which is what keeps them out of the same bucket as a real `no`. The click still
+    // happens for all three — the fallback is what this path did before it could ask.
+    for (const how of ['throw', 'exception', 'missing'] as const) {
+      const { session, page, enter } = await attached(how)
+      const trace = new ScriptedTrace()
+      try {
+        await act(session, page, enter, undefined, trace)
+
+        expect(trace.records).toHaveLength(1)
+        expect(trace.records[0]).toMatchObject({
+          kind: 'press_key',
+          node: 7,
+          key: 'enter',
+          focus: 'unknown',
+          clicked: true,
+        })
+      } finally {
+        await session.close()
+      }
+    }
+  })
+
+  it('writes no such record for an action that is not a press', async () => {
+    const { session, page } = await attached('focus')
+    const trace = new ScriptedTrace()
+    try {
+      const fill = page.actions.find((action) => action.kind === 'fill')!
+      await act(session, page, fill, '生命科学园', trace)
+
+      expect(trace.records).toEqual([])
     } finally {
       await session.close()
     }

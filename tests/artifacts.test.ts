@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openArtifacts, recordable, redactUrl } from '../src/artifacts'
+import { frameAction, openArtifacts, recordable, redactUrl } from '../src/artifacts'
 
 // Every directory a test opens is removed afterwards: the point of the module is that a
 // run leaves evidence behind, and the tests are not allowed to leave a pile of their own.
@@ -30,28 +30,54 @@ describe('what a run leaves behind', () => {
 
   it('keeps no frames at all when the screenshot switch is off', () => {
     const artifacts = open(false)
-    artifacts.frame('aGVsbG8=', 120)
+    artifacts.frame('aGVsbG8=', 1, 'click', 120)
     artifacts.finish(500)
 
     expect(existsSync(join(artifacts.dir, 'frames'))).toBe(false)
     expect(existsSync(join(artifacts.dir, 'frames.json'))).toBe(false)
   })
 
-  it('writes one frame per step, named by elapsed milliseconds, next to a manifest', () => {
+  it('names one frame per step after the step, and says the step and action in the manifest', () => {
     const artifacts = open(true)
-    artifacts.frame('aGVsbG8=', 0)
-    artifacts.frame('d29ybGQ=', 1200)
+    artifacts.frame('aGVsbG8=', 0, 'start', 0)
+    artifacts.frame('d29ybGQ=', 2, 'type', 1200)
     artifacts.finish(3000)
 
-    expect(readFileSync(join(artifacts.dir, 'frames', '000000.jpg'), 'utf8')).toBe('hello')
-    expect(readFileSync(join(artifacts.dir, 'frames', '001200.jpg'), 'utf8')).toBe('world')
+    expect(readFileSync(join(artifacts.dir, 'frames', 'step-000-start.jpg'), 'utf8')).toBe('hello')
+    expect(readFileSync(join(artifacts.dir, 'frames', 'step-002-type.jpg'), 'utf8')).toBe('world')
+    // The elapsed time stays: it is what a replay walks at, and the file name no longer carries
+    // it. Without `step` a reader would be back to guessing whether a picture came before or
+    // after the action of the step it belongs to.
     expect(JSON.parse(readFileSync(join(artifacts.dir, 'frames.json'), 'utf8'))).toEqual({
       run_ms: 3000,
       frames: [
-        { file: '000000.jpg', at_ms: 0 },
-        { file: '001200.jpg', at_ms: 1200 },
+        { file: 'step-000-start.jpg', step: 0, action: 'start', at_ms: 0 },
+        { file: 'step-002-type.jpg', step: 2, action: 'type', at_ms: 1200 },
       ],
     })
+  })
+
+  it('gives every action kind a short English word the file name can carry', () => {
+    expect(frameAction('click')).toBe('click')
+    expect(frameAction('fill')).toBe('type')
+    expect(frameAction('select')).toBe('select')
+    expect(frameAction('press_key')).toBe('press')
+    expect(frameAction('scroll')).toBe('scroll')
+    expect(frameAction('wait')).toBe('wait')
+    // A kind this plugin grows later still gets a frame a reader can find, rather than a file
+    // name assembled from whatever the page said.
+    expect(frameAction('drag')).toBe('act')
+  })
+
+  it('keeps going when the frame itself cannot be written', () => {
+    const artifacts = open(true)
+    // The writer's own directory is gone, which is what a failed write looks like from here: a
+    // full disk, a permission change, or someone emptying the run's folder all land in the same
+    // three lines. The point is that a run whose evidence cannot be kept is still a run.
+    rmSync(join(artifacts.dir, 'frames'), { recursive: true, force: true })
+
+    expect(() => artifacts.frame('aGVsbG8=', 1, 'press', 500)).not.toThrow()
+    expect(existsSync(join(artifacts.dir, 'frames.json'))).toBe(false)
   })
 
   it('never writes a credential, and cuts an enormous body short', () => {
@@ -68,9 +94,9 @@ describe('what a run leaves behind', () => {
 
   it('says nothing about a frame it was handed nothing for', () => {
     const artifacts = open(true)
-    artifacts.frame(null, 10)
-    artifacts.frame(undefined, 20)
-    artifacts.frame('', 30)
+    artifacts.frame(null, 1, 'click', 10)
+    artifacts.frame(undefined, 1, 'click', 20)
+    artifacts.frame('', 1, 'click', 30)
     artifacts.finish(40)
 
     expect(JSON.parse(readFileSync(join(artifacts.dir, 'frames.json'), 'utf8')).frames).toEqual([])

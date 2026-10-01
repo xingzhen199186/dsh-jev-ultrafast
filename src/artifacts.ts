@@ -32,10 +32,36 @@ export interface RunArtifacts {
   /** The run's own directory, reported to the user so they can open it. */
   dir: string
   trace: TraceSink
-  /** One frame of the controlled browser, base64 JPEG. Ignored when frames are off. */
-  frame(jpeg: unknown, atMs: number): void
+  /**
+   * One frame of the controlled browser, base64 JPEG, taken after the step it belongs to.
+   * Ignored when frames are off. `step` 0 is the page the run started on, and `action` is the
+   * short name of what the step did (see `frameAction`), which is also what the file is named
+   * after.
+   */
+  frame(jpeg: unknown, step: number, action: string, atMs: number): void
   /** Last word: the frame manifest with the run's total length. */
   finish(runMs: number): void
+}
+
+/**
+ * The short English name a frame carries for the step that produced it.
+ *
+ * The step number is what a reader comes looking for — "what did step 3 look like" — and the
+ * action is what turns a wall of numbered files into something skimmable. The names come from a
+ * closed set, so nothing a page (or a model) says can end up in a file name.
+ */
+const FRAME_ACTIONS: Record<string, string> = {
+  click: 'click',
+  fill: 'type',
+  select: 'select',
+  press_key: 'press',
+  scroll: 'scroll',
+  wait: 'wait',
+}
+
+/** `frameAction`, for a kind this plugin does not have a word for: an action still happened. */
+export function frameAction(kind: string): string {
+  return FRAME_ACTIONS[kind] ?? 'act'
 }
 
 /**
@@ -58,7 +84,7 @@ export function openArtifacts(frames: boolean): RunArtifacts {
 
   const traceFile = join(dir, 'trace.jsonl')
   const manifest = join(dir, 'frames.json')
-  const kept: Array<{ file: string; at_ms: number }> = []
+  const kept: Array<{ file: string; step: number; action: string; at_ms: number }> = []
 
   const trace: TraceSink = {
     write(record) {
@@ -73,14 +99,15 @@ export function openArtifacts(frames: boolean): RunArtifacts {
   return {
     dir,
     trace,
-    frame(jpeg, atMs) {
+    frame(jpeg, step, action, atMs) {
       if (!frames || typeof jpeg !== 'string' || !jpeg) return
-      // Upstream named frames by elapsed milliseconds with the same padding, which keeps
-      // them in step order on disk and makes the manifest reproducible.
-      const file = `${String(atMs).padStart(6, '0')}.jpg`
+      // Named by the step it belongs to, so the question a reader actually has — did this
+      // picture come before or after the key press on step 3? — is answered by the file name
+      // itself. The three-digit padding keeps them in step order on disk.
+      const file = `step-${String(step).padStart(3, '0')}-${action}.jpg`
       try {
         writeFileSync(join(framesDir, file), Buffer.from(jpeg, 'base64'))
-        kept.push({ file, at_ms: atMs })
+        kept.push({ file, step, action, at_ms: atMs })
         writeFileSync(manifest, JSON.stringify({ frames: kept }, null, 2))
       } catch {
         // Same as above: a frame we could not write is not a reason to stop working.

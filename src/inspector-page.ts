@@ -206,7 +206,11 @@ function showRun(name) {
       var img = document.createElement('img');
       img.src = ROUTE + '/inspector/frame?run=' + encodeURIComponent(name) + '&file=' + encodeURIComponent(frame.file) + '&token=' + encodeURIComponent(TOKEN);
       var caption = document.createElement('figcaption');
-      caption.textContent = (frame.at_ms / 1000).toFixed(1) + ' 秒';
+      // The step is what a reader comes for — "what did step 3 look like" — and the elapsed
+      // time is the fallback for a run recorded before frames carried one.
+      caption.textContent = (typeof frame.step === 'number' ? '第 ' + frame.step + ' 步 · ' : '') +
+        (frame.at_ms / 1000).toFixed(1) + ' 秒';
+      figure.dataset.at = String(frame.at_ms);
       figure.appendChild(img);
       figure.appendChild(caption);
       strip.appendChild(figure);
@@ -237,7 +241,9 @@ function showRun(name) {
 function play(strip) {
   var figures = Array.prototype.slice.call(strip.children);
   var times = figures.map(function (figure) {
-    return { figure: figure, at: parseFloat(figure.lastChild.textContent) * 1000 };
+    // Read from the frame's own timing rather than off the caption: the caption now leads with
+    // the step, which is not a number this can walk at.
+    return { figure: figure, at: parseFloat(figure.dataset.at) };
   });
   times.forEach(function (item) { item.figure.style.outline = ''; });
   var index = 0;

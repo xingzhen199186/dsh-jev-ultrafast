@@ -36,7 +36,7 @@ import { nestedNote } from './browser/nested'
 import type { ActResult } from './browser/act'
 import { act } from './browser/act'
 import type { DiscoverOptions } from './browser/discover'
-import { openArtifacts } from './artifacts'
+import { frameAction, openArtifacts, type TraceSink } from './artifacts'
 import { verify, type Verification } from './verify'
 
 /** How a run ended. `blocked` means the loop stopped itself, `failed` means the environment did. */
@@ -171,7 +171,18 @@ export interface TaskDeps {
   open: (url: string, options?: DiscoverOptions) => Promise<BrowserPort>
   decide: (source: DecisionSource, space: ActionSpace, context: DecisionContext) => Promise<Decision>
   typeText: (source: TextHelperSource, context: FieldContext) => Promise<TextResult>
-  execute: (session: BrowserPort, page: PageState, action: SnapshotAction, text?: string) => Promise<ActResult>
+  /**
+   * `trace` is the run's own channel again, handed over so an action can write down what only the
+   * action knows — a press's focus reading, which nothing on the page keeps afterwards. It is the
+   * same sink the model exchanges ride on, and absent exactly when the run is not recording.
+   */
+  execute: (
+    session: BrowserPort,
+    page: PageState,
+    action: SnapshotAction,
+    text?: string,
+    trace?: TraceSink,
+  ) => Promise<ActResult>
 }
 
 const REAL_DEPS: TaskDeps = {
@@ -304,14 +315,32 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // rides along into the run's trace, so the file explains the stop without the conversation.
   let stuckOn: { operation: string; target: string | null; action: string; times: number } | null = null
 
+  /**
+   * The screen after a step that failed, taken because that step is the last thing this run will
+   * do: the action threw, so the observation of its aftermath that every ordinary step makes never
+   * happened. Best-effort twice over — the observation that produces the picture can fail as the
+   * action did, and the write can fail — and neither is allowed to replace the failure already on
+   * its way out with a second one.
+   */
+  const frameFailedStep = async (step: number, kind: string): Promise<void> => {
+    if (!artifacts || !screenshots || !session) return
+    try {
+      const shot = await session.observe({ screenshot: true })
+      artifacts.frame(shot.screenshot, step, frameAction(kind), elapsedMs())
+    } catch {
+      // Nothing to write; the run's own failure is the story.
+    }
+  }
+
   try {
     session = await deps.open(options.startUrl, options.browser)
     page = await session.observe({ screenshot: screenshots })
     emit({ type: 'observed', step: 0, url: page.url, elements: page.actions.length })
     // The page the run started on is a state it has now shown, like every state after a step.
     seenStates.add(page.fingerprint)
-    // The starting frame: without it a replay begins at the first action's aftermath.
-    artifacts?.frame(page.screenshot, 0)
+    // The starting frame: without it a replay begins at the first action's aftermath. Step 0,
+    // named as such, so the first picture is never read as the first step's result.
+    artifacts?.frame(page.screenshot, 0, 'start', 0)
     // Said before anything is decided, so something watching the run knows where its frames
     // will appear while it is still running.
     if (artifacts) emit({ type: 'recording', dir: artifacts.dir })
@@ -550,7 +579,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             })
           }
         }
-        await deps.execute(session, page, action, text ?? undefined)
+        await deps.execute(session, page, action, text ?? undefined, artifacts?.trace)
       } catch (error) {
         if (error instanceof StalePage) {
           // Reset and re-observe. The paid value is kept: the same field, the same
@@ -559,6 +588,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           page = await session.observe({ screenshot: screenshots })
           continue
         }
+        // The action failed and the run ends here, but a step that threw is exactly the one a
+        // reader most wants to look at, so the screen it left is taken before the error goes on.
+        await frameFailedStep(history.length + 1, action.kind)
         throw error
       }
       // Cleared only on a successful mutation, which is what makes the retry above cheap.
@@ -598,9 +630,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // what tells "the content has arrived" apart from "this page looks unchanged".
       await session.settle?.(page)
       page = await session.observe({ screenshot: screenshots })
-      // One frame per step, named by elapsed milliseconds — the shape upstream wrote. It
-      // is what lets a finished run be replayed at its real speed instead of imagined.
-      artifacts?.frame(page.screenshot, elapsedMs())
+      // One frame per step, taken after the step landed and named by the step it belongs to.
+      // It is what lets a finished run be replayed at its real speed instead of imagined, and
+      // the step in the name is what answers "was this before or after the key press?" without
+      // the reader having to line two files up themselves.
+      artifacts?.frame(page.screenshot, step, frameAction(action.kind), elapsedMs())
       // A step whose effect landed in a tab the site opened leaves this page as it
       // was. Following it is what makes the next decision see the click's result;
       // when this tab's address moved instead, the step happened here, and the run
