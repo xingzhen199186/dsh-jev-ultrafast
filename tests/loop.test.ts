@@ -982,6 +982,86 @@ describe('run loop', () => {
     expect(result.reason).toContain('其中 3 步点开了新窗口，但没有跟过去')
   })
 
+  it('writes the windows a step opened, and whether the run followed one, into the trace', async () => {
+    // The gap two real diagnoses were stuck on: the click lands in a window this page never
+    // mentions, so the page the run is reading says nothing at all about where the effect went. The
+    // step line in the conversation said it; the trace, which is what a finished run is read back
+    // from, did not. Two steps, one of each kind: a popup while this tab navigated (the run stays
+    // put and leaves the popup behind), then a tab it does move onto.
+    const popup = { url: 'https://ads.test/popup', title: 'Popup' }
+    const second = pageState('f3', { url: 'https://example.test/second', title: 'Second page', text: 'the page' })
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        pageState('f1', { url: 'https://example.test/next' }),
+        pageState('f2', { url: 'https://example.test/next' }),
+        second,
+      ],
+      choices: ['e1', 'e1', 'DONE'],
+      adopt: [
+        { adopted: null, appeared: [popup] },
+        { adopted: { url: second.url, title: '' }, appeared: [{ url: second.url, title: '' }] },
+      ],
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      // The two kinds of step are told apart by value rather than by wording: the page left open in
+      // the browser against `null`, and the page the run moved onto against its own address.
+      expect(trace.filter((record) => record.kind === 'follow')).toEqual([
+        { at: expect.any(Number), kind: 'follow', step: 1, new_tabs: [popup.url], followed_tab: null },
+        { at: expect.any(Number), kind: 'follow', step: 2, new_tabs: [second.url], followed_tab: second.url },
+      ])
+      // And the run's last word counts what was left behind, so one line answers "did this run keep
+      // opening windows it never went to?" without reading the step records back.
+      expect(trace[trace.length - 1]).toMatchObject({ kind: 'run', status: 'done', unfollowed_tabs: 1 })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves the trace of a run that opened no window exactly as it was', async () => {
+    // Nothing was opened, so nothing is written: the field is absent rather than `null`, which keeps
+    // a trace from before this change readable by the same reader as one from after it.
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        pageState('f1', { url: 'https://example.test/results' }),
+        pageState('f2', { url: 'https://example.test/results/2' }),
+      ],
+      choices: ['e1', 'e1', 'DONE'],
+      // Asked on every step, as it is in a real run, and nothing to report either way: once by
+      // staying silent, once by answering with an empty list.
+      adopt: [null, { adopted: null, appeared: [] }],
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      // The whole file, key by key: the run's own last word and nothing else.
+      expect(trace).toEqual([
+        {
+          at: expect.any(Number),
+          kind: 'run',
+          status: 'done',
+          reason: '',
+          steps: 2,
+          decisions: 3,
+          elapsed_ms: expect.any(Number),
+        },
+      ])
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
   it('records a run only when asked to, and leaves nothing behind otherwise', async () => {
     // The loop stays a pure function of its inputs by default: the tool asks for a record,
     // a test does not, and that difference is what keeps this suite free of temp files.

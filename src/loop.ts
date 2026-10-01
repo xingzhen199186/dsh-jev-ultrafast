@@ -803,6 +803,25 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           emit({ type: 'followed', step, url: adopted.url, title: adopted.title })
         }
         follows.push({ step, appeared: found.appeared, adopted })
+        // Which pages the click opened, and whether the run moved onto one of them, is the one
+        // thing about a step that nothing on the page keeps: the tab is gone from the page the run
+        // stayed on, so a reader asking afterwards "did this click go somewhere else?" has only the
+        // step line in the conversation to go by — and the run is diagnosed from the trace, not
+        // from the conversation. So it is written down as the step's own record, the way a press
+        // writes down the focus reading it is the only witness to (`browser/act.ts`). A step that
+        // opened nothing writes nothing, so an ordinary run's trace is exactly what it always was.
+        if (found.appeared.length > 0) {
+          artifacts?.trace.write({
+            at: Date.now(),
+            kind: 'follow',
+            step,
+            // Every page that appeared, the followed one included, and which of them the run moved
+            // onto. `followed_tab: null` is the case worth the record: a window was opened and the
+            // run stayed where it was, which is what a run that looks stuck is doing.
+            new_tabs: found.appeared.map((opened) => opened.url),
+            followed_tab: adopted?.url ?? null,
+          })
+        }
       }
       // Judged by that same state, not by the whole-page fingerprint: a page whose banner carousel
       // rewrites its own text on every paint is one screen to a reader, and telling the decision
@@ -880,6 +899,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   }
 
   emit({ type: 'finished', status, reason })
+  // Pages this run opened in a window it never moved onto, counted rather than only listed step by
+  // step: it is the one number that says whether a run which looked stuck was in fact landing
+  // elsewhere, and reading five step records to find that out is how this went unnoticed.
+  const unfollowedTabs = follows.reduce(
+    (count, record) => count + record.appeared.length - (record.adopted ? 1 : 0),
+    0,
+  )
   // The run's own last word goes into the trace too, so the file explains how it ended
   // without the reader having to match it against the conversation.
   artifacts?.trace.write({
@@ -898,6 +924,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     // And the dead ends the run judged for itself: which elements, at which step, and whether they
     // were taken out of the candidates or only written down.
     ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
+    // Likewise: how many pages it opened in a window it stayed away from, when there were any.
+    ...(unfollowedTabs > 0 ? { unfollowed_tabs: unfollowedTabs } : {}),
   })
   artifacts?.finish(elapsedMs())
   return {
