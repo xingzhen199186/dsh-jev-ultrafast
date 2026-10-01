@@ -37,6 +37,7 @@ export interface RunSettings {
   maxSteps: number
   screenshots: boolean
   excludeDeadEndElements: boolean
+  guessClickableElements: boolean
 }
 
 /** Read every live setting once, so one run cannot straddle two versions of the page. */
@@ -59,6 +60,7 @@ export function readSettings(config: ConfigShape): RunSettings {
     maxSteps: config.maxSteps.get(),
     screenshots: config.screenshots.get(),
     excludeDeadEndElements: config.excludeDeadEndElements.get(),
+    guessClickableElements: config.guessClickableElements.get(),
   }
 }
 
@@ -161,6 +163,7 @@ export async function prepareRun(
       maxSteps: overrides.maxSteps ?? settings.maxSteps,
       screenshots: overrides.screenshots ?? settings.screenshots,
       excludeDeadEndElements: settings.excludeDeadEndElements,
+      guessClickableElements: settings.guessClickableElements,
       record: overrides.record ?? false,
       signal: overrides.signal,
       onEvent: overrides.onEvent,

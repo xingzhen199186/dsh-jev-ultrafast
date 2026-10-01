@@ -1,7 +1,7 @@
 import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
+import type { AdoptResult, BrowserPort, PageState, SnapshotAction, SnapshotOptions } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
 import { TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
@@ -210,6 +210,8 @@ function run(
     screenshots?: boolean
     /** Whether a judged dead end is taken out of the candidates. Off, as the settings page ships it. */
     excludeDeadEndElements?: boolean
+    /** Whether a script-made clickable is offered as a candidate. On, as the settings page ships it. */
+    guessClickableElements?: boolean
   } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
@@ -612,6 +614,33 @@ describe('run loop', () => {
     expect(h.seen.spaces[1]!.targets.CLICK!['1']).toBeUndefined()
   })
 
+  it('carries the deep-scan switch from the settings read into the run it starts', async () => {
+    // The same wire as the switch above, for the switch that widens the table: the config field as
+    // the settings page saves it, `readSettings` as the tool and the inspector read it, and the run's
+    // own option, all the way to the third argument of the opener that owns the injected script.
+    const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
+      (Config as unknown as (data: unknown) => ConfigShape)(input)
+    // On by default: what it adds is the browser's own answer to "does this node respond to a click",
+    // not a guess of ours, so a page's script-made buttons work without anyone finding a setting.
+    expect(readSettings(resolveConfig({})).guessClickableElements).toBe(true)
+    const settings = readSettings(resolveConfig({ guessClickableElements: false }))
+    expect(settings.guessClickableElements).toBe(false)
+
+    const opened: Array<SnapshotOptions | undefined> = []
+    const h = harness({ pages: [pageState('f0')], choices: ['DONE', 'DONE'] })
+    const deps: TaskDeps = {
+      ...h.deps,
+      open: async (_url, _options, snapshot) => {
+        opened.push(snapshot)
+        return h.deps.open('')
+      },
+    }
+    await run(deps, { guessClickableElements: settings.guessClickableElements })
+    await run(deps, { guessClickableElements: readSettings(resolveConfig({})).guessClickableElements })
+
+    expect(opened).toEqual([{ guessClickableElements: false }, { guessClickableElements: true }])
+  })
+
   it('counts a step as a change when the element table moves, the text standing still', async () => {
     // The other half of the same test: the screen the run landed on offers a control the page it
     // came from did not, and the table is what says so — the page's own text never moved.
@@ -637,6 +666,40 @@ describe('run loop', () => {
     expect(result.status).toBe('done')
     expect(result.history[0]).toMatchObject({ page_changed: true, url: 'https://example.test/next' })
     expect(h.seen.contexts[1]?.history[0]).toMatchObject({ page_changed: true })
+  })
+
+  it('reads a churning guessed element as the page changing, the native controls standing still', async () => {
+    // What widening the table costs, measured on the rule that reads it: "did the screen move?" is the
+    // address plus the table of `[id, role, label]`, so one more entry is one more thing that can move
+    // on its own. Here the only movement between steps is the guessed row's own words — the same two
+    // native controls on every screen, the same address — and every step reads as a change, so the
+    // three-in-a-row brake never sees three quiet steps and the run goes on to its step budget. The
+    // page on the left, with no such row, stops on step 3 exactly as it always has.
+    const guessed = (label: string): SnapshotAction => ({
+      id: 'e10',
+      kind: 'click',
+      node: 10,
+      label,
+      guess: 'listener',
+    })
+    const churn = (label: string): PageState => pageState('f', { actions: [...actions, guessed(label)] })
+    const quiet = harness({ pages: [pageState('f')], choices: ['e1', 'e1', 'e1', 'e1'] })
+    const noisy = harness({
+      pages: [churn('酒店 A'), churn('酒店 B'), churn('酒店 C'), churn('酒店 D'), churn('酒店 E')],
+      // One choice more than the step budget, because the budget is read after a decision: the run
+      // has to be given something to do on the step it is not allowed to take.
+      choices: ['e1', 'e1', 'e1', 'e1', 'e1'],
+    })
+
+    const stopped = await run(quiet.deps)
+    expect(stopped.status).toBe('blocked')
+    expect(stopped.reason).toMatch(/连续 3 步/)
+
+    const longer = await run(noisy.deps, { maxSteps: 4 })
+    expect(longer.history.map((entry) => entry.page_changed)).toEqual([true, true, true, true])
+    expect(longer.steps).toBe(4)
+    expect(longer.reason).toMatch(/动作上限/)
+    expect(noisy.seen.executed).toHaveLength(4)
   })
 
   it('does not stop when the element table keeps producing a state the run has not shown', async () => {

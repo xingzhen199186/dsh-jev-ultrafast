@@ -63,6 +63,13 @@ export interface Config {
    * judgement is still made and written down; nothing is taken away.
    */
   excludeDeadEndElements: VolatileValue<boolean>
+  /**
+   * Whether a plain element a page made clickable with its own script is offered as a candidate as
+   * well. On, and deliberately so: the judgement behind it is the browser's own answer to "does this
+   * node respond to a click", asked through the DevTools listener map rather than inferred by us, and
+   * it is what makes the rows of a modern page reachable at all (see src/browser/snapshot.ts).
+   */
+  guessClickableElements: VolatileValue<boolean>
 }
 
 // A Schemastery Schema, never a plain object: the harness validates it when the
@@ -166,4 +173,9 @@ export const Config = Schema.object({
     .default(false)
     .volatile()
     .description('把「上一步操作过、页面却没有变化」的元素从候选里拿掉；关掉时只记录不排除。'),
+
+  guessClickableElements: Schema.boolean()
+    .default(true)
+    .volatile()
+    .description('把用脚本挂了点击的普通元素（很多网站的 div/span 按钮）也列为候选；关掉就只认原生控件。'),
 })

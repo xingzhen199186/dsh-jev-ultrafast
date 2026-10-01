@@ -37,7 +37,7 @@ import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
-import { BrowserSession, StalePage } from './browser/session'
+import { BrowserSession, StalePage, type SnapshotOptions } from './browser/session'
 import { nestedNote } from './browser/nested'
 import type { ActResult } from './browser/act'
 import { TargetCovered, act } from './browser/act'
@@ -149,6 +149,14 @@ export interface TaskOptions {
    */
   excludeDeadEndElements?: boolean
   /**
+   * Whether an element a page made clickable with its own script — a plain `div` or `span` with a
+   * click listener, which is how React and Vue render most of a page — is offered as a candidate
+   * alongside the native controls. On unless this says otherwise, because the evidence for it is the
+   * browser's own answer to "does this node respond to a click" rather than a guess of ours; off is
+   * the reading every page had before the deep scan existed (see `browser/snapshot.ts`).
+   */
+  guessClickableElements?: boolean
+  /**
    * Write this run's raw model exchanges into a directory under the system temp
    * directory, together with one frame per step when `screenshots` is on, and report
    * that directory in the result. Off by default: the loop stays free of side effects
@@ -181,7 +189,7 @@ export interface TaskOptions {
  * milliseconds against a scripted page instead of a real one.
  */
 export interface TaskDeps {
-  open: (url: string, options?: DiscoverOptions) => Promise<BrowserPort>
+  open: (url: string, options?: DiscoverOptions, snapshot?: SnapshotOptions) => Promise<BrowserPort>
   decide: (source: DecisionSource, space: ActionSpace, context: DecisionContext) => Promise<Decision>
   typeText: (source: TextHelperSource, context: FieldContext) => Promise<TextResult>
   /**
@@ -199,7 +207,7 @@ export interface TaskDeps {
 }
 
 const REAL_DEPS: TaskDeps = {
-  open: (url, options) => BrowserSession.open(url, options),
+  open: (url, options, snapshot) => BrowserSession.open(url, options, snapshot),
   decide: choose,
   typeText: fieldText,
   execute: act,
@@ -430,7 +438,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   }
 
   try {
-    session = await deps.open(options.startUrl, options.browser)
+    session = await deps.open(options.startUrl, options.browser, {
+      guessClickableElements: options.guessClickableElements !== false,
+    })
     page = await session.observe({ screenshot: screenshots })
     emit({ type: 'observed', step: 0, url: page.url, elements: page.actions.length })
     // The page the run started on is a state it has now shown, like every state after a step.

@@ -241,6 +241,13 @@ export const FIELDS: readonly FieldSpec[] = [
     kind: 'switch',
     group: 'run',
   },
+  {
+    key: 'guessClickableElements',
+    label: '识别自定义按钮',
+    hint: '把用脚本挂了点击的普通元素（很多网站的 div/span 按钮）也列为候选；关掉就只认原生控件。',
+    kind: 'switch',
+    group: 'run',
+  },
 ]
 
 /**

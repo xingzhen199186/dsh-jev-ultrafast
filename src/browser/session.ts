@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import type { DiscoverOptions } from './discover'
 import { acquireConnection, type HeldSocket } from './held'
 import type { NestedFacts } from './nested'
-import { SNAPSHOT_SOURCE } from './snapshot'
+import { SNAPSHOT_SOURCE, SNAPSHOT_SOURCE_PLAIN } from './snapshot'
 
 /** A decision no longer refers to the page it was made for. */
 export class StalePage extends Error {
@@ -26,6 +26,19 @@ export class StalePage extends Error {
 
 /** The viewport the upstream project used; kept identical so the guards behave the same. */
 export const VIEWPORT = { width: 1120, height: 780 } as const
+
+/**
+ * The one choice about how a page is read that does not belong to discovery: whether an element the
+ * page made clickable with its own script is offered as a candidate as well (see `./snapshot.ts`).
+ *
+ * It is a per-session choice rather than a per-observation one, because the freshness marker is the
+ * semantic half of the very table this decides: a page read one way and checked the other way is
+ * "changed" every time, and the run would re-observe forever without ever acting.
+ */
+export interface SnapshotOptions {
+  /** Off means the native controls alone, which is what every page read before the deep scan existed. */
+  guessClickableElements?: boolean
+}
 
 /** One entry of the indexed element table the snapshot returns. */
 export interface SnapshotAction {
@@ -146,6 +159,8 @@ export class BrowserSession implements BrowserPort {
   readonly #knownPages = new Set<string>()
   /** Set right after a mutation, so the next observation can wait for it to land. */
   #afterInput: SnapshotAction | null = null
+  /** Which of the two scripts reads this session's pages; fixed for the tab's whole life. */
+  #guessClickableElements = true
   #closed = false
 
   private constructor(connection: HeldSocket, targetId: string, sessionId: string) {
@@ -163,7 +178,7 @@ export class BrowserSession implements BrowserPort {
    * reader allowed once. Only when there is none does this end in a new handshake, and the reader's
    * own browser asks permission on every one of those.
    */
-  static async open(url: string, options: DiscoverOptions = {}): Promise<BrowserSession> {
+  static async open(url: string, options: DiscoverOptions = {}, snapshot: SnapshotOptions = {}): Promise<BrowserSession> {
     const { connection } = await acquireConnection(options)
     const { targetId } = await connection.send<{ targetId: string }>('Target.createTarget', {
       url: 'about:blank',
@@ -174,6 +189,7 @@ export class BrowserSession implements BrowserPort {
       flatten: true,
     })
     const session = new BrowserSession(connection, targetId, sessionId)
+    session.#guessClickableElements = snapshot.guessClickableElements !== false
     try {
       await session.#applyViewport()
       await session.call('Page.navigate', { url })
@@ -206,12 +222,23 @@ export class BrowserSession implements BrowserPort {
    * A document that changed under the evaluation reads as a stale page, exactly
    * as upstream, because acting on the result would be acting on a page that is
    * no longer there.
+   *
+   * `commandLineApi` asks the browser for the console API inside this one evaluation. It is a real
+   * need rather than a convenience: the only honest answer to "does this node respond to a click"
+   * is `getEventListeners`, which is part of that API. What the flag does is put those names in the
+   * scope of the evaluated code and nothing else — no global is created, no page state is touched —
+   * which the browser's own behaviour shows: without the flag the name is `undefined` in the
+   * evaluation, where an API installed on the page's global object would answer either way.
    */
-  async evaluate<T = unknown>(expression: string, options: { awaitPromise?: boolean } = {}): Promise<T> {
+  async evaluate<T = unknown>(
+    expression: string,
+    options: { awaitPromise?: boolean; commandLineApi?: boolean } = {},
+  ): Promise<T> {
     const response = await this.call<{ result?: { value?: T }; exceptionDetails?: unknown }>('Runtime.evaluate', {
       expression,
       returnByValue: true,
       ...(options.awaitPromise ? { awaitPromise: true } : {}),
+      ...(options.commandLineApi ? { includeCommandLineAPI: true } : {}),
     })
     if (response.exceptionDetails) throw new StalePage('页面在取值过程中发生了变化')
     return response.result?.value as T
@@ -264,7 +291,7 @@ export class BrowserSession implements BrowserPort {
         Array.isArray(current) && JSON.stringify(current) === JSON.stringify([page.page_key, page.guards[String(node)]])
       )
     }
-    const marker = await this.evaluate(MARKER_SOURCE)
+    const marker = await this.evaluate(markerSource(this.#guessClickableElements), { commandLineApi: true })
     return JSON.stringify(marker) === JSON.stringify(page.marker)
   }
 
@@ -427,7 +454,7 @@ export class BrowserSession implements BrowserPort {
   }
 
   async #readState(screenshot: boolean): Promise<PageState> {
-    const state = await this.evaluate<PageState | null>(SNAPSHOT_SOURCE)
+    const state = await this.evaluate<PageState | null>(this.#snapshotSource(), { commandLineApi: true })
     if (state === null) throw new StalePage('页面正在跳转')
     state.fingerprint = fingerprint(state)
     if (screenshot) {
@@ -435,6 +462,11 @@ export class BrowserSession implements BrowserPort {
       state.screenshot = shot.data
     }
     return state
+  }
+
+  /** The injected script this session reads pages with, chosen once by the setting. */
+  #snapshotSource(): string {
+    return this.#guessClickableElements ? SNAPSHOT_SOURCE : SNAPSHOT_SOURCE_PLAIN
   }
 
   /**
@@ -472,8 +504,16 @@ export class BrowserSession implements BrowserPort {
   }
 }
 
-/** The whole snapshot, reduced to the freshness marker alone. */
-const MARKER_SOURCE = `(() => { const state=${SNAPSHOT_SOURCE}; return state?.marker ?? null; })()`
+/**
+ * The whole snapshot, reduced to the freshness marker alone.
+ *
+ * Read with the very script the page was observed with: the marker carries the element table, so a
+ * marker read by the other variant would answer "changed" on every page it is asked about.
+ */
+function markerSource(guessClickableElements: boolean): string {
+  const state = guessClickableElements ? SNAPSHOT_SOURCE : SNAPSHOT_SOURCE_PLAIN
+  return `(() => { const state=${state}; return state?.marker ?? null; })()`
+}
 
 /** Content hash of everything that should be true about a page and its controls. */
 export function fingerprint(state: PageState): string {

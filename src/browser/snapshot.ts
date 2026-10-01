@@ -9,6 +9,12 @@
  * template a byte-faithful carrier; `tests/snapshot.test.ts` asserts that
  * property, so a future edit to the copy cannot silently break it.
  *
+ * The one thing that is not upstream is the block below the control query: an element a page makes
+ * clickable with its own script rather than with a control tag is offered as a candidate too. It
+ * sits behind a single switch (`__JEV_DEEP_SCAN__`, substituted once for each of the two exports),
+ * so `SNAPSHOT_SOURCE_PLAIN` is this same script with that block not running — the reading every
+ * page had before it existed, byte for byte, and what the setting's "off" means.
+ *
  * It runs as one expression and returns the whole page state: the indexed
  * element table, the visible text, the freshness marker, the per-node guards, and the
  * count of structures it could not reach into (see `./nested.ts`).
@@ -20,7 +26,7 @@
  * walker instead: both callers must agree on what "the visible text" means, and the
  * decision request is sent that same text on every step.
  */
-export const SNAPSHOT_SOURCE = String.raw`(() => {
+const SNAPSHOT_BODY = String.raw`(() => {
   if (!document.body) return null;
   const cache = window.__jevFast ||= {ids:new WeakMap(), nodes:new Map(), next:1};
   const identity = e => {
@@ -83,6 +89,9 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
   const actions=[];
+  // The nodes the control query above really offered — it is what tells the deep scan below which
+  // elements the table already carries, so that nothing is offered twice.
+  const offered=new Set();
   // A field can be driven on the keyboard as well as by typing, and that is not decoration: an
   // autocomplete list is often plain markup in a shape the selectors above still cannot name, so a
   // key stays the only way to pick from one. One action per key, so each gets its own target.
@@ -99,6 +108,7 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
     if (!rname || r.width<=0 || r.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     if (rname==='option' && !role(e) && e.querySelector('a[href],button,[role="button"]')) continue;
+    offered.add(e);
     const base={node:identity(e),role:rname,label:own||rname,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
     for (const key of ['checked','selected','expanded']) {
@@ -122,6 +132,109 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
         for (const key of keys)
           actions.push({...base,kind:'press_key',key,value,label:base.label+' → '+key});
       }
+    }
+  }
+  // ---- elements that are clickable only because the page's own script made them so ----
+  //
+  // Every selector above names a control by what it is: a tag the browser treats as one, or a role
+  // the page declares. A site that hangs its own handler on a plain element — the shape React and Vue
+  // reach for, where the listener is delegated from a root container and the markup says nothing —
+  // leaves the model reading the words on the screen with nothing to click: on a hotel list that is
+  // the row, and the 「预订」 that is the page's whole point.
+  //
+  // Three clues are asked, in the order of how much each one proves. All three are about the element
+  // itself; what an element looks like is not asked at all. A cursor:pointer style was measured on the same
+  // page as the rest of this and rejected as a source: 253 elements carry it inside one viewport and
+  // 103 of them have a name, nearly all navigation icon slots, so it names decoration rather than
+  // clickability, and it is not one of the three clues below.
+  //
+  //   1. getEventListeners(el): the browser's own answer to "does this node respond to a click", the
+  //      same one the DevTools front end's Event Listeners pane shows. It reports only the listeners
+  //      attached to that node, so a page that delegates from a root container answers no for every
+  //      row it renders — measured on React 18.3.1, where the three rows of a list all answered false
+  //      and only the root container answered true. It is a console API: the name is in scope only
+  //      when the evaluation asked for it (includeCommandLineAPI, see ./session.ts) and is undefined
+  //      otherwise — which is also how it is known to put nothing on the page, since an API installed
+  //      on the page's own global object would answer either way.
+  //   2. the inline on* attributes: listeners spelled in the markup, and the clue that still works
+  //      where (1) is unavailable.
+  //   3. the properties React 17+ and its older runtime leave on the elements they rendered
+  //      (__reactProps$<key>, __reactEventHandlers$<key>). React keeps the handler in these props and
+  //      attaches the listener to its root container, so the handler for a row sits on the row or a
+  //      little way above it: walked at most REACT_UP levels up and never further, with the level it
+  //      was found at written into the entry rather than thrown away, because "three levels up" is a
+  //      weaker fact than "on this element". Walking to the root instead would make one container
+  //      holding a whole page look like a candidate. This clue has no real-browser measurement behind
+  //      it yet (the other two do), so it is the most conservative of the three.
+  //
+  // Four filters, all of them measured requirements rather than tidiness: visible by the rule above;
+  // a centre inside the viewport, the same test the native controls get; a name to call it by; and
+  // not a whole screen — the last one because the same measurement found every page's own BODY
+  // (1105×780 inside a 1120×780 viewport) answering that it responds to clicks.
+  //
+  // An entry here is about 67 characters compact, so the allowance below is under 1k characters of
+  // the request body and the table's own 48-entry cap is what really decides. That is why the pool is
+  // capped, why it is appended after the native controls, and why the tie-break inside
+  // trimActionSpace still prefers them: a guess only takes a slot from a control that reads as less
+  // relevant to the goal's own words.
+  if (__JEV_DEEP_SCAN__) {
+    const GUESS_LIMIT=12, REACT_UP=3;
+    const events=['click','mousedown','mouseup','pointerdown','pointerup','DOMActivate'];
+    const inline=['onclick','onmousedown','onmouseup','onpointerdown','onpointerup'];
+    const listeners=typeof getEventListeners==='function' ? getEventListeners : null;
+    const reacts=e=>{
+      for (const key of Object.keys(e)) {
+        if (!key.startsWith('__reactProps$') && !key.startsWith('__reactEventHandlers$')) continue;
+        const props=e[key];
+        if (props && (typeof props.onClick==='function' || typeof props.onMouseDown==='function' ||
+            typeof props.onMouseUp==='function' || typeof props.onPointerDown==='function')) return true;
+      }
+      return false;
+    };
+    // Which clue says this element is clickable, or '' when none of them does. The React clue carries
+    // the level it was found at, so a run can tell a handler of its own from one three levels up.
+    const clue=e=>{
+      if (listeners && events.some(n=>((listeners(e)||{})[n]||[]).length>0)) return 'listener';
+      if (inline.some(n=>e.getAttribute(n)!==null)) return 'inline';
+      let at=e;
+      for (let up=0; at && up<=REACT_UP; up+=1, at=at.parentElement)
+        if (reacts(at)) return 'react'+up;
+      return '';
+    };
+    // Whether this element holds something the native table already offers: the rule a gridcell
+    // holding a button gets, for the same reason — the inner, named control is left to do the job.
+    const holds=e=>{
+      for (const child of e.childNodes)
+        if (child.nodeType===1 && (offered.has(child) || holds(child))) return true;
+      return false;
+    };
+    const kept=new Set();
+    const insideKept=e=>{
+      for (let p=e.parentElement; p; p=p.parentElement) if (kept.has(p)) return true;
+      return false;
+    };
+    for (const e of document.querySelectorAll('*')) {
+      if (kept.size>=GUESS_LIMIT) break;
+      // The cheapest question first: the listener map is a lookup, while visibility and naming cost
+      // style resolution and tree walks.
+      if (offered.has(e)) continue;
+      const found=clue(e);
+      if (!found) continue;
+      if (!safe(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]') || !visible(e)) continue;
+      const r=e.getBoundingClientRect(), area=r.width*r.height;
+      if (area<=0 || area>=innerWidth*innerHeight*0.8) continue;
+      const x=r.x+r.width/2, y=r.y+r.height/2;
+      if (x<0 || y<0 || x>=innerWidth || y>=innerHeight) continue;
+      const own=name(e).trim();
+      if (!own || holds(e) || insideKept(e)) continue;
+      const base={node:identity(e),role:role(e)||'button',label:own,guess:found,
+        rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+      for (const key of ['checked','selected','expanded']) {
+        const value=e.getAttribute('aria-'+key);
+        if (value!==null) base[key]=value;
+      }
+      actions.push({...base,kind:'click',value:''});
+      kept.add(e);
     }
   }
   // Structures every query above cannot reach into: a visible frame, and an open shadow
@@ -164,3 +277,15 @@ export const SNAPSHOT_SOURCE = String.raw`(() => {
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
     scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions,nested};
 })()`
+
+/**
+ * The script as a run evaluates it, with the deep scan for script-made clickables on.
+ *
+ * The switch is substituted rather than passed, because the code is injected as one expression:
+ * the off variant is then the same bytes with one word changed, which is what makes "off" the
+ * reading this project had before the block existed rather than a second implementation of it.
+ */
+export const SNAPSHOT_SOURCE = SNAPSHOT_BODY.replace('__JEV_DEEP_SCAN__', 'true')
+
+/** The same script with the deep scan off: the native controls alone, as every run read a page before. */
+export const SNAPSHOT_SOURCE_PLAIN = SNAPSHOT_BODY.replace('__JEV_DEEP_SCAN__', 'false')

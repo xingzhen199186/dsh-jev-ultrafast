@@ -81,7 +81,10 @@ const SNAPSHOT_CEILING = 6000
 const SCREEN_STEP = 560
 
 const REAL_DEPS: ReadDeps = {
-  open: (url, options) => BrowserSession.open(url, options),
+  // Reading never looks at the element table — it collects text and scrolls — so the deep scan for
+  // script-made clickables is off here on purpose: it costs one listener lookup per element of every
+  // screen, and nothing on this path can spend a candidate.
+  open: (url, options) => BrowserSession.open(url, options, { guessClickableElements: false }),
 }
 
 /** The snapshot's text is one text node per line, already trimmed; blank lines carry nothing. */
