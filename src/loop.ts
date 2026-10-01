@@ -22,14 +22,15 @@
  *  - three consecutive steps that left the page unchanged stop the run, and a run of steps on
  *    one and the same target that only ever brings back page states the run has already shown
  *    stops it as well, saying which action it was stuck on instead of burning the budget;
- *  - a step that acted on an element and did not move the screen makes that element a dead end, and
- *    it is taken out of every copy of the candidate table before the next request is built. The
+ *  - a step that acted on an element and did not move the screen makes that element a dead end. The
  *    judgement is the plugin's own, and where the run should go instead is not part of it: see
- *    `./dead-ends.ts`.
+ *    `./dead-ends.ts`. Whether that dead end is then taken out of every copy of the candidate table
+ *    before the next request is built is the `excludeDeadEndElements` setting's business — off by
+ *    default, and while it is off the run judges the dead ends, reports them, and takes nothing away.
  */
 import type { ActionSpace, ElementEntry } from './decision/action-space'
 import { actionSpace, trimActionSpace, withoutElements } from './decision/action-space'
-import { nextDeadEnds } from './dead-ends'
+import { nextDeadEnds, type DeadEndRecord } from './dead-ends'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
@@ -141,6 +142,13 @@ export interface TaskOptions {
   maxSteps?: number
   screenshots?: boolean
   /**
+   * Whether an element the run judged a dead end is taken out of the candidates. Off by default, and
+   * the judgement is made and reported either way — see `./dead-ends.ts` for why the removal waits for
+   * a stronger test than the one that produces the judgement. The tool and the inspector take this from
+   * the settings page; a caller that leaves it out gets the recorded-only behaviour.
+   */
+  excludeDeadEndElements?: boolean
+  /**
    * Write this run's raw model exchanges into a directory under the system temp
    * directory, together with one frame per step when `screenshots` is on, and report
    * that directory in the result. Off by default: the loop stays free of side effects
@@ -250,6 +258,14 @@ export interface TaskResult {
   textCut: number
   /** Steps that opened new tabs, and which of those pages the run moved onto. */
   follows: FollowRecord[]
+  /**
+   * The elements this run judged to be dead ends, in the order it judged them, each with the step that
+   * produced the judgement. Recorded whether or not they were taken out of the candidates, so a run can
+   * be reviewed for a judgement that set aside the one element that mattered.
+   */
+  deadEnds: DeadEndRecord[]
+  /** Whether those elements were taken out of the candidates, or only written down. */
+  deadEndsExcluded: boolean
   /** The independent check of the run's own claim, always present and never assumed. */
   verification: Verification
   /**
@@ -298,6 +314,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const maxSteps = options.maxSteps ?? MAX_STEPS
   const maxDecisions = maxSteps * 2
   const screenshots = options.screenshots === true
+  // Whether a dead end the run judges is taken out of the candidate table or only written down. Off
+  // unless it is asked for: the judgement behind it is weaker than the removal it feeds (see
+  // `./dead-ends.ts`), so the removal waits behind a switch while the judgement is always made.
+  const excludeDeadEnds = options.excludeDeadEndElements === true
   const artifacts = options.record ? openArtifacts(screenshots) : null
   // The trace sink rides along on the sources the caller already built, so recording
   // needs no second plumbing path into the decision or text layers.
@@ -338,8 +358,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // The elements this run has found to be dead ends: a step acted on one and the screen did not move
   // for it. Read once per request, by `nextDeadEnds`, and emptied by a screen that really changed.
   // The judgement is the plugin's own rather than a sentence to the model — see `./dead-ends.ts` for
-  // why, and for what this rule deliberately does not do.
+  // why, and for what this rule deliberately does not do. The set is what a request is built from when
+  // the removal is on; `deadEndsJudged` is the same knowledge in the shape the run reports, and is kept
+  // whether or not anything is taken away.
   let deadEnds = new Set<string>()
+  const deadEndsJudged: DeadEndRecord[] = []
   // The action the run stopped on because it kept repeating it, when it stopped that way. It
   // rides along into the run's trace, so the file explains the stop without the conversation.
   let stuckOn: { operation: string; target: string | null; action: string; times: number } | null = null
@@ -399,17 +422,33 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       const full = actionSpace(page.actions)
       // ---- what is already a dead end? ----
       // Asked here, about the state this request is about to carry: the last step acted on an element
-      // and its own honest reading says the screen did not move for it, so that element is out of the
-      // candidates from now on, and a step that really moved the screen empties the set (see
-      // `./dead-ends.ts`). Recomputed from the step that really preceded this request rather than
-      // remembered apart from it, so the two cannot drift.
-      deadEnds = nextDeadEnds(deadEnds, history[history.length - 1], full.elements.length)
+      // and its own honest reading says the screen did not move for it, so that element is a dead end,
+      // and a step that really moved the screen empties the set (see `./dead-ends.ts`). Recomputed from
+      // the step that really preceded this request rather than remembered apart from it, so the two
+      // cannot drift. The judgement is made whether or not it is acted on: with the setting off, the set
+      // is what the run reports instead of what it takes away.
+      const lastStep = history[history.length - 1]
+      const judged = nextDeadEnds(deadEnds, lastStep, full.elements.length)
+      for (const element of judged) {
+        if (deadEnds.has(element)) continue
+        // Written down as it is judged, with the step it came from, because that is the only thing that
+        // lets a reader check the judgement later — and with the setting off it is the only trace it
+        // leaves at all.
+        deadEndsJudged.push({
+          step: lastStep?.step ?? 0,
+          element,
+          target: lastStep?.target ?? '',
+          label: full.elements.find((entry) => entry.index === element)?.label ?? '',
+        })
+      }
+      deadEnds = judged
       // Taken out of the table itself, before the cap and the request budget below read it, so the
       // room one request has is never spent on an element the run has already ruled out. Which
       // elements they are is never said — they are simply not there — while how many of the page's
       // own elements they account for joins the count below, because that count is what tells the
-      // service it is reading a selection of the page rather than the whole of it.
-      const live = withoutElements(full, deadEnds)
+      // service it is reading a selection of the page rather than the whole of it. With the removal
+      // off, nothing is taken away at all and the request is the page's own table.
+      const live = excludeDeadEnds ? withoutElements(full, deadEnds) : full
       const dead = full.elements.length - live.elements.length
       const recent = history.map((entry) => entry.target)
       // Fixed while the table is cut, so the request measured below is the request that is sent.
@@ -790,6 +829,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     // Likewise: what the service said on the steps it was not sure about, and whether the two
     // answers it gave agreed.
     ...(reasks.length > 0 ? { reasks } : {}),
+    // And the dead ends the run judged for itself: which elements, at which step, and whether they
+    // were taken out of the candidates or only written down.
+    ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
   })
   artifacts?.finish(elapsedMs())
   return {
@@ -806,6 +848,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     omittedElements,
     textCut,
     follows,
+    deadEnds: deadEndsJudged,
+    deadEndsExcluded: excludeDeadEnds,
     verification,
     // Read off the page the run actually stopped on, so the sentence is about what the
     // reader is looking at rather than about a page seen three steps ago.

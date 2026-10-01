@@ -36,6 +36,7 @@ export interface RunSettings {
   textReasoning: 'none' | 'auto'
   maxSteps: number
   screenshots: boolean
+  excludeDeadEndElements: boolean
 }
 
 /** Read every live setting once, so one run cannot straddle two versions of the page. */
@@ -57,6 +58,7 @@ export function readSettings(config: ConfigShape): RunSettings {
     textReasoning: config.textReasoning.get(),
     maxSteps: config.maxSteps.get(),
     screenshots: config.screenshots.get(),
+    excludeDeadEndElements: config.excludeDeadEndElements.get(),
   }
 }
 
@@ -158,6 +160,7 @@ export async function prepareRun(
     base: {
       maxSteps: overrides.maxSteps ?? settings.maxSteps,
       screenshots: overrides.screenshots ?? settings.screenshots,
+      excludeDeadEndElements: settings.excludeDeadEndElements,
       record: overrides.record ?? false,
       signal: overrides.signal,
       onEvent: overrides.onEvent,

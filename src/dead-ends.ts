@@ -5,8 +5,18 @@
  * The judgement is made from the run's own honest reading of a step — `page_changed`, which is the
  * address and the element table and never the page's own text (see `repeatedActionState` in
  * `./loop.ts`): the last step acted on an element and the screen did not move for it, so that
- * element is a dead end and comes out of the candidate table from the next request on. A step that
- * really changed the screen empties the set, and the run starts over from the page it landed on.
+ * element is a dead end. A step that really changed the screen empties the set, and the run starts
+ * over from the page it landed on.
+ *
+ * Whether a dead end then comes out of the candidate table is the setting's business rather than this
+ * judgement's. `excludeDeadEndElements` is off by default, and while it is off the run judges and
+ * writes the dead ends down without taking anything away (see `deadEndNote`, and `TaskResult.deadEnds`
+ * in `./loop.ts`). It is off because the test behind the judgement — the address and the element table
+ * both standing still — is much weaker than the removal it would feed: a step that showed nothing is
+ * not proof that the element can never matter, and taking away the one element that did costs the run
+ * more than leaving a dead end in the table for a few steps, which the stopping rules already catch.
+ * That is also why the judgement is recorded either way: it is the thing a reader has to be able to
+ * check before the removal is ever turned on.
  *
  * This is the plugin's own decision rather than a sentence to the model because two sets of offline
  * experiments said so (2026-10, four rounds). Telling the service in words not to repeat itself
@@ -77,4 +87,38 @@ export function nextDeadEnds(
   if (offered - next.size - 1 < MIN_OPEN_ELEMENTS) return next
   next.add(element)
   return next
+}
+
+/**
+ * One element the run judged a dead end, and the step that judged it.
+ *
+ * Kept in the run's own report whether or not the element was taken out of the candidates, because
+ * the judgement — not the removal — is what a reader has to be able to check: with the setting off it
+ * is the only trace the judgement leaves anywhere.
+ */
+export interface DeadEndRecord {
+  /** The step whose action led nowhere — the step itself, not the request that followed it. */
+  step: number
+  /** The element itself, as the index the page and the code both use: `4` for `4`, `4:2`, `4:enter`. */
+  element: string
+  /** The target key the step acted on, so a dropdown option or a key press is told apart. */
+  target: string
+  /** What that element was called when it was judged. */
+  label: string
+}
+
+/**
+ * One line about the dead ends this run judged: how many, whether they were taken out of the
+ * candidates, and which step produced each one. Empty when the run judged none, so an ordinary run
+ * grows no sentence about them.
+ */
+export function deadEndNote(deadEnds: readonly DeadEndRecord[], excluded: boolean): string {
+  if (deadEnds.length === 0) return ''
+  const where = deadEnds
+    .map((record) => `第 ${record.step} 步的 [${record.element}]${record.label ? `「${record.label}」` : ''}`)
+    .join('、')
+  return (
+    `本次识别到 ${deadEnds.length} 个死路` +
+    `（${excluded ? '已排除，不再交给决策服务' : '未排除，仍照原样交给决策服务'}）：${where}`
+  )
 }

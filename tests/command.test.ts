@@ -66,6 +66,8 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
     omittedElements: 0,
     textCut: 0,
     follows: [],
+    deadEnds: [],
+    deadEndsExcluded: false,
     verification: verification(),
     pageNote: '',
     omittedActions: 0,
@@ -323,6 +325,21 @@ describe('what the reader is told afterwards', () => {
     expect(text).toContain(note)
     // Nothing to say about an ordinary page: the line does not appear at all.
     expect(summaryText(result(), 'https://example.test')).not.toContain('嵌套的框架')
+  })
+
+  it('says which elements it judged dead ends, and whether they were taken out', () => {
+    // The judgement is recorded whether or not it was acted on, so with the removal off — the default —
+    // this line is the only place the reader sees it at all. Which of the two happened is part of it.
+    const judged = [{ step: 2, element: '4', target: '4:enter', label: '搜索' }]
+    const kept = summaryText(result({ deadEnds: judged }), 'https://example.test')
+    expect(kept).toContain('本次识别到 1 个死路（未排除，仍照原样交给决策服务）')
+    expect(kept).toContain('第 2 步的 [4]「搜索」')
+
+    const removed = summaryText(result({ deadEnds: judged, deadEndsExcluded: true }), 'https://example.test')
+    expect(removed).toContain('本次识别到 1 个死路（已排除，不再交给决策服务）')
+
+    // A run that judged none says nothing about them, which is the ordinary run.
+    expect(summaryText(result(), 'https://example.test')).not.toContain('死路')
   })
 
   it('says what the run was stopped by, and where it stopped', () => {

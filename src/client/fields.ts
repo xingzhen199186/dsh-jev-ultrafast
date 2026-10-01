@@ -234,6 +234,13 @@ export const FIELDS: readonly FieldSpec[] = [
     kind: 'switch',
     group: 'run',
   },
+  {
+    key: 'excludeDeadEndElements',
+    label: '排除死路元素',
+    hint: '把「上一步操作过、页面却没有变化」的元素从候选里拿掉；关掉时只记录不排除。',
+    kind: 'switch',
+    group: 'run',
+  },
 ]
 
 /**

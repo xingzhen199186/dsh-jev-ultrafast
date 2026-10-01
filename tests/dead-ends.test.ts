@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
-import { nextDeadEnds } from '../src/dead-ends'
+import { deadEndNote, nextDeadEnds } from '../src/dead-ends'
 import { actionSpace, withoutElements } from '../src/decision/action-space'
 import type { DecisionContext } from '../src/decision/typesafe'
 import { buildQuestionnaire } from '../src/decision/typesafe'
@@ -81,6 +81,36 @@ describe('dead ends', () => {
     // `page_changed` is null when the screen after the step could not be observed; a run that cannot
     // read the screen has not learned that anything is a dead end.
     expect([...nextDeadEnds(new Set(), { target: '4', page_changed: null }, 12)]).toEqual([])
+  })
+})
+
+/**
+ * One judgement, two things the run can do with it: take the element out of the candidates, or leave it
+ * in and say so. Which of the two happened is part of what the reader is told, because with the removal
+ * off saying so is the only thing the judgement does.
+ */
+describe('what a run says about the dead ends it judged', () => {
+  const judged = [
+    { step: 2, element: '4', target: '4:enter', label: 'Search' },
+    { step: 3, element: '5', target: '5', label: '' },
+  ]
+
+  it('says how many were judged, and that they were left in the table', () => {
+    expect(deadEndNote(judged, false)).toBe(
+      '本次识别到 2 个死路（未排除，仍照原样交给决策服务）：第 2 步的 [4]「Search」、第 3 步的 [5]',
+    )
+  })
+
+  it('says the same count when they were taken out', () => {
+    expect(deadEndNote(judged, true)).toBe(
+      '本次识别到 2 个死路（已排除，不再交给决策服务）：第 2 步的 [4]「Search」、第 3 步的 [5]',
+    )
+  })
+
+  it('says nothing at all on a run that judged none', () => {
+    // An ordinary run must not grow a sentence about a rule that never fired.
+    expect(deadEndNote([], false)).toBe('')
+    expect(deadEndNote([], true)).toBe('')
   })
 })
 

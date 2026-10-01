@@ -8,6 +8,7 @@ import { DEFAULT_MAX_CHARS, DEFAULT_MAX_SCREENS, readPage } from './browser/read
 import { registerCommand } from './command'
 import { Config } from './config'
 import type { Config as ConfigShape } from './config'
+import { deadEndNote } from './dead-ends'
 import { captureLlm } from './dsh-model'
 import { runTask } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
@@ -48,6 +49,12 @@ interface TaskOutput {
   omittedElements: number
   /** Page-text characters that request had to leave out; `0` when the whole text went. */
   textCut: number
+  /**
+   * The dead ends this run judged for itself, in the user's language; empty when it judged none.
+   * Present whether or not they were taken out of the candidates, so a reader can see a judgement
+   * that set aside the one element that mattered.
+   */
+  deadEnds: string
   /** Where the last screen's screenshot was written, or empty when none was taken. */
   screenshot: string
   /** Where this run's raw exchanges (and, with screenshots on, one frame per step) were written. */
@@ -118,6 +125,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
             sentElements: { type: 'integer', required: true },
             omittedElements: { type: 'integer', required: true },
             textCut: { type: 'integer', required: true },
+            deadEnds: { type: 'string', required: true },
             screenshot: { type: 'string', required: true },
             recordDir: { type: 'string', required: true },
           },
@@ -134,6 +142,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           }
           const cut = cutNote(value.sentElements, value.omittedElements, value.textCut)
           if (cut) summary.push(cut)
+          if (value.deadEnds) summary.push(value.deadEnds)
           if (value.note) summary.push(value.note)
           if (value.screenshot) summary.push(`最后一屏的截图已写到：${value.screenshot}`)
           if (value.recordDir) {
@@ -313,6 +322,7 @@ function toOutput(result: TaskResult, note = ''): TaskOutput {
     sentElements: result.sentElements,
     omittedElements: result.omittedElements,
     textCut: result.textCut,
+    deadEnds: deadEndNote(result.deadEnds, result.deadEndsExcluded),
     screenshot: '',
     recordDir: result.recordDir,
   }

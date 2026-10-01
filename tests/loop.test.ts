@@ -3,11 +3,14 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
-import type { ActionSpace } from '../src/decision/action-space'
+import type { Config as ConfigShape } from '../src/config'
+import { actionSpace, type ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
-import { InvalidDecision, requestChars } from '../src/decision/typesafe'
+import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
+import { Config } from '../src/index'
 import { type TaskDeps, runTask } from '../src/loop'
+import { readSettings } from '../src/run-setup'
 
 /**
  * The run loop's stopping rules, tested against a scripted page instead of a real
@@ -198,7 +201,15 @@ const text = { baseUrl: 'https://text.test/v1', apiKey: 'k', model: 'small', rea
 
 function run(
   deps: TaskDeps,
-  extra: { maxSteps?: number; signal?: AbortSignal; expect?: string[]; record?: boolean; screenshots?: boolean } = {},
+  extra: {
+    maxSteps?: number
+    signal?: AbortSignal
+    expect?: string[]
+    record?: boolean
+    screenshots?: boolean
+    /** Whether a judged dead end is taken out of the candidates. Off, as the settings page ships it. */
+    excludeDeadEndElements?: boolean
+  } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
 }
@@ -451,7 +462,59 @@ describe('run loop', () => {
     expect(result.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
   })
 
-  it('takes a dead end out of the next request, judged on the table and the address alone', async () => {
+  it('keeps a dead end in the table while the removal is off, and writes the judgement down anyway', async () => {
+    // The default, and the reason it is the default: the step showed nothing, but that is a weaker
+    // thing to know than "this element can never matter". So the run judges it, reports it, and takes
+    // nothing away — every request is the page's own table down to the byte, exactly as it was before
+    // the removal existed. The same page under the switch is the test below.
+    const crowd = [
+      ...actions,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
+    ]
+    const frames = Array.from({ length: 4 }, (_unused, index) =>
+      pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
+    )
+    const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.status).toBe('blocked')
+      expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
+
+      // The element is still offered, in the element list and in the question that asks about it.
+      const offered = h.seen.spaces[1]!
+      expect(offered.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
+      expect(offered.targets.CLICK!['1']).toBeDefined()
+      // Snapshot-style: the request the run built is the one the page's own table builds from the very
+      // same context. Nothing was removed, and no criterion was rewritten to say something was.
+      const body = (space: ActionSpace, context: DecisionContext): string =>
+        JSON.stringify(buildQuestionnaire(space, context, decision.model).request)
+      expect(body(offered, h.seen.contexts[1]!)).toBe(body(actionSpace(crowd), h.seen.contexts[1]!))
+      expect(body(offered, h.seen.contexts[1]!)).toContain('"index":"1"')
+      // And nothing pretends the page was a selection: nothing was left out.
+      expect(h.seen.contexts[1]!.omittedElements).toBeUndefined()
+      expect(result.omittedElements).toBe(0)
+
+      // The judgement itself is still made, and reported in the run's own result...
+      expect(result.deadEndsExcluded).toBe(false)
+      expect(result.deadEnds).toEqual([{ step: 1, element: '1', target: '1', label: 'Search' }])
+      // ...and written into the trace the run leaves behind, which is where it can be reviewed later.
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      expect(trace[trace.length - 1]).toMatchObject({
+        kind: 'run',
+        status: 'blocked',
+        dead_ends: [{ step: 1, element: '1', target: '1', label: 'Search' }],
+        dead_ends_excluded: false,
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('takes a dead end out of the next request when the removal is on', async () => {
     // The same carousel, on a page with enough elements to leave the floor room: the click moved
     // nothing a reader would call the screen — the controls and the address stood still while the
     // page rewrote its own text — so the element the step acted on comes out of the table the next
@@ -465,7 +528,7 @@ describe('run loop', () => {
       pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
     )
     const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
-    const result = await run(h.deps)
+    const result = await run(h.deps, { excludeDeadEndElements: true })
 
     expect(result.status).toBe('blocked')
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
@@ -492,7 +555,7 @@ describe('run loop', () => {
       choices: ['e2', 'e2', 'e2'],
       targets: { e2: '2' },
     })
-    const result = await run(h.deps)
+    const result = await run(h.deps, { excludeDeadEndElements: true })
 
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
     expect(h.seen.spaces[0]!.elements.map((element) => element.index)).toContain('2')
@@ -500,6 +563,33 @@ describe('run loop', () => {
     expect(h.seen.spaces[1]!.targets.TYPE_TEXT).toBeUndefined()
     // Set aside for a step, not forbidden: the page still offers it, and the model already answered.
     expect(h.seen.executed.map((action) => action.id)).toEqual(['e2', 'e2', 'e2'])
+    // The judgement that took it away is reported as well, not only acted on.
+    expect(result.deadEndsExcluded).toBe(true)
+    expect(result.deadEnds).toEqual([{ step: 1, element: '2', target: '2', label: 'Where from?' }])
+  })
+
+  it('carries the switch from the settings read into the run it starts', async () => {
+    // The wire between the two ends, in one test: the config field as the settings page saves it,
+    // `readSettings` as the tool and the inspector read it, and the run's own option. A switch that no
+    // longer reaches the loop would otherwise pass a test at each end and fail on the wire between them.
+    const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
+      (Config as unknown as (data: unknown) => ConfigShape)(input)
+    expect(readSettings(resolveConfig({})).excludeDeadEndElements).toBe(false)
+    const settings = readSettings(resolveConfig({ excludeDeadEndElements: true }))
+    expect(settings.excludeDeadEndElements).toBe(true)
+
+    const crowd = [
+      ...actions,
+      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
+    ]
+    const frames = Array.from({ length: 4 }, (_unused, index) =>
+      pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
+    )
+    const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
+    const result = await run(h.deps, { excludeDeadEndElements: settings.excludeDeadEndElements })
+
+    expect(result.deadEndsExcluded).toBe(true)
+    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['2', '3', '4', '5', '6', '7'])
   })
 
   it('counts a step as a change when the element table moves, the text standing still', async () => {
