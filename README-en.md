@@ -70,7 +70,7 @@ Three blocks in the settings page (Settings → Jev browser):
 |---|---|
 | Decision service | TypeSafe Jev direct, or any OpenAI-compatible route; the credential comes from the DSH credential store, the plugin stores nothing of its own |
 | Text model | Filling in field values, and the start-page fallback when a sentence carries no URL; can use a DSH built-in model or your own route |
-| Browser | Pick Chrome or Edge. **Launch and connect** starts a browser of the plugin's own; to give it the logins you already have, press **搬进我日常的登录数据** — after a countdown it closes your own browser, copies the logins, starts this plugin's browser and reopens yours (stop it from the countdown if you were not ready). Or skip it and log in once inside its own window; that login is kept too. Whether it carried over is stated in this block, on the 当前浏览器数据 line |
+| Browser | Pick Chrome or Edge; **Launch and connect** opens a browser of the plugin's own. Log in once in that window and it stays: the plugin turns on "continue where you left off" for that profile, so the login is still there after you close and reopen it. Logins from your everyday browser cannot be carried over — on Windows the credential key is bound to the profile's location and cannot be unwrapped anywhere else |
 
 Under **Advanced** you can set the decision output cap (default `393216`; when a server rejects it, the reply reports that server's own limit).
 
@@ -81,6 +81,7 @@ Under **Advanced** you can set the decision output cap (default `393216`; when a
 - File uploads and drag-and-drop, and anything inside Shadow DOM, iframes or a canvas, have never been in the action space.
 - "Content arrived" is judged from page text, not from the network: a page that only swaps images takes the no-change branch.
 - Frame-by-frame screenshots are off by default; when on, the trace directory holds `frames/NNNNNN.jpg`.
+- Logins from your everyday browser cannot move into the plugin's own browser — on Windows the credential key is bound to the profile's location, so a copy cannot unwrap it. Log in once there and the login stays.
 
 ## Relationship to upstream
 

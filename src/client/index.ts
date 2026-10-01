@@ -30,11 +30,9 @@ import { decisionProvider, resolveDecisionRoute } from '../decision/providers'
 import { TEXT_PROVIDERS, isDshRoute, resolveTextRoute, textProvider } from '../decision/text-providers'
 import { ENTRY_ID, ROUTE, TOKEN_GLOBAL, TOKEN_HEADER, sourceLabel } from '../protocol'
 import type {
-  AdoptRunStatus,
   DecisionTestReport,
   KeyState,
   LaunchReport,
-  ProfileAdoptReport,
   StatusReport,
   StorableKey,
   TextModelReport,
@@ -141,42 +139,6 @@ const SECTION_ORDER: readonly SectionId[] = ['decision', 'text', 'browser']
  */
 const BUSY_FLOOR_MS = 1200
 
-/**
- * How long this page keeps asking for the reader's browser to be closed, and how often.
- *
- * A running browser holds its cookie store exclusively, so there is no way to copy a login
- * out of it until it closes. That closing, and everything after it, happens in the host; this
- * page only re-reads how far along it is, once a second, so that a countdown a reader does get
- * to see ticks once a second.
- */
-const ADOPT_POLL_MS = 1000
-
-/**
- * The one line under the adoption buttons, which is where the countdown lives.
- *
- * The `done` line is deliberately empty: which profile is in use is a state the browser block
- * shows by itself, and a sentence congratulating the reader on it would be noise.
- */
-function adoptHint(run: AdoptRunStatus | undefined): string {
-  if (run === undefined) {
-    return (
-      '点一下：倒计时结束后，插件会自己关掉你日常那个浏览器，把登录数据搬进它的档案，' +
-      '启动它自己的浏览器，再把你日常那个原样打开。只搬登录相关的那一小部分（cookie、每站点存储），缓存不搬；' +
-      '以后在插件这份里新登录的站不会回流到日常那份，想同步就再按一次。'
-    )
-  }
-  if (run.state === 'counting') {
-    return (
-      `${run.secondsLeft} 秒后自动关掉 ${run.browser} 并开始搬。如果你正用这个浏览器看着这个页面，` +
-      `页面会跟着它一起关掉——不用管，搬完它会把 ${run.browser} 重新打开。要反悔就点「先别关」。`
-    )
-  }
-  if (run.state === 'closing') return `正在关掉 ${run.browser}…`
-  if (run.state === 'copying') return '正在把登录数据搬进插件自己的档案…'
-  if (run.state === 'done') return ''
-  return run.note ?? '没能完成。'
-}
-
 /** A block's visible title, for the sentences that have to name the block they are about. */
 function blockTitle(id: FieldGroupId): string {
   return FIELD_GROUPS.find((group) => group.id === id)?.title ?? id
@@ -191,12 +153,6 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<DecisionTestReport>()
   const [launching, setLaunching] = useState(false)
-  /** True while the logins are being copied out of the browser the reader actually uses. */
-  const [adopting, setAdopting] = useState(false)
-  /** True while this page is going back to the profile the plugin started with. */
-  const [dropping, setDropping] = useState(false)
-  /** The running "use my own logins" sequence, as the host reports it. */
-  const [adoptRun, setAdoptRun] = useState<AdoptRunStatus>()
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   /** Which blocks have their rarely-used fields opened; an unset entry follows the values. */
@@ -484,8 +440,8 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setStatus((current) => (current === undefined ? current : { ...current, browser: report.browser }))
       setNotice(
         `已按你选的 ${report.label} 启动并连上了：${report.endpoint}。它用的是` +
-          `${report.adopted ? '从你日常浏览器搬过来的那份数据' : '插件自己的数据目录'}（${report.profileDir}），` +
-          `和你日常那个分开；需要登录的网站，就在这个窗口里登录一次，登录会留在那里${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
+          `插件自己的数据目录（${report.profileDir}），和你日常那个分开；` +
+          `需要登录的网站，就在这个窗口里登录一次，登录会留在那里${saved ? '；这个选择也存下了' : '（浏览器那块的配置这次没存上，见上面的提示）'}。`,
       )
     } catch (failure) {
       setError(message(failure))
@@ -493,102 +449,6 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       setLaunching(false)
     }
   }, [filled, save])
-
-  /**
-   * Start the host's "use the logins I already have" sequence and watch it.
-   *
-   * Nothing here closes anything. The browser this sequence closes is usually the one this
-   * page is open in, so the host does the work; this only reads how far it has got, and if the
-   * page disappears along with that browser, the work still finishes.
-   */
-  const adoptFromPage = useCallback(async () => {
-    setAdopting(true)
-    setError('')
-    setNotice('')
-    try {
-      const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
-      await save('browser')
-      // Where they are right now, so the browser comes back on this very screen instead of the
-      // harness home page. Read through a cast: this client has no DOM types available.
-      const here = (globalThis as { location?: { href?: string } }).location?.href
-      setAdoptRun(
-        await ask<AdoptRunStatus>('/adopt-run', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ kind, page: here }),
-        }),
-      )
-      for (;;) {
-        await new Promise((resolve) => setTimeout(resolve, ADOPT_POLL_MS))
-        const current = await ask<AdoptRunStatus | null>('/adopt-run')
-        if (current === null) {
-          setAdoptRun(undefined)
-          return
-        }
-        setAdoptRun(current)
-        if (current.state === 'done') {
-          // The controls carry the outcome rather than a sentence: re-reading the browser block
-          // shows which profile is in use, and the way back appears alongside it.
-          setStatus(await ask<StatusReport>('/status'))
-          setAdoptRun(undefined)
-          return
-        }
-        if (current.state === 'failed') {
-          setError(current.note ?? '没能把登录数据搬过来。')
-          setAdoptRun(undefined)
-          return
-        }
-      }
-    } catch (failure) {
-      setAdoptRun(undefined)
-      setError(message(failure))
-    } finally {
-      setAdopting(false)
-    }
-  }, [filled, save])
-
-  /** Stop the countdown, for a reader who was not ready to lose their browser. */
-  const cancelAdoptFromPage = useCallback(async () => {
-    try {
-      await ask('/adopt-run/cancel', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: '{}',
-      })
-    } catch (failure) {
-      setError(message(failure))
-      return
-    }
-    setAdoptRun(undefined)
-  }, [])
-
-  /** Go back to the profile this plugin started with, leaving the copy on disk. */
-  const dropAdoptedFromPage = useCallback(async () => {
-    setDropping(true)
-    setError('')
-    setNotice('')
-    try {
-      const kind = filled('browserKind') === 'edge' ? 'edge' : 'chrome'
-      const report = await ask<ProfileAdoptReport>('/drop-adopted-profile', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind }),
-      })
-      if (report.ok) {
-        setStatus((current) =>
-          current === undefined
-            ? current
-            : { ...current, browser: { ...(current.browser ?? { ok: false }), adopted: false } },
-        )
-      } else {
-        setError(report.note ?? '没能改回插件自己的档案。')
-      }
-    } catch (failure) {
-      setError(message(failure))
-    } finally {
-      setDropping(false)
-    }
-  }, [filled])
 
   /** The name a value pasted into a block would be stored under, defaults included. */
   const decisionName = filled('decisionKeyRef') || routeDefault('keyRef', filled('decisionProvider'))
@@ -1020,49 +880,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
             createElement(
               'span',
               { style: S.actionsHint },
-              '会打开一个插件自己的浏览器窗口（端口它自己挑，不用你填）。它和你日常那个互相独立，需要登录的网站就在这个窗口里登录一次，登录会保留。',
-            ),
-          )
-        : null,
-      group.id === 'browser'
-        ? createElement(
-            'span',
-            { style: S.actionsHint },
-            `当前浏览器数据：${status?.browser?.adopted ? '从你日常浏览器搬过来的那份' : '插件自己的档案，还没有登录数据'}`,
-          )
-        : null,
-      group.id === 'browser'
-        ? createElement(
-            'div',
-            { style: S.actions },
-            createElement(
-              'button',
-              { type: 'button', onClick: () => void adoptFromPage(), disabled: adopting },
-              adopting ? '正在搬…' : '搬进我日常的登录数据',
-            ),
-            adoptRun?.state === 'counting'
-              ? createElement(
-                  'button',
-                  { type: 'button', onClick: () => void cancelAdoptFromPage() },
-                  '先别关',
-                )
-              : null,
-            createElement('span', { style: S.actionsHint }, adoptHint(adoptRun)),
-          )
-        : null,
-      group.id === 'browser' && status?.browser?.adopted
-        ? createElement(
-            'div',
-            { style: S.actions },
-            createElement(
-              'button',
-              { type: 'button', onClick: () => void dropAdoptedFromPage(), disabled: dropping },
-              dropping ? '正在改回…' : '改回插件自己的浏览器',
-            ),
-            createElement(
-              'span',
-              { style: S.actionsHint },
-              '搬过来的那份登录数据会留在磁盘上，只是不再使用它。',
+              '在插件自己的浏览器里登录一次，之后长期保留。',
             ),
           )
         : null,

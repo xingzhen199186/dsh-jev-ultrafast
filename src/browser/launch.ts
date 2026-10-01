@@ -19,11 +19,11 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import {
-  activeProfileDir,
   discoverBrowser,
+  pluginProfileDir,
   readActivePort,
   type BrowserEndpoint,
   type BrowserKind,
@@ -90,6 +90,38 @@ export function findBrowserExecutable(
   return browserExecutableCandidates(kind).find((path) => exists(path)) ?? null
 }
 
+/**
+ * Make the profile keep the logins it holds when the browser closes.
+ *
+ * Most logins are ordinary cookies with an expiry date and survive a close unharmed. Some are
+ * session cookies — GitHub's is one — which a browser keeps only for the run that created them
+ * unless it is set to reopen the last session. That setting lives in the profile's own
+ * preferences, and a profile that has never been told otherwise does not have it. Without this
+ * step a reader logs in once and finds themselves signed out the next time the window opens,
+ * which is exactly the thing this is here to prevent.
+ *
+ * Called on every launch, before the browser opens, so it holds for a profile that already
+ * exists as well as for one being made for the first time.
+ */
+export async function keepSessionCookies(profileDir: string): Promise<void> {
+  const file = join(profileDir, 'Default', 'Preferences')
+  let preferences: Record<string, unknown> = {}
+  try {
+    preferences = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+  } catch {
+    // Preferences that are missing or unreadable are not a reason to abandon the launch: this
+    // only adds one setting, and everything else the browser keeps there is unaffected.
+  }
+  const session =
+    typeof preferences.session === 'object' && preferences.session !== null
+      ? (preferences.session as Record<string, unknown>)
+      : {}
+  session.restore_on_startup = 1
+  preferences.session = session
+  await mkdir(dirname(file), { recursive: true })
+  await writeFile(file, JSON.stringify(preferences))
+}
+
 export interface LaunchOptions {
   /** The 「浏览器程序」 setting, for a portable install that is not where we look. */
   exeOverride?: string
@@ -122,9 +154,9 @@ export async function launchBrowser(
   options: LaunchOptions = {},
 ): Promise<LaunchedBrowser> {
   const label = BROWSER_LABELS[kind]
-  // An adopted profile when the reader has one, this plugin's own otherwise: see
-  // `activeProfileDir`, which is also where a run looks for an already-running browser.
-  const profileDir = activeProfileDir(kind)
+  // One profile per browser, under this plugin's own root: see `pluginProfileDir`, which is
+  // also where a run looks for a browser that is already running.
+  const profileDir = pluginProfileDir(kind)
 
   const running = await liveEndpoint(profileDir)
   if (running !== null) {
@@ -152,6 +184,9 @@ export async function launchBrowser(
   }
 
   await mkdir(profileDir, { recursive: true })
+  // Best effort on purpose: a profile this cannot be written to is still one worth starting,
+  // and a login the reader can make beats a window that never opened.
+  await keepSessionCookies(profileDir).catch(() => {})
   const child = spawn(
     exe,
     [

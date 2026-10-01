@@ -12,17 +12,13 @@
  * bundle's own `Config` is already the row's configuration and a second copy would
  * have to be kept in sync by hand.
  */
-import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import { adoptProfile, dailyProfileDir, dropAdoptedProfile, hasAdoptedProfile, pluginRoot } from './browser/adopt'
-import { createAdoptRun, type AdoptRun } from './browser/adopt-run'
-import { closeBrowser } from './browser/close'
 import { discoverBrowser } from './browser/discover'
-import { BROWSER_LABELS, findBrowserExecutable, launchBrowser } from './browser/launch'
+import { launchBrowser } from './browser/launch'
 import { BrowserSession } from './browser/session'
 import type { Config as ConfigShape } from './config'
 import { changeKey, describeKey, resolveKey, storableNames } from './credentials'
@@ -114,34 +110,11 @@ export function registerPanel(ctx: Context, config: ConfigShape): void {
       table.push({ kind: 'global', name: TOKEN_GLOBAL, value: token })
     })
 
-    // The "use my own logins" sequence runs here rather than in the page: the browser it closes
-    // is usually the one the page is open in, and a page cannot outlive the browser it sits in.
-    // The reader's browser is put back at this harness's own address, which is where they were.
-    const adoptRun = createAdoptRun({
-      deps: {
-        close: async (kind, label) => {
-          const dir = dailyProfileDir(kind)
-          if (!dir) return { ok: false, note: `没有找到 ${label} 的档案目录，没法自动关它。` }
-          return closeBrowser(kind, { profileDir: dir, ownRoot: pluginRoot() })
-        },
-        adopt: (kind, label) => adoptProfile(kind, { label }),
-        startPluginBrowser: async (kind) => {
-          await launchBrowser(kind, { exeOverride: config.browserPath.get() || undefined })
-        },
-        reopenReaderBrowser: async (kind, page) => {
-          const exe = findBrowserExecutable(kind)
-          if (!exe) return
-          // No `--user-data-dir`: this is the reader's own browser, back where they left it.
-          spawn(exe, page ? [page] : [], { detached: true, stdio: 'ignore' }).unref()
-        },
-      },
-    })
-
     disposers.push(
       webServer.register({
         kind: 'prefix',
         path: ROUTE,
-        handler: (req, res) => handle(req, res, ctx, config, token, llm, inspector, adoptRun),
+        handler: (req, res) => handle(req, res, ctx, config, token, llm, inspector),
       }),
     )
 
@@ -162,7 +135,6 @@ async function handle(
   token: string,
   llm: ReturnType<typeof captureLlm>,
   inspector: Inspector,
-  adoptRun: AdoptRun,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
   const offered = String(req.headers[TOKEN_HEADER] ?? url.searchParams.get('token') ?? '')
@@ -233,44 +205,9 @@ async function handle(
       const launched = await launchBrowser(kind, { exeOverride: config.browserPath.get() || undefined })
       const report: LaunchReport = {
         ...launched,
-        adopted: hasAdoptedProfile(kind),
         browser: await browserReport(config),
       }
       send(res, 200, report)
-      return
-    }
-    if (path === '/adopt-run') {
-      if (req.method !== 'POST') {
-        send(res, 200, adoptRun.status() ?? null)
-        return
-      }
-      const body = await readJson(req)
-      const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
-      const host = req.headers.host
-      // Back to the screen they were on, and only within this harness: the page sends its own
-      // address, and anything that is not this origin falls back to the harness home.
-      const asked = typeof body.page === 'string' ? body.page : ''
-      const sameOrigin = host !== undefined && (asked.startsWith(`http://${host}/`) || asked.startsWith(`https://${host}/`))
-      const page = sameOrigin ? asked : host ? `http://${host}/` : undefined
-      send(res, 200, adoptRun.start({ kind, label: BROWSER_LABELS[kind], page }))
-      return
-    }
-    if (path === '/adopt-run/cancel') {
-      if (req.method !== 'POST') {
-        send(res, 405, { error: '这个接口只接受 POST。' })
-        return
-      }
-      send(res, 200, { cancelled: adoptRun.cancel() })
-      return
-    }
-    if (path === '/drop-adopted-profile') {
-      if (req.method !== 'POST') {
-        send(res, 405, { error: '这个接口只接受 POST。' })
-        return
-      }
-      const body = await readJson(req)
-      const kind = body.kind === 'edge' || body.kind === 'chrome' ? body.kind : config.browserKind.get()
-      send(res, 200, await dropAdoptedProfile(kind, { label: BROWSER_LABELS[kind] }))
       return
     }
     if (path === '/text-models') {
@@ -426,7 +363,6 @@ async function browserReport(config: ConfigShape): Promise<BrowserReport> {
         source: endpoint.source,
         title: page.title,
         elements: page.actions.length,
-        adopted: hasAdoptedProfile(config.browserKind.get()),
       }
     } finally {
       await session.close()

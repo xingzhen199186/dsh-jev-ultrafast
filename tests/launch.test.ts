@@ -8,11 +8,11 @@
  * and the list of places an install usually sits.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  activeProfileDir,
   parseActivePort,
   pluginProfileDir,
   pluginProfileDirs,
@@ -25,6 +25,7 @@ import {
   browserExecutableCandidates,
   ensureBrowser,
   findBrowserExecutable,
+  keepSessionCookies,
   type BrowserKind,
   type LaunchedBrowser,
   type LaunchOptions,
@@ -100,14 +101,14 @@ describe('browser launcher', () => {
     // Both browsers can be running at once — one press of the button each — so the order of
     // these two candidates is the only thing deciding which one a task drives.
     //
-    // Pinned to a scratch harness home: each entry names the adopted profile when the reader
-    // has one, so reading the real home would make this test mean something different on a
-    // machine that has used the button than on one that has not.
+    // Pinned to a scratch harness home: each entry is built from the harness home, so reading
+    // the real home would make this test mean something different on a machine that has
+    // already run the browser than on one that has not.
     const before = process.env.DSH_HOME
     const home = mkdtempSync(join(tmpdir(), 'jev-profiles-'))
     process.env.DSH_HOME = home
     try {
-      expect(pluginProfileDirs('chrome')[0]).toBe(activeProfileDir('chrome'))
+      expect(pluginProfileDirs('chrome')[0]).toBe(pluginProfileDir('chrome'))
       expect(pluginProfileDirs('chrome')[0].endsWith(join('browser', 'chrome'))).toBe(true)
       expect(pluginProfileDirs('chrome')[1].endsWith(join('browser', 'edge'))).toBe(true)
       expect(pluginProfileDirs('edge')[0].endsWith(join('browser', 'edge'))).toBe(true)
@@ -118,6 +119,67 @@ describe('browser launcher', () => {
       if (before === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = before
       rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * The setting a login that lives in this plugin's own browser depends on.
+ *
+ * Every launch writes it before the browser opens, because a Chromium browser drops session
+ * cookies on a normal close unless it is set to reopen the last session — and a reader who
+ * logs in once and is signed out on the next start has been told something false by the page.
+ */
+describe('keeping the logins across a restart', () => {
+  const scratch = (): string => mkdtempSync(join(tmpdir(), 'jev-preferences-'))
+  const sessionOf = (dir: string): Record<string, unknown> =>
+    (JSON.parse(readFileSync(join(dir, 'Default', 'Preferences'), 'utf8')) as { session?: Record<string, unknown> })
+      .session ?? {}
+
+  it('writes the setting into a profile that has no preferences yet', async () => {
+    const dir = scratch()
+    try {
+      await keepSessionCookies(dir)
+      expect(sessionOf(dir).restore_on_startup).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps every preference the profile already had', async () => {
+    // The browser writes its own state into this one file, and a version of this that replaced
+    // the file wholesale would quietly discard it on every launch.
+    const dir = scratch()
+    try {
+      await mkdir(join(dir, 'Default'), { recursive: true })
+      writeFileSync(
+        join(dir, 'Default', 'Preferences'),
+        JSON.stringify({ session: { startup_urls: ['https://example.test'] }, intl: { app_locale: 'zh-CN' } }),
+      )
+      await keepSessionCookies(dir)
+      const preferences = JSON.parse(readFileSync(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+        session: { restore_on_startup?: number; startup_urls?: string[] }
+        intl?: { app_locale?: string }
+      }
+      expect(preferences.session.restore_on_startup).toBe(1)
+      expect(preferences.session.startup_urls).toEqual(['https://example.test'])
+      expect(preferences.intl?.app_locale).toBe('zh-CN')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('starts from an empty set rather than failing when the file is unreadable', async () => {
+    // A half-written file is a real state for this one, and refusing to open a browser because
+    // of it would lose the reader their session for no gain.
+    const dir = scratch()
+    try {
+      await mkdir(join(dir, 'Default'), { recursive: true })
+      writeFileSync(join(dir, 'Default', 'Preferences'), '{ this is not json')
+      await keepSessionCookies(dir)
+      expect(sessionOf(dir).restore_on_startup).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
