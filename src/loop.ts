@@ -650,15 +650,23 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       if (!controlStarted && options.control !== undefined) {
         controlStarted = true
         controlBudget = newControlBudget(options.control.cap)
+        // Why it could not be read, when it could not. `readChecklist` says it in one short Chinese
+        // sentence while it is happening — the model's own words included when the answer was the
+        // problem — and it is carried down to the record below, because "清单没读成" on its own
+        // cannot tell a door that refused from an answer nobody can read.
+        let why = ''
         controlPlan = await readChecklist(
           options.control.model,
           { goal: options.goal, url: page.url, title: page.title },
           controlBudget,
+          { onFailure: (said) => { why = said } },
         )
         // A run that finished with no checklist is not the same as a run that was never asked for
         // one, and the trace is the only place the difference survives: the reader who wonders why
         // a "done" was never questioned finds the reason here rather than inferring it.
-        if (controlPlan === null) artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单没读成' })
+        if (controlPlan === null) {
+          artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单没读成', why })
+        }
       }
 
       const first = await ask()

@@ -2532,10 +2532,13 @@ describe('retries that buy no step', () => {
     })
 
     it('carries on, and says so, when the checklist cannot be read', async () => {
-      // The two ways a read fails land on the same promise: a door that refuses, and an answer
-      // nobody can read as a plan. Neither is the run's problem, and neither is silent either —
-      // the trace is where a finished run can be seen to have had no flags to answer to.
-      for (const reply of [new Error('route is down'), 'not a plan at all']) {
+      // The two ways a read fails land on the same promise, and the one line they leave tells them
+      // apart: a door that refused, and a model that answered something the parser would not take —
+      // the second one is a prompt problem, and its sentence carries the words it actually said.
+      for (const [reply, why] of [
+        [new Error('route is down'), '调用出错：route is down'],
+        ['not a plan at all', '答非所问：not a plan at all'],
+      ] as const) {
         const control = controlModel(reply)
         const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
         const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
@@ -2545,7 +2548,7 @@ describe('retries that buy no step', () => {
         // Asked once and never again: a checklist nobody could read is not retried on every step.
         expect(control.asked).toHaveLength(1)
         expect(traceOf(result.recordDir).filter((record) => record.kind === 'control')).toEqual([
-          { at: expect.any(Number), kind: 'control', error: '清单没读成' },
+          { at: expect.any(Number), kind: 'control', error: '清单没读成', why },
         ])
 
         rmSync(result.recordDir, { recursive: true, force: true })

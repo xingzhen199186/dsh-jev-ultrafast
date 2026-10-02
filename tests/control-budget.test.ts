@@ -91,3 +91,62 @@ describe('reading a checklist never becomes the run\u2019s problem', () => {
     expect(budget.used).toBe(2)
   })
 })
+
+describe('why a checklist was lost, for whoever reads the run afterwards', () => {
+  it('carries the model\u2019s own words when the answer was not a plan', async () => {
+    // The reason this exists: "清单没读成" alone cannot tell a door that refused from a model that
+    // answered something this parser will not accept — and only the second one is a prompt problem.
+    const said = 'I think the landmark matters, so here is a sentence instead of json'
+    const heard: string[] = []
+    const plan = await readChecklist(controlModelFrom(async () => said), asked, newControlBudget(3), {
+      onFailure: (why) => heard.push(why),
+    })
+    expect(plan).toBeNull()
+    expect(heard).toEqual([`答非所问：${said}`])
+
+    // A long answer is cut short: this is a reason to read, not a transcript.
+    const long = 'x'.repeat(500)
+    const cut: string[] = []
+    await readChecklist(controlModelFrom(async () => long), asked, newControlBudget(3), {
+      onFailure: (why) => cut.push(why),
+    })
+    expect(cut).toEqual([`答非所问：${'x'.repeat(200)}`])
+
+    // And a read that worked reports nothing at all: the sentence is for the failures only.
+    const quiet: string[] = []
+    await readChecklist(controlModelFrom(async () => goodAnswer), asked, newControlBudget(3), {
+      onFailure: (why) => quiet.push(why),
+    })
+    expect(quiet).toEqual([])
+  })
+
+  it('names the other three ways a read is lost', async () => {
+    const spent: string[] = []
+    await readChecklist(controlModelFrom(async () => goodAnswer), asked, newControlBudget(0), {
+      onFailure: (why) => spent.push(why),
+    })
+    expect(spent).toEqual(['这次运行的问话次数用完了'])
+
+    const veryLong = 'route is down'.repeat(50)
+    const broken: string[] = []
+    await readChecklist(
+      controlModelFrom(async () => {
+        throw new Error(veryLong)
+      }),
+      asked,
+      newControlBudget(3),
+      { onFailure: (why) => broken.push(why) },
+    )
+    expect(broken).toEqual([`调用出错：${veryLong.slice(0, 200)}`])
+
+    const late: string[] = []
+    const stuck: ControlModel = {
+      call: ({ signal }) =>
+        new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    }
+    await readChecklist(stuck, asked, newControlBudget(3), { timeoutMs: 20, onFailure: (why) => late.push(why) })
+    expect(late).toEqual(['超时（20 毫秒）'])
+  })
+})
