@@ -79,7 +79,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
     defineTool({
       name: 'jev_browser_task',
       description:
-        'Drive a real browser toward one goal. The plugin opens its own Chrome/Edge tab and a separate decision model chooses an indexed element to act on at each step, so the page never has to enter this conversation. Use it for a task that needs several steps on a site (filling a form, applying filters, searching and reading a result). Returns what was observed at the end as evidence for your answer.',
+        'Drive a real browser toward one goal. Call it whenever the user asks for something to be done on the web and names the browser or this tool — for example "jev浏览器", "用浏览器", "打开浏览器帮我…", "上网帮我…", "浏览器里查/填/点一下". The plugin opens its own Chrome/Edge tab and a separate decision model chooses an indexed element to act on at each step, so the page never has to enter this conversation. Use it for a task that needs several steps on a site (filling a form, applying filters, searching and reading a result); when the user only wants a page read from top to bottom, that is jev_browser_read instead. Do not call it when the user merely mentions browsers in passing — the browser is laggy, browser settings, how browsers behave — without asking for something to be done on a web page. Returns what was observed at the end as evidence for your answer.',
       parameters: {
         goal: {
           type: 'string',
@@ -199,7 +199,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
     defineTool({
       name: 'jev_browser_read',
       description:
-        'Read a whole page from top to bottom, without acting on it. Scrolls one screen at a time, collects the visible text of each screen and returns it stitched together, so a document longer than one screen comes back complete. No decision model is called and nothing on the page is clicked, so this is the cheap way to read an article, a document, a changelog or a spec — use it when a task reported only the last screen, or whenever the question is what a page says rather than what it should do.',
+        'Read a whole page from top to bottom, without acting on it. Call it when the user asks to read or fetch one specific page in full — for example "jev浏览器读一下这个链接", "把这一页读完", "上网读一下这篇" — or when a task reported only the last screen, or whenever the question is what a page says rather than what it should do; when the user wants something done on a site, that is jev_browser_task instead. Scrolls one screen at a time, collects the visible text of each screen and returns it stitched together, so a document longer than one screen comes back complete. No decision model is called and nothing on the page is clicked, so this is the cheap way to read an article, a document, a changelog or a spec. Do not call it when the user merely mentions browsers in passing without asking for any page to be read.',
       parameters: {
         url: {
           type: 'string',
