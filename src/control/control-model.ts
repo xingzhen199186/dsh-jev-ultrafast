@@ -6,7 +6,7 @@
  * wiring decide between a DSH route and a preset provider in one place.
  *
  * The one promise this file makes to the run: it never throws. Whatever goes wrong with
- * the control model �?no budget, a timeout, an error, an answer nobody can read �?the
+ * the control model — no budget, a timeout, an error, an answer nobody can read — the
  * run is told `null` and carries on exactly as it would have without any of this.
  */
 import { parseControlPlan, type ControlPlan } from './checklist'
@@ -52,7 +52,7 @@ export function controlModelFrom(call: ControlModel['call']): ControlModel {
  *
  * `onFailure` is for whoever reads the run afterwards, not for the run: `null` alone cannot
  * say whether the door refused, the answer came too late, or the model answered something this
- * parser will not accept �?and the last of those is a prompt problem rather than a transport
+ * parser will not accept — and the last of those is a prompt problem rather than a transport
  * one, which is why the model's own words go into the sentence. Being told is a courtesy, so
  * nothing it does can become the run's problem.
  */
@@ -86,12 +86,12 @@ export async function readChecklist(
     ])
     const plan = parseControlPlan(raw, input.goal)
     // The one worth knowing about: the model answered, and this parser would not have it. The
-    // words it actually said are the whole diagnosis �?a summary of them would hide the shape
-    // the prompt failed to get across �?so they are what the sentence carries, cut short.
+    // words it actually said are the whole diagnosis — a summary of them would hide the shape
+    // the prompt failed to get across — so they are what the sentence carries, cut short.
     if (plan === null) report(options.onFailure, `答非所问：${String(raw).slice(0, 200)}`)
     return plan
   } catch (error) {
-    report(options.onFailure, timedOut ? `超时�?{timeoutMs} 毫秒）` : `调用出错�?{messageOf(error)}`)
+    report(options.onFailure, timedOut ? `超时（${timeoutMs} 毫秒）` : `调用出错：${messageOf(error)}`)
     return null
   } finally {
     if (timer !== undefined) clearTimeout(timer)
