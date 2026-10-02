@@ -236,22 +236,8 @@ export const FIELDS: readonly FieldSpec[] = [
   {
     key: 'controlEnabled',
     label: '开中控',
-    hint: '开跑时让另一个模型写一份可核对的清单，运行中每步核对。默认关。',
+    hint: '开跑时让另一个模型（用「文本模型」那一栏选的那个）写一份可核对的清单，运行中每步核对。默认关。',
     kind: 'switch',
-    group: 'control',
-  },
-  {
-    key: 'controlProvider',
-    label: '中控模型走哪条路',
-    hint: '留空就走 DSH 内置路由；也可以选插件预设的那几家。',
-    kind: 'provider',
-    group: 'control',
-  },
-  {
-    key: 'controlModel',
-    label: '模型',
-    hint: '留空就用这条路由自己的模型。',
-    kind: 'text',
     group: 'control',
   },
   {

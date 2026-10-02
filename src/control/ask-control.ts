@@ -8,8 +8,9 @@
  * and a profile where that door was never configured simply has no control layer, which is
  * the state this whole feature is off in by default.
  *
- * The source is resolved per call rather than captured once: the credential is read from the
- * harness store on the way out, so a run that rotates one is not answered with a stale copy.
+ * The source is asked for per call rather than taken once at wrap time, so a caller that
+ * resolves it fresh each time gets a fresh credential and a caller that hands over one fixed
+ * source (a run, which resolved it while assembling itself) has its provenance in one place.
  */
 import { askText, type TextHelperSource } from '../decision/text-helper'
 import type { ControlModel } from './control-model'

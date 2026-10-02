@@ -17,6 +17,7 @@ import { resolveTextRoute } from './decision/text-providers'
 import { dshRouteId } from './decision/text-providers'
 import { assertDshRoute, captureLlm, dshStream } from './dsh-model'
 import type { TaskOptions } from './loop'
+import { controlModelFromTextDoor } from './control/ask-control'
 
 /** The live settings one run is assembled from, read once so a save mid-run cannot split it. */
 export interface RunSettings {
@@ -36,6 +37,10 @@ export interface RunSettings {
   textReasoning: 'none' | 'auto'
   maxSteps: number
   screenshots: boolean
+  /** The control layer: off, a run has no memory of what it has to keep true. */
+  controlEnabled: boolean
+  controlCallCap: number
+  controlPin: string
   excludeDeadEndElements: boolean
   guessClickableElements: boolean
   dismissCoveredTarget: boolean
@@ -61,6 +66,9 @@ export function readSettings(config: ConfigShape): RunSettings {
     textReasoning: config.textReasoning.get(),
     maxSteps: config.maxSteps.get(),
     screenshots: config.screenshots.get(),
+    controlEnabled: config.controlEnabled.get(),
+    controlCallCap: config.controlCallCap.get(),
+    controlPin: config.controlPin.get(),
     excludeDeadEndElements: config.excludeDeadEndElements.get(),
     guessClickableElements: config.guessClickableElements.get(),
     dismissCoveredTarget: config.dismissCoveredTarget.get(),
@@ -192,6 +200,11 @@ export async function prepareRun(
         keyOrigin: { ref: decisionRoute.keyRef, label: decisionRoute.label, shape: decisionRoute.keyShape },
       },
       text: textSource,
+      // The control layer asks through the same text door the run resolved above: a profile
+      // that never configured one has no control layer, which is the state it ships in.
+      ...(settings.controlEnabled
+        ? { control: { model: controlModelFromTextDoor(() => textSource), cap: settings.controlCallCap } }
+        : {}),
     },
   }
 }

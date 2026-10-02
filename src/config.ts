@@ -55,13 +55,10 @@ export interface Config {
   /**
    * The control model: another asker that writes down, at the start of a run, what has to keep
    * being true, so the run can be told when one of those things stops holding. Off by default:
-   * on, every run pays for a plan it may never need. See src/control/.
+   * on, every run pays for a plan it may never need. It asks through the run's own text door
+   * (see the 文本模型 block), so there is no second model to configure. See src/control/.
    */
   controlEnabled: VolatileValue<boolean>
-  /** Empty means "reach it through a route DSH itself serves". */
-  controlProvider: VolatileValue<string>
-  /** Empty means "use that route's own model". */
-  controlModel: VolatileValue<string>
   controlCallCap: VolatileValue<number>
   /**
    * Diagnosis only. Element numbers to keep in every question whatever else is cut, so a run
@@ -188,9 +185,7 @@ export const Config = Schema.object({
     .volatile()
     .description('填写用的模型名。留空就用所选供应商自己的默认模型；走 DSH 内置那条路时，必须在这里选一个。'),
 
-  controlEnabled: Schema.boolean().default(false).volatile().description('中控：开跑时让另一个模型写一份可核对的清单，运行中核验；标志不成立就不许宣布完成。默认关。'),
-  controlProvider: Schema.string().default('').volatile().description('中控用的模型来源。留空就走 DSH 内置路由。'),
-  controlModel: Schema.string().default('').volatile().description('中控用的模型名。留空就用该路由自己的模型。'),
+  controlEnabled: Schema.boolean().default(false).volatile().description('中控：开跑时让另一个模型写一份可核对的清单，运行中核验；标志不成立就不许宣布完成。默认关，用「文本模型」那一栏的模型来写。'),
   controlCallCap: Schema.number().default(12).volatile().description('一轮运行里中控最多被叫几次。与问决策模型的次数分开计数。'),
   controlPin: Schema.string().default('').volatile().description('只给排障用：把某些元素编号钉在候选里，排查候选供给问题。留空就是正常行为。'),
 
