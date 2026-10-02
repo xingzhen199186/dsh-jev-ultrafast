@@ -260,6 +260,26 @@ describe('what the tool tells a reader about a finished run', () => {
     expect(text).not.toContain('完成')
   })
 
+  it('says the job was done when the caller’s own items passed, with the conditions beside them', () => {
+    // The same run with one difference: the caller wrote items down and they were all found. What a
+    // person wrote about the result outranks the checklist the model wrote about its own process, so
+    // this copy says a finish — and the conditions are the sentence the check's note carries.
+    const text = summary({
+      verified: true,
+      unmet: ['页面上一直保留搜索入口'],
+      verification: {
+        checked: true,
+        passed: true,
+        items: [],
+        note: '核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口',
+      },
+    })
+
+    expect(text).toContain('结果：完成\n')
+    expect(text).not.toContain('没做成')
+    expect(text).toContain('核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口')
+  })
+
   it('does not leave the note about an unchecked result naming a finish either', () => {
     // Two lines of one answer, and they have to agree. The judgement says the run did not do the job;
     // the note below it says nothing was written down to check that claim against. On a run reported

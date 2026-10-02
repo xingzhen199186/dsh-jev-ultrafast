@@ -103,7 +103,7 @@ export function helpText(): string {
 export function summaryText(result: TaskResult, url: string): string {
   const lines = [
     `目标：${result.goal}`,
-    `结果：${verdictText(result.status, result.reason, result.unmet)}`,
+    `结果：${verdictText(result.status, result.reason, result.unmet, result.verified)}`,
   ]
   // The model's own words, on their own line right under the judgement, and never a line of their
   // own when there are none: a reader has to be able to tell which of the two sentences is the
@@ -369,7 +369,7 @@ async function runOnce(
       onEvent: (event: LoopEvent) => {
         if (event.type === 'executed') onProgress?.(`第 ${event.step} 步：${event.action}`)
         else if (event.type === 'finished') {
-          onProgress?.(`结束：${verdictText(event.status, event.reason, event.unmet)}`)
+          onProgress?.(`结束：${verdictText(event.status, event.reason, event.unmet, event.verified)}`)
         }
       },
     })

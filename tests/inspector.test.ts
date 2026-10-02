@@ -227,6 +227,33 @@ describe('the inspector page', () => {
     expect(line).not.toContain('完成')
   })
 
+  it('says the job was done in its closing line when the caller’s own items passed', () => {
+    // The third copy of the judgement, for the case where a person's items were checked and passed:
+    // it has to read as a finish by the same words the other two use, and the conditions the model's
+    // checklist was released from ride in the check's own note rather than standing as a judgement.
+    const line = closingLine({
+      status: 'done',
+      reason: '',
+      unmet: ['页面上一直保留搜索入口'],
+      verified: true,
+      steps: 2,
+      decisions: 3,
+      elapsedMs: 1500,
+      verification: {
+        checked: true,
+        passed: true,
+        items: [],
+        note: '核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口',
+      },
+      pageNote: '',
+      answer: '',
+    } as unknown as TaskResult)
+
+    expect(line).toContain('结束：完成 —')
+    expect(line).not.toContain('没做成')
+    expect(line).toContain('核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口')
+  })
+
   it('reads frames named by step, and hands the step and action on to the page', async () => {
     // The reader's question is "what did step 3 look like", so the step has to survive the trip
     // from disk to the page. A run recorded before frames were named by step is still readable:

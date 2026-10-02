@@ -61,6 +61,8 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
     reason: '',
     // Nothing unmet unless a test is about a finish that was let through without its checklist.
     unmet: [],
+    // And nothing checked unless a test is about the caller's own items.
+    verified: false,
     elapsedMs: 42000,
     steps: 2,
     decisions: 2,
@@ -400,6 +402,64 @@ describe('what the reader is told afterwards', () => {
 
     expect(text).toContain('结果：没做成（模型认为已经完成，但没找到「12 元」）')
     expect(text).not.toContain('清单没成立')
+  })
+
+  describe('the caller’s own items against the model’s checklist', () => {
+    // The four combinations, said in the report's own words. Which of the two has the last word is
+    // the rule: items a person wrote down are about the result, the checklist is the driving model's
+    // own account of the process it meant to follow, and a person's test of a result is not overturned
+    // by the model's own conditions (`loop.ts` `verdictText`). The note the first case shows is the one
+    // `runTask` composes, sentence and all — `loop.test.ts` takes that end to end, and this file's job
+    // is to pin what the reader is handed once it exists.
+    it('reports a finish when the caller’s items passed, with the checklist gap as a note', () => {
+      const text = summaryText(
+        result({
+          verified: true,
+          unmet: ['页面上一直保留搜索入口'],
+          verification: verification({
+            checked: true,
+            passed: true,
+            note: '核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口',
+          }),
+        }),
+        'https://example.test',
+      )
+
+      expect(text).toContain('结果：完成\n')
+      expect(text).not.toContain('没做成')
+      expect(text).toContain('核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口')
+    })
+
+    it('reports the job as not done when the caller’s items did not pass', () => {
+      const text = summaryText(
+        result({
+          status: 'blocked',
+          reason: '模型认为已经完成，但没找到「12 元」',
+          verification: verification({ checked: true, passed: false, note: '没找到「12 元」' }),
+        }),
+        'https://example.test',
+      )
+
+      expect(text).toContain('结果：没做成（模型认为已经完成，但没找到「12 元」）')
+      expect(text).not.toContain('完成\n')
+    })
+
+    it('reports the job as not done when nobody wrote anything down and a condition never held', () => {
+      const text = summaryText(result({ unmet: ['页面上一直保留搜索入口'] }), 'https://example.test')
+
+      expect(text).toContain('结果：没做成（清单没成立：页面上一直保留搜索入口）')
+      // Nothing was checked, so there is no check's note to carry the conditions: the judgement is
+      // the only place this run's release is said, exactly as it was before the rule.
+      expect(text).not.toContain('中控清单')
+      expect(text).not.toContain('核验')
+    })
+
+    it('reports a plain finish when nobody wrote anything down and the checklist held', () => {
+      const text = summaryText(result(), 'https://example.test')
+
+      expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n')).toBe(true)
+      expect(text).not.toContain('中控清单')
+    })
   })
 
   it('says what the run was stopped by, and where it stopped', () => {

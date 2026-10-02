@@ -50,7 +50,7 @@ type LineKind = 'observed' | 'decided' | 'executed' | 'followed' | 'finished' | 
  * by both the live log and the state the page draws.
  */
 export function closingLine(result: TaskResult): string {
-  return `结束：${verdictText(result.status, result.reason, result.unmet)} — ${result.steps} 步、${
+  return `结束：${verdictText(result.status, result.reason, result.unmet, result.verified)} — ${result.steps} 步、${
     result.decisions
   } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
     result.pageNote ? `；${result.pageNote}` : ''
@@ -149,7 +149,7 @@ export function createInspector(
         line(
           run,
           'finished',
-          `运行结束：${verdictText(event.status, event.reason, event.unmet)}`,
+          `运行结束：${verdictText(event.status, event.reason, event.unmet, event.verified)}`,
         )
         break
     }

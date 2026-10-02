@@ -11,7 +11,7 @@ import type { AnswerContext, FieldContext, TextResult } from '../src/decision/te
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
-import { type LoopEvent, type TaskDeps, runTask } from '../src/loop'
+import { type LoopEvent, type TaskDeps, runTask, verdictText } from '../src/loop'
 import { MAX_ELEMENTS } from '../src/prompts'
 import { readSettings } from '../src/run-setup'
 
@@ -3242,11 +3242,14 @@ describe('retries that buy no step', () => {
       // The same release travels with the run, and with the line that reports it: a status of `done`
       // is how the run ended, and `unmet` is what keeps a reader from being shown a finished one.
       // The note about an unchecked result is part of that report, and this run was let through
-      // without anything written down to check it against either — so it may not name a finish.
+      // without anything written down to check it against either — so it may not name a finish. The
+      // end event carries that same answer as `verified`, and here it is false for that same reason:
+      // nobody wrote anything down, so there was nothing for the run's own checklist to bow to.
       expect(result.unmet).toEqual(['地址里一直带着结果页'])
       expect(result.verification.note).toBe('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
+      expect(result.verified).toBe(false)
       expect(events.filter((event) => event.type === 'finished')).toEqual([
-        { type: 'finished', status: 'done', reason: '', unmet: ['地址里一直带着结果页'] },
+        { type: 'finished', status: 'done', reason: '', unmet: ['地址里一直带着结果页'], verified: false },
       ])
 
       rmSync(result.recordDir, { recursive: true, force: true })
@@ -3268,6 +3271,63 @@ describe('retries that buy no step', () => {
       expect(result.status).toBe('blocked')
       expect(result.reason).toContain('模型认为已经完成，但')
       expect(result.unmet).toEqual(['地址里一直带着结果页'])
+    })
+
+    it('lets the caller’s own check outrank the checklist the model wrote', async () => {
+      // 豆瓣, `run-1790943189837-c1t7`, in one line: the caller's items were both on the book's page
+      // and all three answers were right, while the checklist the driving model had written asked for
+      // a home-page condition — 「页面上一直保留搜索入口」 — that a detail page cannot satisfy. The
+      // run's own claim is checked first here, and the checklist is not allowed to overturn it: the
+      // release travels on, as a sentence beside the check's note rather than as the judgement.
+      const control = controlModel(planFor('地址里一直带着结果页', '/results'))
+      const h = harness({
+        pages: [
+          pageState('f0', { text: '预订成功' }),
+          pageState('f0', { text: '预订成功' }),
+          pageState('f0', { text: '预订成功' }),
+        ],
+        choices: ['DONE'],
+      })
+      const events: LoopEvent[] = []
+      const result = await run(h.deps, {
+        control: { model: control.model, cap: 12 },
+        maxSteps: 3,
+        expect: ['预订成功'],
+        onEvent: (event) => events.push(event),
+      })
+
+      // A finish, said as one — the run's status was always `done`, and now the judgement agrees.
+      expect(result.status).toBe('done')
+      expect(result.verified).toBe(true)
+      expect(verdictText(result.status, result.reason, result.unmet, result.verified)).toBe('完成')
+      // The conditions are not lost: they are the note, in the checklist's own words, and the
+      // structured field still says which one it was — 「降级为一句备注」, not dropped.
+      expect(result.unmet).toEqual(['地址里一直带着结果页'])
+      expect(result.verification.note).toBe(
+        '核验通过：1 项都在最终页面上找到了；中控清单另有 1 条没成立：地址里一直带着结果页',
+      )
+      // And the end event carries the same answer, so the progress line and the closing report
+      // cannot disagree about the same run.
+      expect(events.filter((event) => event.type === 'finished')).toEqual([
+        { type: 'finished', status: 'done', reason: '', unmet: ['地址里一直带着结果页'], verified: true },
+      ])
+    })
+
+    it('still lets the checklist have the last word when nobody wrote anything down to check', async () => {
+      // The same run with the caller saying nothing, which is the old path: the note is the one that
+      // says the result was never checked, and the conditions stand in place of the judgement. This is
+      // what keeps the rule from being "the checklist never matters" — it matters exactly as long as
+      // no person's items were checked and passed.
+      const control = controlModel(planFor('地址里一直带着结果页', '/results'))
+      const h = harness({ pages: [pageState('f0', { text: '预订成功' }), pageState('f0'), pageState('f0')], choices: ['DONE'] })
+      const result = await run(h.deps, { control: { model: control.model, cap: 12 }, maxSteps: 3 })
+
+      expect(result.status).toBe('done')
+      expect(result.verified).toBe(false)
+      expect(verdictText(result.status, result.reason, result.unmet, result.verified)).toBe(
+        '没做成（清单没成立：地址里一直带着结果页）',
+      )
+      expect(result.verification.note).toBe('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
     })
 
     it('lets a done through once every flag holds on the page in front of it', async () => {

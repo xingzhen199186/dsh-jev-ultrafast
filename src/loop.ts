@@ -135,10 +135,12 @@ export type LoopEvent =
   | { type: 'followed'; step: number; url: string; title: string }
   /**
    * The run's last word: how it ended, why, and — when a finish was let through with its checklist
-   * still unmet — the conditions it was released from. Carried here as well as on the result so a
-   * progress line and the closing report cannot say different things about the same run.
+   * still unmet — the conditions it was released from, plus whether the caller's own items were
+   * checked and passed. All four are carried here as well as on the result so a progress line and the
+   * closing report cannot say different things about the same run: `verified` is what makes those
+   * conditions a note rather than a judgement (`verdictText`).
    */
-  | { type: 'finished'; status: RunStatus; reason: string; unmet: string[] }
+  | { type: 'finished'; status: RunStatus; reason: string; unmet: string[]; verified: boolean }
 
 export interface TaskOptions {
   goal: string
@@ -340,9 +342,19 @@ export interface TaskResult {
    * Empty on every other run, including one the checklist agreed to and one that stopped on its own.
    *
    * Not empty is not a detail of how the run ended: it is what makes the judgement a reader is shown
-   * say the run did not do what it was asked to, rather than show them a finished one (`verdictText`).
+   * say the run did not do what it was asked to, rather than show them a finished one. The one thing
+   * that outranks it is `verified` below — the caller's own items, checked and passed — and these
+   * conditions then become a sentence beside the check's own note (`verdictText`).
    */
   unmet: string[]
+  /**
+   * Whether the items the caller wrote down before the run were checked against the final page and all
+   * passed. False when the caller gave none, and false when any of them failed: a failure is not this
+   * field's business — a run whose `done` the check took back is `blocked` by then, carrying the
+   * check's own sentence as its reason. Carried on the result, on the end event and in the tool's
+   * output, so every channel that reports a run reads the same judgement.
+   */
+  verified: boolean
   elapsedMs: number
   steps: number
   decisions: number
@@ -406,12 +418,14 @@ const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没�
  * Whether a run that ended this way is reported as one that finished.
  *
  * `done` is how the run ended, and `unmet` is what a checklist was still holding out for when its
- * finish was let through: only the second of those stands between a finish and being reported as one.
- * Two sentences depend on the answer — the judgement itself (`verdictText` below) and the note about a
- * result nobody checked (`./verify.ts`) — so it is asked here rather than worked out twice.
+ * finish was let through: only the second of those stands between a finish and being reported as one
+ * — unless `verified`, which is the caller's own items having been checked and passed. See
+ * `verdictText` for why that outranks the checklist. Two sentences depend on the answer — the
+ * judgement itself (`verdictText` below) and the note about a result nobody checked (`./verify.ts`) —
+ * so it is asked here rather than worked out twice.
  */
-function judgedAsFinished(status: RunStatus, unmet: readonly string[]): boolean {
-  return status === 'done' && unmet.length === 0
+function judgedAsFinished(status: RunStatus, unmet: readonly string[], verified = false): boolean {
+  return status === 'done' && (unmet.length === 0 || verified)
 }
 
 /**
@@ -424,13 +438,26 @@ function judgedAsFinished(status: RunStatus, unmet: readonly string[]): boolean 
  * words, in the checklist's own order, one for each. This is a change of wording, not of judgement:
  * the run's status is still `done`, and nothing about how it ran, stopped or was released moved.
  *
- * A run that something else has already judged is left to that judgement. `unmet` rides on the one
- * finish that was let through, and a `done` the final `expect` check took back is `blocked` by the
- * time it is read here, so it keeps the sentence that check wrote. A run with nothing unmet reads
- * exactly as it always did, character for character.
+ * The one thing that does outrank the checklist is the caller's own check, and that is what `verified`
+ * says ran and passed. The items a caller writes down before a run are given by a person and are about
+ * the result — an order number, a confirmation line; the checklist is written by the model that drove
+ * the run and describes the process it meant to follow, decided against whatever page the run happens
+ * to be on. A person's test of a result can be questioned, but it is not for the model's own conditions
+ * to overturn it: when the check passed, the run is a finish, and the conditions it was released from
+ * are demoted to a sentence beside the check's own note (`./verify.ts`, appended in `runTask`) instead
+ * of standing in place of the judgement. The 豆瓣 run of `run-1790943189837-c1t7` is what this is for:
+ * both of the caller's items were on the book's page and all three of its answers were right, and the
+ * report still said 没做成 because 「页面上一直保留搜索入口」 — a home-page condition — cannot hold on a
+ * detail page. A `done` with nothing unmet, a `done` nobody checked, and the check that took a finish
+ * back all read exactly as they did before.
  */
-export function verdictText(status: RunStatus, reason: string, unmet: readonly string[] = []): string {
-  if (status === 'done' && !judgedAsFinished(status, unmet)) return `没做成（清单没成立：${unmet.join('；')}）`
+export function verdictText(
+  status: RunStatus,
+  reason: string,
+  unmet: readonly string[] = [],
+  verified = false,
+): string {
+  if (status === 'done' && !judgedAsFinished(status, unmet, verified)) return `没做成（清单没成立：${unmet.join('；')}）`
   return `${STATUS_LABEL[status]}${reason ? `（${reason}）` : ''}`
 }
 
@@ -1461,12 +1488,26 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // fires on a run whose pages *were* checked, and that run's note comes from the check itself, so for
   // the one note that reads it — the sentence about a result nobody checked — this is the final answer.
   const verification = verify(page?.text ?? '', options.expect, judgedAsFinished(status, unmet))
+  const verified = verification.checked && verification.passed
   if (status === 'done' && verification.checked && !verification.passed) {
     status = 'blocked'
     reason = `模型认为已经完成，但${verification.note}`
   }
+  // The caller's own items, having been checked and passed, outrank the model's checklist. The
+  // checklist is the driving model's own account of the process it meant to follow, decided by
+  // `applyFacts` against whatever page the run happens to be on; the items were written down by a
+  // person, before the run, about the result — an order number, a confirmation line. A person's test
+  // of a result can be questioned, but it is not for the model's own conditions to overturn it:
+  // 豆瓣, `run-1790943189837-c1t7`, had both of the caller's items on the book's page and all three
+  // of its answers right, and the report still said 没做成 because 「页面上一直保留搜索入口」 — a
+  // home-page condition — cannot hold on a detail page. So what the run was released from is not a
+  // judgement any more; it is this sentence, beside the check's own note, and every channel that
+  // shows the note shows the conditions with it.
+  if (verified && unmet.length > 0) {
+    verification.note = `${verification.note}；中控清单另有 ${unmet.length} 条没成立：${unmet.join('；')}`
+  }
 
-  emit({ type: 'finished', status, reason, unmet })
+  emit({ type: 'finished', status, reason, unmet, verified })
   // Pages this run opened in a window it never moved onto, counted rather than only listed step by
   // step: it is the one number that says whether a run which looked stuck was in fact landing
   // elsewhere, and reading five step records to find that out is how this went unnoticed.
@@ -1537,6 +1578,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     status,
     reason,
     unmet,
+    verified,
     elapsedMs: elapsedMs(),
     steps: history.length,
     decisions: decisionCalls,

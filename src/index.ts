@@ -32,9 +32,16 @@ interface TaskOutput {
   /**
    * The checklist's own sentences for what was still not holding when this run's finish was let
    * through anyway; empty on every other run. The judgement above reads this: a run released from a
-   * checklist it never satisfied is reported as one that did not do the job (`loop.ts` `verdictText`).
+   * checklist it never satisfied is reported as one that did not do the job (`loop.ts` `verdictText`)
+   * — unless `verified` below, in which case these conditions are a sentence beside the note.
    */
   unmet: string[]
+  /**
+   * Whether the items the caller wrote down before the run were all found on the final page. True is
+   * what makes the judgement above a finish: what a person wrote down about the result outranks the
+   * checklist the driving model wrote about its own process (`loop.ts` `verdictText`).
+   */
+  verified: boolean
   /**
    * What the run's own model said it found, in its own words, asked once at the end. Empty when
    * there was nothing to report — and never the same thing as the judgement above, which is the
@@ -117,6 +124,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
             status: { type: 'string', enum: ['done', 'blocked', 'failed'], required: true },
             reason: { type: 'string', required: true },
             unmet: { type: 'array', items: { type: 'string' }, required: true },
+            verified: { type: 'boolean', required: true },
             answer: { type: 'string', required: true },
             note: { type: 'string', required: true },
             url: { type: 'string', required: true },
@@ -141,7 +149,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
         render(args, value) {
           const summary = [
             `任务：${args.goal}`,
-            `结果：${verdictText(value.status, value.reason, value.unmet)}`,
+            `结果：${verdictText(value.status, value.reason, value.unmet, value.verified)}`,
           ]
           // What the model said it found, kept apart from the judgement above by its own lead-in and
           // its own line — and left out entirely when it had nothing to say, rather than shown empty.
@@ -311,6 +319,7 @@ export function toOutput(result: TaskResult, note = ''): TaskOutput {
     status: result.status,
     reason: result.reason,
     unmet: result.unmet,
+    verified: result.verified,
     answer: result.answer,
     note,
     url: result.page?.url ?? '',
