@@ -24,7 +24,7 @@ export function controlModelFromTextDoor(source: () => TextHelperSource): Contro
       // as many words — so the checklist question is asked exactly as the rest of the plugin asks
       // it, under the text door's own default and its re-ask for a vendor that refuses a number
       // above its maximum. Trying to be frugal here bought two runs that could not speak at all.
-      const { content } = await askText({ ...source(), signal }, system, user)
+      const { content } = await askText({ ...source(), reasoning: 'auto', signal }, system, user)
       return content
     },
   }

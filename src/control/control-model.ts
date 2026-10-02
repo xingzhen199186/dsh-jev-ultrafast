@@ -24,7 +24,7 @@ export interface ControlBudget {
 }
 
 /** Long enough for a slow route, short enough that a stuck one is not the run's problem. */
-export const CONTROL_TIMEOUT_MS = 90_000
+export const CONTROL_TIMEOUT_MS = 180_000
 
 export function newControlBudget(cap: number): ControlBudget {
   const whole = Number.isFinite(cap) ? Math.floor(cap) : 0

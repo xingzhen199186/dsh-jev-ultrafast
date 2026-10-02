@@ -32,7 +32,7 @@ describe('the budget bounds the asking', () => {
   })
 
   it('is a plain default, not a hidden setting', () => {
-    expect(CONTROL_TIMEOUT_MS).toBe(90_000)
+    expect(CONTROL_TIMEOUT_MS).toBe(180_000)
   })
 })
 
