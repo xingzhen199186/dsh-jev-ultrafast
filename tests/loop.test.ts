@@ -11,7 +11,7 @@ import type { AnswerContext, FieldContext, TextResult } from '../src/decision/te
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
-import { type TaskDeps, runTask } from '../src/loop'
+import { type LoopEvent, type TaskDeps, runTask } from '../src/loop'
 import { MAX_ELEMENTS } from '../src/prompts'
 import { readSettings } from '../src/run-setup'
 
@@ -249,6 +249,8 @@ function run(
     preferRelevantTab?: boolean
     /** The control layer's own model and allowance; left out, which is what every run did before. */
     control?: { model: ControlModel; cap: number }
+    /** Every event the loop reported, for the one line that says how the run ended. */
+    onEvent?: (event: LoopEvent) => void
   } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
@@ -3144,7 +3146,13 @@ describe('retries that buy no step', () => {
         }),
       )
       const h = harness({ pages: [pageState('f0'), pageState('f0'), pageState('f0')], choices: ['DONE'] })
-      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 }, maxSteps: 3 })
+      const events: LoopEvent[] = []
+      const result = await run(h.deps, {
+        record: true,
+        control: { model: control.model, cap: 12 },
+        maxSteps: 3,
+        onEvent: (event) => events.push(event),
+      })
 
       expect(result.status).toBe('done')
       // Only the condition that never held is named: the other one was true all along, and the
@@ -3157,8 +3165,32 @@ describe('retries that buy no step', () => {
           unmet: ['地址里一直带着结果页'],
         }),
       ])
+      // The same release travels with the run, and with the line that reports it: a status of `done`
+      // is how the run ended, and `unmet` is what keeps a reader from being shown a finished one.
+      expect(result.unmet).toEqual(['地址里一直带着结果页'])
+      expect(events.filter((event) => event.type === 'finished')).toEqual([
+        { type: 'finished', status: 'done', reason: '', unmet: ['地址里一直带着结果页'] },
+      ])
 
       rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('keeps the check that took the finish back when the checklist was unmet as well', async () => {
+      // Two judgements on one run: the checklist never held, and the page does not show what the
+      // caller asked for. The finish is let through and then taken back by the check, and it is the
+      // check's sentence that stands — the unmet conditions ride along on the result without
+      // replacing the reason this run was judged not to have done the job.
+      const control = controlModel(planFor('地址里一直带着结果页', '/results'))
+      const h = harness({ pages: [pageState('f0'), pageState('f0'), pageState('f0')], choices: ['DONE'] })
+      const result = await run(h.deps, {
+        control: { model: control.model, cap: 12 },
+        maxSteps: 3,
+        expect: ['预订成功'],
+      })
+
+      expect(result.status).toBe('blocked')
+      expect(result.reason).toContain('模型认为已经完成，但')
+      expect(result.unmet).toEqual(['地址里一直带着结果页'])
     })
 
     it('lets a done through once every flag holds on the page in front of it', async () => {
@@ -3174,6 +3206,8 @@ describe('retries that buy no step', () => {
 
       expect(result.status).toBe('done')
       expect(result.reason).toBe('')
+      // Nothing was unmet, so nothing about how this run is reported moved: it is the finish it was.
+      expect(result.unmet).toEqual([])
       expect(result.steps).toBe(1)
       expect(h.seen.decisions).toBe(2)
     })

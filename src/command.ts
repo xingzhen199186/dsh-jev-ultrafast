@@ -25,8 +25,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Config as ConfigShape } from './config'
 import { deadEndNote } from './dead-ends'
 import type { captureLlm } from './dsh-model'
-import type { LoopEvent, RunStatus, TaskResult } from './loop'
-import { runTask } from './loop'
+import type { LoopEvent, TaskResult } from './loop'
+import { runTask, verdictText } from './loop'
 import { INSPECTOR_PATH, LOGIN_HINT } from './protocol'
 import { namedSite, resolveStart } from './resolve-start'
 import { unfinishedDeaths } from './run-history'
@@ -41,8 +41,6 @@ export const DEFINITION_ID = 'dsh-jev-ultrafast'
 
 /** Where a reader can watch a run step by step instead of only reading its result. */
 export const INSPECTOR_URL = 'http://127.0.0.1:3080' + INSPECTOR_PATH
-
-const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没做成', failed: '出错了' }
 
 /**
  * What the reader typed, after the command name, read as a sentence rather than as fields.
@@ -105,7 +103,7 @@ export function helpText(): string {
 export function summaryText(result: TaskResult, url: string): string {
   const lines = [
     `目标：${result.goal}`,
-    `结果：${STATUS_LABEL[result.status]}${result.reason ? `（${result.reason}）` : ''}`,
+    `结果：${verdictText(result.status, result.reason, result.unmet)}`,
   ]
   // The model's own words, on their own line right under the judgement, and never a line of their
   // own when there are none: a reader has to be able to tell which of the two sentences is the
@@ -371,7 +369,7 @@ async function runOnce(
       onEvent: (event: LoopEvent) => {
         if (event.type === 'executed') onProgress?.(`第 ${event.step} 步：${event.action}`)
         else if (event.type === 'finished') {
-          onProgress?.(`结束：${STATUS_LABEL[event.status]}${event.reason ? `（${event.reason}）` : ''}`)
+          onProgress?.(`结束：${verdictText(event.status, event.reason, event.unmet)}`)
         }
       },
     })

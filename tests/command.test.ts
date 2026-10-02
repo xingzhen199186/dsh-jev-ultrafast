@@ -59,6 +59,8 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
     goal: '找到价格并说明是多少',
     status: 'done',
     reason: '',
+    // Nothing unmet unless a test is about a finish that was let through without its checklist.
+    unmet: [],
     elapsedMs: 42000,
     steps: 2,
     decisions: 2,
@@ -325,7 +327,8 @@ describe('what the reader is told afterwards', () => {
     const text = summaryText(result(), 'https://example.test')
 
     expect(text).not.toContain('它自己说')
-    // The lines a finished run has always reported, in the order and the wording they had.
+    // The lines a finished run has always reported, in the order and the wording they had. Nothing
+    // here is unmet — the control layer is off — and nothing about this line moved for that.
     expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n执行 2 步、2 次决策，用时 42.0 秒\n')).toBe(true)
   })
 
@@ -366,6 +369,37 @@ describe('what the reader is told afterwards', () => {
 
     // A run that judged none says nothing about them, which is the ordinary run.
     expect(summaryText(result(), 'https://example.test')).not.toContain('死路')
+  })
+
+  it('reports a finish that was let through without its checklist as a job that was not done', () => {
+    // The run said DONE and was let through with the checklist still unmet, so the report must not
+    // read as a finish: the judgement says the job was not done and names every condition that was
+    // still not holding, in the checklist's own order — and the word for a finish is nowhere in it.
+    const text = summaryText(
+      result({ unmet: ['页面上一直出现任务点名的地点', '页面一直处于附近酒店结果列表语境'] }),
+      'https://example.test',
+    )
+
+    expect(text).toContain('结果：没做成（清单没成立：页面上一直出现任务点名的地点；页面一直处于附近酒店结果列表语境）')
+    expect(text).not.toContain('完成')
+  })
+
+  it('keeps what the check that took the finish back said, even with a checklist unmet', () => {
+    // Two judgements on one run: the status was already taken from `done` by the check the caller
+    // wrote, so the unmet conditions do not get to replace its sentence — a reader is told the thing
+    // that was actually wrong, not a second reason the run did not finish.
+    const text = summaryText(
+      result({
+        status: 'blocked',
+        reason: '模型认为已经完成，但没找到「12 元」',
+        verification: verification({ checked: true, passed: false, note: '没找到「12 元」' }),
+        unmet: ['地址里一直带着结果页'],
+      }),
+      'https://example.test',
+    )
+
+    expect(text).toContain('结果：没做成（模型认为已经完成，但没找到「12 元」）')
+    expect(text).not.toContain('清单没成立')
   })
 
   it('says what the run was stopped by, and where it stopped', () => {

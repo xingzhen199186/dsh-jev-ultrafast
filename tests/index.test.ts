@@ -205,6 +205,8 @@ describe('what the tool tells a reader about a finished run', () => {
     ({
       status: 'done',
       reason: '',
+      // Nothing unmet, which is the shape of a run the control layer never had a say over.
+      unmet: [],
       answer: '',
       steps: 2,
       decisions: 2,
@@ -247,5 +249,14 @@ describe('what the tool tells a reader about a finished run', () => {
 
   it('grows no such line when the model had nothing to say', () => {
     expect(summary()).not.toContain('它自己说')
+  })
+
+  it('says the job was not done when the run was let through with a checklist unmet', () => {
+    // The tool's answer is the copy a model turn reads, and it has to say what the slash command's
+    // summary says: not a finish, and every condition that was still not holding named after it.
+    const text = summary({ unmet: ['页面上一直出现任务点名的地点', '页面一直处于附近酒店结果列表语境'] })
+
+    expect(text).toContain('结果：没做成（清单没成立：页面上一直出现任务点名的地点；页面一直处于附近酒店结果列表语境）')
+    expect(text).not.toContain('完成')
   })
 })

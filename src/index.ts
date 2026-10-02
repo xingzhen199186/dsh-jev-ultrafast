@@ -10,7 +10,7 @@ import { Config } from './config'
 import type { Config as ConfigShape } from './config'
 import { deadEndNote } from './dead-ends'
 import { captureLlm } from './dsh-model'
-import { runTask } from './loop'
+import { runTask, verdictText } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
 import { MAX_PAGE_TEXT } from './prompts'
@@ -29,6 +29,12 @@ export { Config }
 interface TaskOutput {
   status: RunStatus
   reason: string
+  /**
+   * The checklist's own sentences for what was still not holding when this run's finish was let
+   * through anyway; empty on every other run. The judgement above reads this: a run released from a
+   * checklist it never satisfied is reported as one that did not do the job (`loop.ts` `verdictText`).
+   */
+  unmet: string[]
   /**
    * What the run's own model said it found, in its own words, asked once at the end. Empty when
    * there was nothing to report — and never the same thing as the judgement above, which is the
@@ -65,12 +71,6 @@ interface TaskOutput {
   screenshot: string
   /** Where this run's raw exchanges (and, with screenshots on, one frame per step) were written. */
   recordDir: string
-}
-
-const STATUS_LABEL: Record<RunStatus, string> = {
-  done: '完成',
-  blocked: '没做成',
-  failed: '出错了',
 }
 
 /** The page text is evidence, not the question: it is capped so one run cannot flood the conversation. */
@@ -116,6 +116,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           properties: {
             status: { type: 'string', enum: ['done', 'blocked', 'failed'], required: true },
             reason: { type: 'string', required: true },
+            unmet: { type: 'array', items: { type: 'string' }, required: true },
             answer: { type: 'string', required: true },
             note: { type: 'string', required: true },
             url: { type: 'string', required: true },
@@ -140,7 +141,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
         render(args, value) {
           const summary = [
             `任务：${args.goal}`,
-            `结果：${STATUS_LABEL[value.status]}${value.reason ? `（${value.reason}）` : ''}`,
+            `结果：${verdictText(value.status, value.reason, value.unmet)}`,
           ]
           // What the model said it found, kept apart from the judgement above by its own lead-in and
           // its own line — and left out entirely when it had nothing to say, rather than shown empty.
@@ -309,6 +310,7 @@ export function toOutput(result: TaskResult, note = ''): TaskOutput {
   return {
     status: result.status,
     reason: result.reason,
+    unmet: result.unmet,
     answer: result.answer,
     note,
     url: result.page?.url ?? '',

@@ -25,7 +25,7 @@ import type { Config as ConfigShape } from './config'
 import type { captureLlm } from './dsh-model'
 import { readJson, send, sendBytes } from './http'
 import { inspectorPage } from './inspector-page'
-import { runTask, type LoopEvent, type RunStatus, type TaskResult } from './loop'
+import { runTask, verdictText, type LoopEvent, type TaskResult } from './loop'
 import { prepareRun } from './run-setup'
 import { hasLastWord } from './run-history'
 
@@ -39,9 +39,23 @@ const FRAME_NAME = /^(step-[0-9]{3}-[a-z]+|[0-9]{6})\.jpg$/
 /** How many lines the page keeps. A run is a few hundred events at most; older ones drop. */
 const MAX_LINES = 600
 
-const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没做成', failed: '出错了' }
-
 type LineKind = 'observed' | 'decided' | 'executed' | 'followed' | 'finished' | 'waiting' | 'error'
+
+/**
+ * The line the inspector shows once a run has ended: the judgement first, then the numbers, then
+ * whatever else the run left to say about itself.
+ *
+ * Exported so the judgement half — the part that has to agree with the tool's answer and the slash
+ * command's summary — can be held to account without standing up a browser, and read from one place
+ * by both the live log and the state the page draws.
+ */
+export function closingLine(result: TaskResult): string {
+  return `结束：${verdictText(result.status, result.reason, result.unmet)} — ${result.steps} 步、${
+    result.decisions
+  } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
+    result.pageNote ? `；${result.pageNote}` : ''
+  }${result.answer ? `；它自己说：${result.answer}` : ''}`
+}
 
 interface StepLine {
   seq: number
@@ -135,7 +149,7 @@ export function createInspector(
         line(
           run,
           'finished',
-          `运行结束：${STATUS_LABEL[event.status]}${event.reason ? `（${event.reason}）` : ''}`,
+          `运行结束：${verdictText(event.status, event.reason, event.unmet)}`,
         )
         break
     }
@@ -215,11 +229,7 @@ export function createInspector(
       : run.error
         ? `没能跑起来：${run.error}`
         : result
-          ? `结束：${STATUS_LABEL[result.status]}${result.reason ? `（${result.reason}）` : ''} — ${result.steps} 步、${
-              result.decisions
-            } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
-              result.pageNote ? `；${result.pageNote}` : ''
-            }${result.answer ? `；它自己说：${result.answer}` : ''}`
+          ? closingLine(result)
           : '已停止'
     const manifest = run.dir ? frameManifest(join(ARTIFACTS_ROOT, run.dir)) : { frames: [] }
     const newest = manifest.frames[manifest.frames.length - 1]

@@ -133,7 +133,12 @@ export type LoopEvent =
     }
   | { type: 'executed'; step: number; action: string; elapsedMs: number; pageChanged: boolean }
   | { type: 'followed'; step: number; url: string; title: string }
-  | { type: 'finished'; status: RunStatus; reason: string }
+  /**
+   * The run's last word: how it ended, why, and — when a finish was let through with its checklist
+   * still unmet — the conditions it was released from. Carried here as well as on the result so a
+   * progress line and the closing report cannot say different things about the same run.
+   */
+  | { type: 'finished'; status: RunStatus; reason: string; unmet: string[] }
 
 export interface TaskOptions {
   goal: string
@@ -329,6 +334,15 @@ export interface TaskResult {
   status: RunStatus
   /** Why the run stopped, in the user's language. Empty when it reached DONE. */
   reason: string
+  /**
+   * The checklist's own sentences for the conditions that were still not holding when this run's
+   * finish was let through anyway — the ones it was told about three times over and never made true.
+   * Empty on every other run, including one the checklist agreed to and one that stopped on its own.
+   *
+   * Not empty is not a detail of how the run ended: it is what makes the judgement a reader is shown
+   * say the run did not do what it was asked to, rather than show them a finished one (`verdictText`).
+   */
+  unmet: string[]
   elapsedMs: number
   steps: number
   decisions: number
@@ -379,6 +393,33 @@ export interface TaskResult {
   /** The last page the run saw, so the caller can answer from evidence rather than from the goal. */
   page: { url: string; title: string; text: string } | null
   elements: ElementEntry[]
+}
+
+/**
+ * How a run's ending is named, in one copy for every channel that shows it: the tool's answer, the
+ * slash command's summary and the inspector's closing line all read from here, so none of them can
+ * drift from the others.
+ */
+const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没做成', failed: '出错了' }
+
+/**
+ * The judgement a reader is shown for a run that has ended.
+ *
+ * A finish the checklist never agreed to is not shown as a finish. The run was told what had to keep
+ * holding, was told three times over that it did not, and was let through anyway rather than held;
+ * what the user asked for is not what came back, and this run knows it. So the judgement says the
+ * task did not get done and names every condition that was still not holding — the checklist's own
+ * words, in the checklist's own order, one for each. This is a change of wording, not of judgement:
+ * the run's status is still `done`, and nothing about how it ran, stopped or was released moved.
+ *
+ * A run that something else has already judged is left to that judgement. `unmet` rides on the one
+ * finish that was let through, and a `done` the final `expect` check took back is `blocked` by the
+ * time it is read here, so it keeps the sentence that check wrote. A run with nothing unmet reads
+ * exactly as it always did, character for character.
+ */
+export function verdictText(status: RunStatus, reason: string, unmet: readonly string[] = []): string {
+  if (status === 'done' && unmet.length > 0) return `没做成（清单没成立：${unmet.join('；')}）`
+  return `${STATUS_LABEL[status]}${reason ? `（${reason}）` : ''}`
 }
 
 /**
@@ -495,6 +536,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // How many times this run has been refused its finish by that checklist. Bounded by
   // MAX_CONTROL_REFUSALS, and belonging to the run the same way the checklist does.
   let controlRefusals = 0
+  // The checklist's own sentences for the conditions that were still not holding when a finish was
+  // let through anyway. Empty on every run that never had to be released from one, and what turns
+  // the judgement a reader is shown into something other than a finish (`verdictText` below).
+  let unmet: string[] = []
   // The range this run was pinned to, and whether an address has dropped it since. The shape is the
   // first range-shaped address the run ever saw, and until it sees one the whole matter is inert —
   // which is most of a run: the sixth run of 2026-10-02 spent its first eight decisions on the home
@@ -1014,13 +1059,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             // Told three times over and still not holding: the run is let through rather than held
             // here. This record has to be readable as a release and not as a pass. The sentence is
             // the one the inspector shows for a control record, and `let_through` with the unmet
-            // conditions is what the trace itself says; nothing here claims they were met.
+            // conditions is what the trace itself says; nothing here claims they were met. The same
+            // conditions are what the report says the run did not do: a reader is told the checklist
+            // never held, in the checklist's own words, rather than shown a finish.
+            unmet = blockedChecks(controlPlan).map((check) => check.say)
             artifacts?.trace.write({
               at: Date.now(),
               kind: 'control',
               error: '清单始终没成立，放行了',
               let_through: true,
-              unmet: blockedChecks(controlPlan).map((check) => check.say),
+              unmet,
             })
           }
         }
@@ -1350,7 +1398,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     reason = `模型认为已经完成，但${verification.note}`
   }
 
-  emit({ type: 'finished', status, reason })
+  emit({ type: 'finished', status, reason, unmet })
   // Pages this run opened in a window it never moved onto, counted rather than only listed step by
   // step: it is the one number that says whether a run which looked stuck was in fact landing
   // elsewhere, and reading five step records to find that out is how this went unnoticed.
@@ -1420,6 +1468,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     goal: options.goal,
     status,
     reason,
+    unmet,
     elapsedMs: elapsedMs(),
     steps: history.length,
     decisions: decisionCalls,

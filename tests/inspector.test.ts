@@ -7,9 +7,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction } from '../src/browser/session'
 import type { Config as ConfigShape } from '../src/config'
 import type { Decision } from '../src/decision/typesafe'
-import { createInspector } from '../src/inspector'
+import { createInspector, closingLine } from '../src/inspector'
 import { inspectorPage } from '../src/inspector-page'
-import { runTask, type LoopEvent, type TaskDeps } from '../src/loop'
+import { runTask, type LoopEvent, type TaskDeps, type TaskResult } from '../src/loop'
 
 /**
  * The inspector's own seams.
@@ -202,6 +202,29 @@ describe('the inspector page', () => {
     expect(run.trace[0].line).toContain('本次运行结束：blocked')
     expect(run.trace[0].line).toContain('（模型判断页面上已没有可以推进目标的操作）')
     expect(run.trace[0].line).toContain('；它自己说：列表里只有两家酒店，都在第一页。')
+  })
+
+  it('says the job was not done in its closing line when the finish was let through', () => {
+    // The inspector's closing line is the third copy of the judgement — the tool's answer and the
+    // slash command's summary are the other two — so it has to say the same thing by the same words:
+    // not a finish, and every condition the checklist never had satisfied named after it. Only the
+    // fields this line reads are built here; a whole run's result belongs to the loop's own tests.
+    const line = closingLine({
+      status: 'done',
+      reason: '',
+      unmet: ['页面上一直出现任务点名的地点', '页面一直处于附近酒店结果列表语境'],
+      steps: 2,
+      decisions: 3,
+      elapsedMs: 1500,
+      verification: { checked: false, passed: true, items: [], note: '' },
+      pageNote: '',
+      answer: '',
+    } as unknown as TaskResult)
+
+    expect(line).toContain(
+      '结束：没做成（清单没成立：页面上一直出现任务点名的地点；页面一直处于附近酒店结果列表语境）',
+    )
+    expect(line).not.toContain('完成')
   })
 
   it('reads frames named by step, and hands the step and action on to the page', async () => {
