@@ -470,7 +470,13 @@ function describeRecord(record: Record<string, unknown>): string {
   const at = typeof record.at === 'number' ? new Date(record.at).toLocaleTimeString('zh-CN') : ''
   const took = typeof record.took_ms === 'number' ? `，用了 ${record.took_ms} 毫秒` : ''
   const prefix = at ? `${at}　` : ''
-  if (typeof record.error === 'string') return `${prefix}${record.kind === 'text' ? '文本模型' : '决策服务'}请求失败：${record.error}`
+  if (typeof record.error === 'string') {
+    // The control layer's one recorded sentence is about itself, not about a request that
+    // failed: reading its checklist is one model call among others, but "中控：清单没读成"
+    // is the fact, where "决策服务请求失败" would name the wrong service.
+    if (record.kind === 'control') return `${prefix}中控：${record.error}`
+    return `${prefix}${record.kind === 'text' ? '文本模型' : '决策服务'}请求失败：${record.error}`
+  }
   if (record.kind === 'decision') {
     const attempt = typeof record.attempt === 'number' && record.attempt > 0 ? `（第 ${record.attempt + 1} 次尝试）` : ''
     const wrapped = record.wrapped === true ? '（带 decisionsRequest 包裹）' : ''
