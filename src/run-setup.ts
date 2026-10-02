@@ -41,7 +41,6 @@ export interface RunSettings {
   controlEnabled: boolean
   controlCallCap: number
   controlPin: string
-  excludeDeadEndElements: boolean
   guessClickableElements: boolean
   dismissCoveredTarget: boolean
   preferRelevantTab: boolean
@@ -69,7 +68,6 @@ export function readSettings(config: ConfigShape): RunSettings {
     controlEnabled: config.controlEnabled.get(),
     controlCallCap: config.controlCallCap.get(),
     controlPin: config.controlPin.get(),
-    excludeDeadEndElements: config.excludeDeadEndElements.get(),
     guessClickableElements: config.guessClickableElements.get(),
     dismissCoveredTarget: config.dismissCoveredTarget.get(),
     preferRelevantTab: config.preferRelevantTab.get(),
@@ -174,7 +172,6 @@ export async function prepareRun(
     base: {
       maxSteps: overrides.maxSteps ?? settings.maxSteps,
       screenshots: overrides.screenshots ?? settings.screenshots,
-      excludeDeadEndElements: settings.excludeDeadEndElements,
       guessClickableElements: settings.guessClickableElements,
       dismissCoveredTarget: settings.dismissCoveredTarget,
       preferRelevantTab: settings.preferRelevantTab,

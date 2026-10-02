@@ -8,8 +8,9 @@
  * element is a dead end. A step that really changed the screen empties the set, and the run starts
  * over from the page it landed on.
  *
- * Whether a dead end then comes out of the candidates is the setting's business rather than this
- * judgement's. `excludeDeadEndElements` is off by default, and while it is off the run judges and
+ * Whether a dead end then comes out of the candidates is the caller's business rather than this
+ * judgement's. `excludeDeadEndElements` is off — since 2026-10-02 the settings page does not offer it
+ * at all — and while it is off the run judges and
  * writes the dead ends down without taking anything away (see `deadEndNote`, and `TaskResult.deadEnds`
  * in `./loop.ts`). It is off because the test behind the judgement — the address and the element table
  * both standing still — is much weaker than the removal it would feed: a step that showed nothing is

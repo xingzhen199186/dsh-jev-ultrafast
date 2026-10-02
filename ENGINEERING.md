@@ -225,8 +225,8 @@ DONE / BLOCKED / FAILED（结果里带步数、决策数、耗时、留痕目录
 | `textReasoning` | `none` | 让文本模型不推理（填字段是抄写）/ 用各家默认 |
 | `maxSteps` | 60 | 动作上限；决策调用上限是它的两倍（120） |
 | `screenshots` | `false` | 每一步都截图；明显变慢，一般不开 |
-| `excludeDeadEndElements` | **`false`** | 「排除死路元素」：把"上一步操作过、页面却没有变化"的元素从候选里拿掉；**关掉时只记录不排除**。默认关闭的理由见阶段 5 |
 | `guessClickableElements` | **`true`** | 「识别自定义按钮」：把用脚本挂了点击的普通元素（很多网站的 `div`/`span` 按钮）也列为候选；关掉就只认原生控件。默认开启的理由是这条判据来自浏览器自己的回答，而不是我们猜的 |
+| ~~`excludeDeadEndElements`~~ | ~~**`false`**~~ | 「排除死路元素」：曾把"上一步操作过、页面却没有变化"的元素从候选里拿掉。**2026-10-02 已从设置页删掉**，只保留判定与记录（理由见阶段 5）；现在只有直接传 `RunOptions.excludeDeadEndElements` 的调用方才会真的排除 |
 
 最后两个是本文所覆盖的这段迭代**新增**的：`excludeDeadEndElements` 由 `8f63358` 加入（默认关闭是有理由的判断，不是保守的默认值），`guessClickableElements` 由 `167f67b` 加入（默认开启，关掉可逐字节回到旧行为）。
 

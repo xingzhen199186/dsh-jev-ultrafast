@@ -783,31 +783,6 @@ describe('run loop', () => {
     expect(result.deadEnds).toEqual([{ step: 1, element: '2', target: '2', label: 'Where from?' }])
   })
 
-  it('carries the switch from the settings read into the run it starts', async () => {
-    // The wire between the two ends, in one test: the config field as the settings page saves it,
-    // `readSettings` as the tool and the inspector read it, and the run's own option. A switch that no
-    // longer reaches the loop would otherwise pass a test at each end and fail on the wire between them.
-    const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
-      (Config as unknown as (data: unknown) => ConfigShape)(input)
-    expect(readSettings(resolveConfig({})).excludeDeadEndElements).toBe(false)
-    const settings = readSettings(resolveConfig({ excludeDeadEndElements: true }))
-    expect(settings.excludeDeadEndElements).toBe(true)
-
-    const crowd = [
-      ...actions,
-      ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
-    ]
-    const frames = Array.from({ length: 4 }, (_unused, index) =>
-      pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
-    )
-    const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
-    const result = await run(h.deps, { excludeDeadEndElements: settings.excludeDeadEndElements })
-
-    expect(result.deadEndsExcluded).toBe(true)
-    expect(h.seen.spaces[1]!.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
-    expect(h.seen.spaces[1]!.targets.CLICK!['1']).toBeUndefined()
-  })
-
   it('carries the deep-scan switch from the settings read into the run it starts', async () => {
     // The same wire as the switch above, for the switch that widens the table: the config field as
     // the settings page saves it, `readSettings` as the tool and the inspector read it, and the run's

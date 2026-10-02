@@ -62,7 +62,11 @@ export const FIELD_GROUPS: readonly FieldGroup[] = [
       '只有任务需要往输入框里填字时才会用到。直接选择供应商、模型和密钥；' +
       '插件预设由插件直连，DSH 内置则由 DSH 管地址和凭据。',
   },
-  { id: 'run', title: '任务', note: '一次任务最多走多少步、要不要留下每一步的截图。' },
+  {
+    id: 'run',
+    title: '任务',
+    note: '一次任务最多走多少步、要不要留下每一步的截图。别的开关都在「高级设置」里，平时不用动。',
+  },
   {
     id: 'control',
     title: '中控',
@@ -263,18 +267,12 @@ export const FIELDS: readonly FieldSpec[] = [
     group: 'run',
   },
   {
-    key: 'excludeDeadEndElements',
-    label: '排除死路元素',
-    hint: '把「上一步操作过、页面却没有变化」的元素从候选里拿掉；关掉时只记录不排除。',
-    kind: 'switch',
-    group: 'run',
-  },
-  {
     key: 'guessClickableElements',
     label: '识别自定义按钮',
     hint: '把用脚本挂了点击的普通元素（很多网站的 div/span 按钮）也列为候选；关掉就只认原生控件。',
     kind: 'switch',
-    group: 'run',
+    group: 'advanced',
+    section: 'run',
   },
   {
     key: 'dismissCoveredTarget',
@@ -283,7 +281,8 @@ export const FIELDS: readonly FieldSpec[] = [
       '目标被浮层挡住、点不下去时，把挡着它的那个元素和「按 Esc 关掉浮层」一起放进候选，让模型能关掉这一层；' +
       '关掉就退回旧行为，只在提示里说明被挡住了。',
     kind: 'switch',
-    group: 'run',
+    group: 'advanced',
+    section: 'run',
   },
   {
     key: 'preferRelevantTab',
@@ -292,7 +291,8 @@ export const FIELDS: readonly FieldSpec[] = [
       '一步点开后冒出多个新页面时，只跟地址或标题跟这一步目标对得上的那一个；一个都对不上、或有几个一样像就不跟，留在原页。' +
       '关掉就退回旧行为：跟最后冒出来的那个。',
     kind: 'switch',
-    group: 'run',
+    group: 'advanced',
+    section: 'run',
   },
 ]
 

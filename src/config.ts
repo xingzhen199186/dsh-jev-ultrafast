@@ -70,13 +70,6 @@ export interface Config {
   maxSteps: VolatileValue<number>
   screenshots: VolatileValue<boolean>
   /**
-   * Whether an element the run judged a dead end is taken out of the candidates. Off, and
-   * deliberately so: the judgement behind it (see src/dead-ends.ts) rests on a weaker test than the
-   * removal it feeds, and taking away the one element that mattered costs the run. With it off the
-   * judgement is still made and written down; nothing is taken away.
-   */
-  excludeDeadEndElements: VolatileValue<boolean>
-  /**
    * Whether a plain element a page made clickable with its own script is offered as a candidate as
    * well. On, and deliberately so: the judgement behind it is the browser's own answer to "does this
    * node respond to a click", asked through the DevTools listener map rather than inferred by us, and
@@ -206,11 +199,6 @@ export const Config = Schema.object({
   maxSteps: Schema.number().default(60).volatile().description('一次任务最多执行多少步。决策调用的上限是它的两倍。'),
 
   screenshots: Schema.boolean().default(false).volatile().description('是否每一步都截图。明显变慢，一般不用开。'),
-
-  excludeDeadEndElements: Schema.boolean()
-    .default(false)
-    .volatile()
-    .description('把「上一步操作过、页面却没有变化」的元素从候选里拿掉；关掉时只记录不排除。'),
 
   guessClickableElements: Schema.boolean()
     .default(true)

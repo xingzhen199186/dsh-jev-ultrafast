@@ -284,11 +284,11 @@
 
 **文本模型**（2 项）：`textProvider`（7 家预设或 `dsh:<供应商 id>`，默认 `deepseek`）= 填表时那句话由谁来生成；`textModel`（默认空）。另有三项在"高级设置"里：`textKeyRef`、`textBaseUrl`、`textReasoning`。
 
-**任务**（6 项）：`maxSteps`（60）= 动作上限（决策上限是它的两倍）；`screenshots`（`false`）= 每一步都截图；`excludeDeadEndElements`（`false`）= 排除死路元素；`guessClickableElements`（`true`）= 识别自定义按钮；`dismissCoveredTarget`（`true`）= 挡住时给出关闭动作；`preferRelevantTab`（`true`）= 只跟相关的那个。
+**任务**（2 项）：`maxSteps`（60）= 动作上限（决策上限是它的两倍）；`screenshots`（`false`）= 每一步都截图。原先挂在这里的三个开关（`guessClickableElements`、`dismissCoveredTarget`、`preferRelevantTab`）与「排除死路元素」一起，于 2026-10-02 按读者要求挪走：三个默认开的挪进「高级设置」，`excludeDeadEndElements` 直接删掉（判定与记录保留，配置项不再存在）。
 
-**高级设置**（7 项）：`browserPath`（默认空）、`userDataDir`（默认空）、`decisionKeyRef`（默认空）、`decisionEndpoint`（默认空）、`textKeyRef`（默认空）、`textBaseUrl`（默认空）、`textReasoning`（`none`｜`auto`，默认 `none`）。
+**高级设置**（10 项）：`browserPath`（默认空）、`userDataDir`（默认空）、`decisionKeyRef`（默认空）、`decisionEndpoint`（默认空）、`textKeyRef`（默认空）、`textBaseUrl`（默认空）、`textReasoning`（`none`｜`auto`，默认 `none`），加上从「任务」挪来的 `guessClickableElements`（`true`）、`dismissCoveredTarget`（`true`）、`preferRelevantTab`（`true`）。
 
-加起来 3 + 2 + 2 + 6 + 7 = **20 项**。
+加起来 3 + 2 + 2 + 2 + 10 = **19 项**。
 
 > 今天新增的四个是 `guessClickableElements`、`dismissCoveredTarget`、`preferRelevantTab`（默认全开）和 `excludeDeadEndElements`（默认关）。**四个里没有一个做过真机对照**；`excludeDeadEndElements` 只在 `s9ax` 一轮里被打开过。
 

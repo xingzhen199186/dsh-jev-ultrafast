@@ -25,8 +25,9 @@
  *  - a step that acted on an element and did not move the screen makes that element a dead end. The
  *    judgement is the plugin's own, and where the run should go instead is not part of it: see
  *    `./dead-ends.ts`. Whether that dead end is then taken out of every copy of the candidate table
- *    before the next request is built is the `excludeDeadEndElements` setting's business — off by
- *    default, and while it is off the run judges the dead ends, reports them, and takes nothing away.
+ *    before the next request is built is the `excludeDeadEndElements` option's business — off, and
+ *    since 2026-10-02 no longer reachable from the settings page, so a run judges the dead ends,
+ *    reports them, and takes nothing away.
  */
 import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
 import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
@@ -162,10 +163,11 @@ export interface TaskOptions {
     cap: number
   }
   /**
-   * Whether an element the run judged a dead end is taken out of the candidates. Off by default, and
-   * the judgement is made and reported either way — see `./dead-ends.ts` for why the removal waits for
-   * a stronger test than the one that produces the judgement. The tool and the inspector take this from
-   * the settings page; a caller that leaves it out gets the recorded-only behaviour.
+   * Whether an element the run judged a dead end is taken out of the candidates. Off, and no longer a
+   * setting anybody can turn on: the judgement is made and reported either way, and the removal it
+   * feeds only ever cost a run the element that mattered — the settings page dropped the switch on
+   * 2026-10-02, so only a caller that asks for it directly gets the exclusion. See `./dead-ends.ts`
+   * for why the removal waits for a stronger test than the one that produces the judgement.
    */
   excludeDeadEndElements?: boolean
   /**
