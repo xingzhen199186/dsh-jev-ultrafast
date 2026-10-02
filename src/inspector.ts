@@ -219,7 +219,7 @@ export function createInspector(
               result.decisions
             } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
               result.pageNote ? `；${result.pageNote}` : ''
-            }`
+            }${result.answer ? `；它自己说：${result.answer}` : ''}`
           : '已停止'
     const manifest = run.dir ? frameManifest(join(ARTIFACTS_ROOT, run.dir)) : { frames: [] }
     const newest = manifest.frames[manifest.frames.length - 1]
@@ -489,9 +489,12 @@ function describeRecord(record: Record<string, unknown>): string {
   }
   if (record.kind === 'run') {
     const seconds = typeof record.elapsed_ms === 'number' ? (record.elapsed_ms / 1000).toFixed(1) : '?'
+    // The run's own model said something about the page it stopped on: kept apart from the reason
+    // above it, which is this plugin's judgement about how the run ended rather than the model's.
+    const said = typeof record.answer === 'string' && record.answer ? `；它自己说：${record.answer}` : ''
     return `${prefix}本次运行结束：${String(record.status)}，${String(record.steps)} 步、${String(
       record.decisions,
-    )} 次决策，共 ${seconds} 秒${record.reason ? `（${String(record.reason)}）` : ''}`
+    )} 次决策，共 ${seconds} 秒${record.reason ? `（${String(record.reason)}）` : ''}${said}`
   }
   if (record.kind === 'follow') {
     // Which pages a step opened, and whether the run moved onto one of them, is what the tab

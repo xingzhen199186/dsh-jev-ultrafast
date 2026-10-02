@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 import type { Config as ConfigShape } from '../src/config'
 import { resolveDecisionRoute } from '../src/decision/providers'
 import { resolveTextRoute } from '../src/decision/text-providers'
-import { Config, apply, cutNote, followNotes, inject, launchNote, name, saveScreenshot } from '../src/index'
+import type { TaskResult } from '../src/loop'
+import { Config, apply, cutNote, followNotes, inject, launchNote, name, saveScreenshot, toOutput } from '../src/index'
 
 /**
  * The plugin's registration surface: what it asks the harness for, what it
@@ -192,5 +193,59 @@ describe('the screenshot a run can leave behind', () => {
     expect(path).not.toBe('')
     expect(path.endsWith('.jpg')).toBe(true)
     expect(readFileSync(path, 'utf8')).toBe('hello')
+  })
+})
+
+describe('what the tool tells a reader about a finished run', () => {
+  /**
+   * Only the fields this mapping reads; a whole run's result is built and asserted in the loop's own
+   * tests, and this one is about the two sentences a reader is shown rather than about a run.
+   */
+  const result = (overrides: Partial<TaskResult> = {}): TaskResult =>
+    ({
+      status: 'done',
+      reason: '',
+      answer: '',
+      steps: 2,
+      decisions: 2,
+      elapsedMs: 42000,
+      history: [],
+      follows: [],
+      elements: [],
+      textCalls: [],
+      verification: { checked: false, passed: true, items: [], note: '没有写必须出现的内容，所以结果没被核验。' },
+      omittedActions: 0,
+      sentElements: 0,
+      omittedElements: 0,
+      textCut: 0,
+      deadEnds: [],
+      deadEndsExcluded: false,
+      recordDir: '',
+      page: null,
+      ...overrides,
+    }) as unknown as TaskResult
+
+  const summary = (overrides: Partial<TaskResult> = {}): string => {
+    const [task] = registerWith()
+    const toOutputValue = toOutput(result(overrides))
+    const blocks = task!.output.render({ goal: '读出第一页的酒店' } as never, toOutputValue as never) as Array<{
+      type: string
+      text: string
+    }>
+    return blocks[0]!.text
+  }
+
+  it('puts the model s own sentence on its own line under the judgement', () => {
+    // The tool is where a model turn reads the outcome, so this is the copy that has to keep what the
+    // run said apart from what the plugin judged: two lines, each with its own lead-in.
+    const text = summary({ answer: '北京国际饭店，4.8 分，2318 条点评。' })
+
+    expect(text).toContain(
+      '结果：完成\n它自己说：北京国际饭店，4.8 分，2318 条点评。\n执行 2 步、2 次决策，用时 42.0 秒',
+    )
+  })
+
+  it('grows no such line when the model had nothing to say', () => {
+    expect(summary()).not.toContain('它自己说')
   })
 })

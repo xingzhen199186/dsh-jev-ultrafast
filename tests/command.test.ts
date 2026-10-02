@@ -71,6 +71,8 @@ function result(overrides: Partial<TaskResult> = {}): TaskResult {
     follows: [],
     deadEnds: [],
     deadEndsExcluded: false,
+    // What the run's own model said it found; empty unless a test is about that sentence.
+    answer: '',
     verification: verification(),
     pageNote: '',
     omittedActions: 0,
@@ -304,6 +306,27 @@ describe('what the reader is told afterwards', () => {
     expect(text).toContain('1. Next')
     expect(text).toContain('2. DONE')
     expect(text).toContain('run-1-abcd')
+  })
+
+  it('shows what the model said it found, on its own line under the judgement', () => {
+    const text = summaryText(result({ answer: '北京国际饭店，4.8 分，2318 条点评。' }), 'https://example.test')
+
+    // Two sentences from two sources, told apart by a lead-in and a line break: what the model said
+    // it saw, and what the plugin judged. A reader who cannot tell them apart has been misled about
+    // which one is evidence and which one is the run's own verdict.
+    expect(text).toContain(
+      '结果：完成\n它自己说：北京国际饭店，4.8 分，2318 条点评。\n执行 2 步、2 次决策，用时 42.0 秒',
+    )
+    // The judgement itself is untouched by it, character for character.
+    expect(text).toContain('结果：完成\n')
+  })
+
+  it('adds no line at all when the model had nothing to say', () => {
+    const text = summaryText(result(), 'https://example.test')
+
+    expect(text).not.toContain('它自己说')
+    // The lines a finished run has always reported, in the order and the wording they had.
+    expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n执行 2 步、2 次决策，用时 42.0 秒\n')).toBe(true)
   })
 
   it('quotes the page back, trimmed, and says when there is more of it', () => {

@@ -7,7 +7,7 @@ import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import type { ControlModel } from '../src/control/control-model'
 import { actionSpace, type ActionSpace } from '../src/decision/action-space'
-import type { FieldContext, TextResult } from '../src/decision/text-helper'
+import type { AnswerContext, FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
@@ -108,6 +108,13 @@ interface Harness {
     contexts: DecisionContext[]
     /** Every element table a decision was asked about, in order. */
     spaces: ActionSpace[]
+    /** Every context the run's own answer was asked with, in order. Empty when it was never asked. */
+    answers: AnswerContext[]
+    /**
+     * Whether each of those calls was handed the run's trace sink. False is the point: this call is
+     * allowed to fail, so it must not write a record about a failure the run never felt.
+     */
+    answerTraced: boolean[]
     /** What the loop told the browser about the page it was on when it looked for new tabs. */
     adoptOptions: Array<{ onlyIfSameUrl?: boolean; aimedAt?: string } | undefined>
     /** The browser calls in the order they arrived, so a test can assert on their sequence. */
@@ -133,6 +140,8 @@ function harness(config: {
   /** Scripted answers to "did that click open a page?", drained one per step. */
   adopt?: Array<AdoptResult | null>
   typeText?: () => Promise<TextResult>
+  /** What the run's own answer model says when it is asked, at the end. Nothing, unless a test says otherwise. */
+  answer?: () => Promise<TextResult>
   execute?: (index: number) => void | Promise<void>
   /** Called before each observation, so a test can make one throw. */
   observe?: (index: number) => void | Promise<void>
@@ -145,6 +154,8 @@ function harness(config: {
     decisions: 0,
     contexts: [] as DecisionContext[],
     spaces: [] as ActionSpace[],
+    answers: [] as AnswerContext[],
+    answerTraced: [] as boolean[],
     adoptOptions: [] as Array<{ onlyIfSameUrl?: boolean; aimedAt?: string } | undefined>,
     calls: [] as string[],
   }
@@ -204,6 +215,14 @@ function harness(config: {
       seen.executed.push(action)
       await config.execute?.(executeIndex++)
       return { executed: action.id }
+    },
+    answer: async (source, context) => {
+      seen.answers.push(context)
+      seen.answerTraced.push(source.trace !== undefined)
+      if (config.answer) return config.answer()
+      // The default is the model having nothing to say, which is what every test that does not care
+      // about this call should see: no sentence, and so no line in any report.
+      return { text: '', model: 'fake-answer', latencyMs: 2, usage: {} }
     },
   }
   return { deps, seen }
@@ -2268,6 +2287,148 @@ describe('retries that buy no step', () => {
     expect(result.steps).toBe(1)
     expect(h.seen.executed).toHaveLength(2)
     expect(events).toEqual(['observed', 'decided', 'decided', 'executed', 'decided', 'finished'])
+  })
+
+  it('asks its own model once, at the moment it announces a finish, and keeps what it said', async () => {
+    // The decision door cannot answer this one: it replies with a choice and its probabilities and
+    // writes no sentence anywhere, so this question is the run's only way to say what it found. It
+    // is asked once, at the end, about the page the run stopped on — and it decides nothing at all.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/results' }), pageState('f2')],
+      choices: ['e1', 'DONE'],
+      answer: async () => ({
+        text: '北京国际饭店，4.8 分，2318 条点评。',
+        model: 'fake-answer',
+        latencyMs: 2,
+        usage: {},
+      }),
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.status).toBe('done')
+      // The judgement is the plugin's own and is untouched by what the model said: it stays the
+      // empty sentence a finished run has always reported.
+      expect(result.reason).toBe('')
+      expect(result.answer).toBe('北京国际饭店，4.8 分，2318 条点评。')
+      expect(h.seen.answers).toEqual([
+        { goal: 'Find a flight', page: { title: 'Flights', text: 'Where from?' } },
+      ])
+      // Asked through the run's own text door, but not handed the trace sink: what this call has to
+      // say goes on the run record, and a call that had nothing to say leaves no trace line either.
+      expect(h.seen.answerTraced).toEqual([false])
+
+      const records = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      // The file explains itself: the two sentences sit side by side and are not the same sentence.
+      expect(records.find((record) => record.kind === 'run')).toMatchObject({
+        kind: 'run',
+        status: 'done',
+        reason: '',
+        answer: '北京国际饭店，4.8 分，2318 条点评。',
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('asks the same question when it gives up, and leaves the judgement word for word', async () => {
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: ['BLOCKED'],
+      answer: async () => ({ text: '列表里只有两家酒店，都在第一页。', model: 'fake-answer', latencyMs: 2, usage: {} }),
+    })
+    const result = await run(h.deps, { record: true })
+
+    try {
+      expect(result.status).toBe('blocked')
+      // Not one character of this sentence is this call's business, which is the point: the reader
+      // gets the model's own words and the plugin's verdict without either standing in for the other.
+      expect(result.reason).toBe('模型判断页面上已没有可以推进目标的操作')
+      expect(result.answer).toBe('列表里只有两家酒店，都在第一页。')
+      expect(h.seen.answers).toHaveLength(1)
+
+      const records = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      expect(records.find((record) => record.kind === 'run')).toMatchObject({
+        status: 'blocked',
+        reason: '模型判断页面上已没有可以推进目标的操作',
+        answer: '列表里只有两家酒店，都在第一页。',
+      })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('ends the run exactly as before when its own question fails or has nothing to say', async () => {
+    // The most important thing about this call: it cannot change a run. Every way it can go wrong —
+    // a refusal, a transport failure, an empty sentence, the model's own `{"text": null}` — reads as
+    // "there is nothing to say", and the record then carries exactly the fields it carried before
+    // this question existed. `answerText` turns all but the first two into a throw of its own
+    // (`decision.test.ts`), so what the loop has to survive is a throw and an empty string.
+    const cases: Array<[string, () => Promise<TextResult>]> = [
+      [
+        'the question fails',
+        async () => {
+          throw new Error('文本模型没有给出可用的结论')
+        },
+      ],
+      ['the model says nothing', async () => ({ text: '', model: 'fake-answer', latencyMs: 2, usage: {} })],
+      ['only whitespace came back', async () => ({ text: '   ', model: 'fake-answer', latencyMs: 2, usage: {} })],
+    ]
+
+    for (const [name, answer] of cases) {
+      const h = harness({ pages: [pageState('f0')], choices: ['DONE'], answer })
+      const result = await run(h.deps, { record: true })
+
+      try {
+        expect(result.status, name).toBe('done')
+        expect(result.reason, name).toBe('')
+        expect(result.answer, name).toBe('')
+        // It was still asked: the run cannot know in advance that the answer will be empty.
+        expect(h.seen.answers, name).toHaveLength(1)
+        expect(h.seen.answerTraced, name).toEqual([false])
+
+        const written = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        const records = written
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+        // Field for field what a run of today writes, with no `answer` key at all rather than an
+        // empty one — and no extra line for the call itself, which is loud only when it says something.
+        expect(records.find((record) => record.kind === 'run'), name).toEqual({
+          at: expect.any(Number),
+          kind: 'run',
+          status: 'done',
+          reason: '',
+          steps: 0,
+          decisions: 1,
+          elapsed_ms: expect.any(Number),
+        })
+      } finally {
+        rmSync(result.recordDir, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('does not ask when the run ends without announcing it', async () => {
+    // "Only at the end, and only of a run that says it is finished": a run the decision layer itself
+    // stopped — here, two answers in a row it could not act on — never announced anything, so there
+    // is no page it was talking about and nobody is asked for a sentence about it.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: [],
+      unusable: { 1: '模型这次没有给出可用的回答', 2: '模型选了候选表里没有的编号' },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.answer).toBe('')
+    expect(h.seen.answers).toEqual([])
   })
 
   it('tells the next request what was standing over a target the page would not be clicked through', async () => {

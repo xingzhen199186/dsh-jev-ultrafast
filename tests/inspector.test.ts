@@ -168,11 +168,40 @@ describe('the inspector page', () => {
     expect(run.trace[2].line).not.toContain('new_tabs')
     expect(run.trace[3].line).toContain('第 2 步开出了新页面：跟过去了')
     expect(run.trace[4].line).toContain('本次运行结束：done')
+    // A run that was asked and said nothing has no such sentence: no empty lead-in either.
+    expect(run.trace[4].line).not.toContain('它自己说')
 
     const frame = await ask(`/frame?run=${RUN}&file=001500.jpg`)
     expect(frame.status).toBe(200)
     expect(frame.headers['content-type']).toBe('image/jpeg')
     expect(frame.bytes).toEqual(readFileSync(join(ARTIFACTS, RUN, 'frames', '001500.jpg')))
+  })
+
+  it('keeps what the model said apart from the judgement in a run s closing line', async () => {
+    // The trace line for a run that had something to say: the plugin's ending first, then the model's
+    // own words behind a lead-in, so a reader is never left taking one of them for the other.
+    const dir = join(ARTIFACTS, 'run-1700000000001-said')
+    created.push(dir)
+    mkdirSync(join(dir, 'frames'), { recursive: true })
+    writeFileSync(
+      join(dir, 'trace.jsonl'),
+      JSON.stringify({
+        at: 1700000001500,
+        kind: 'run',
+        status: 'blocked',
+        reason: '模型判断页面上已没有可以推进目标的操作',
+        answer: '列表里只有两家酒店，都在第一页。',
+        steps: 3,
+        decisions: 13,
+        elapsed_ms: 34752,
+      }) + '\n',
+    )
+
+    const run = JSON.parse((await ask('/run?run=run-1700000000001-said')).body)
+
+    expect(run.trace[0].line).toContain('本次运行结束：blocked')
+    expect(run.trace[0].line).toContain('（模型判断页面上已没有可以推进目标的操作）')
+    expect(run.trace[0].line).toContain('；它自己说：列表里只有两家酒店，都在第一页。')
   })
 
   it('reads frames named by step, and hands the step and action on to the page', async () => {
@@ -291,6 +320,7 @@ function scripted(choices: string[], executed: SnapshotAction[]): TaskDeps {
     open: async () => browser,
     decide: async () => decision(choices[index++] ?? 'DONE'),
     typeText: async () => ({ text: 'x', model: 'fake', latencyMs: 1, usage: {} }),
+    answer: async () => ({ text: '', model: 'fake', latencyMs: 1, usage: {} }),
     execute: async (_session, _page, action) => {
       executed.push(action)
       return { executed: action.id }

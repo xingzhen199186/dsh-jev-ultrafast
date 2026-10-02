@@ -29,6 +29,12 @@ export { Config }
 interface TaskOutput {
   status: RunStatus
   reason: string
+  /**
+   * What the run's own model said it found, in its own words, asked once at the end. Empty when
+   * there was nothing to report — and never the same thing as the judgement above, which is the
+   * plugin's (see `loop.ts`): the two are shown as two lines so a reader can tell them apart.
+   */
+  answer: string
   /** Something this run did beyond running the task: starting a browser, today. Empty usually. */
   note: string
   url: string
@@ -110,6 +116,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
           properties: {
             status: { type: 'string', enum: ['done', 'blocked', 'failed'], required: true },
             reason: { type: 'string', required: true },
+            answer: { type: 'string', required: true },
             note: { type: 'string', required: true },
             url: { type: 'string', required: true },
             title: { type: 'string', required: true },
@@ -134,8 +141,11 @@ export function apply(ctx: Context, config: ConfigShape): void {
           const summary = [
             `任务：${args.goal}`,
             `结果：${STATUS_LABEL[value.status]}${value.reason ? `（${value.reason}）` : ''}`,
-            `执行 ${value.steps} 步、${value.decisions} 次决策，用时 ${(value.elapsedMs / 1000).toFixed(1)} 秒`,
           ]
+          // What the model said it found, kept apart from the judgement above by its own lead-in and
+          // its own line — and left out entirely when it had nothing to say, rather than shown empty.
+          if (value.answer) summary.push(`它自己说：${value.answer}`)
+          summary.push(`执行 ${value.steps} 步、${value.decisions} 次决策，用时 ${(value.elapsedMs / 1000).toFixed(1)} 秒`)
           if (value.verification) summary.push(value.verification)
           if (value.omittedActions > 0) {
             summary.push(`这个页面能操作的元素超过 250 个，还有 ${value.omittedActions} 个没进候选表`)
@@ -291,10 +301,15 @@ export function apply(ctx: Context, config: ConfigShape): void {
   registerCommand(ctx, config, llm)
 }
 
-function toOutput(result: TaskResult, note = ''): TaskOutput {
+/**
+ * One run, in the shape the tool hands back. Exported so the mapping from a run's result to what a
+ * reader is shown can be pinned as a whole rather than one field at a time.
+ */
+export function toOutput(result: TaskResult, note = ''): TaskOutput {
   return {
     status: result.status,
     reason: result.reason,
+    answer: result.answer,
     note,
     url: result.page?.url ?? '',
     title: result.page?.title ?? '',

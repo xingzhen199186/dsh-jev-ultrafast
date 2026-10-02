@@ -31,8 +31,8 @@
 import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
 import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
 import { nextDeadEnds, type DeadEndRecord } from './dead-ends'
-import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
-import { fieldContext, fieldText } from './decision/text-helper'
+import type { AnswerContext, FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
+import { answerText, fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
@@ -223,6 +223,16 @@ export interface TaskDeps {
   decide: (source: DecisionSource, space: ActionSpace, context: DecisionContext) => Promise<Decision>
   typeText: (source: TextHelperSource, context: FieldContext) => Promise<TextResult>
   /**
+   * The run's own answer, asked once, when the model announces a finish — the one thing the
+   * operation table has no room for, because the decision model answers with a choice and its
+   * probabilities and writes no sentence anywhere (`./decision/text-helper.ts`).
+   *
+   * It is deliberately unable to change anything: the sentence it returns goes into the record and
+   * the report, never into a decision, a status, a reason or a brake, and every way it can fail is
+   * swallowed by the caller and read as "there is nothing to say".
+   */
+  answer: (source: TextHelperSource, context: AnswerContext) => Promise<TextResult>
+  /**
    * `trace` is the run's own channel again, handed over so an action can write down what only the
    * action knows — a press's focus reading, which nothing on the page keeps afterwards. It is the
    * same sink the model exchanges ride on, and absent exactly when the run is not recording.
@@ -240,6 +250,7 @@ const REAL_DEPS: TaskDeps = {
   open: (url, options, snapshot) => BrowserSession.open(url, options, snapshot),
   decide: choose,
   typeText: fieldText,
+  answer: answerText,
   execute: act,
 }
 
@@ -343,6 +354,14 @@ export interface TaskResult {
   deadEnds: DeadEndRecord[]
   /** Whether those elements were taken out of the candidates, or only written down. */
   deadEndsExcluded: boolean
+  /**
+   * What the run's own answer model said the page came back with, in its own words, asked once at
+   * the moment the run announced it was finished and used for nothing else. Empty when there was
+   * nothing to report or nobody to ask — the run not finishing by announcing it, a failure of the
+   * call, an empty answer and a literal `{"text": null}` all arrive here as the same thing: no
+   * sentence, which is what the report shows (see `./decision/text-helper.ts`).
+   */
+  answer: string
   /** The independent check of the run's own claim, always present and never assumed. */
   verification: Verification
   /**
@@ -494,6 +513,36 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let landmark: string | null = null
   let landmarkLost = false
   let reason = ''
+  // What the run's own model said the page came back with, asked once, at the end, and used for
+  // nothing but the report and the record. The bare empty string is every failure and every
+  // "nothing to report" at once, which is why nothing downstream has to tell them apart.
+  let answer = ''
+  /**
+   * Ask the run's own answer, once, and let whatever comes back stand.
+   *
+   * This is the only place a run speaks instead of acting, and it is asked at exactly one moment:
+   * the model has just announced that it is finished, so the page in hand is the page it was
+   * talking about. Nothing here can change the run — the sentence is not an input to any decision,
+   * status, reason or brake — and a refusal, a timeout, an empty answer and a literal
+   * `{"text": null}` all leave the run exactly as it would have been had nobody asked. That is what
+   * makes it safe to ask at the end of every run rather than only of the runs that went well.
+   */
+  const readAnswer = async (): Promise<void> => {
+    if (page === null) return
+    try {
+      // The trace sink is deliberately left off. This call is allowed to fail, and a call that
+      // changed nothing must not leave a record saying something went wrong — a reader of the trace
+      // would be reading about a failure the run never felt. When it does have something to say, the
+      // sentence goes on the run record below, and that record is the account of this call.
+      const said = await deps.answer(
+        { ...textSource, trace: undefined, signal: options.signal },
+        { goal: options.goal, page: { title: page.title, text: page.text } },
+      )
+      answer = said.text.trim()
+    } catch {
+      answer = ''
+    }
+  }
   // A generated value, reused only when the field it was asked for is the same field on the same
   // page (`fieldKey`) — never merely when the whole request would have been identical, because the
   // page's own text changes without the field changing.
@@ -950,6 +999,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         }
         status = chosen === 'DONE' ? 'done' : 'blocked'
         reason = chosen === 'DONE' ? '' : '模型判断页面上已没有可以推进目标的操作'
+        // The one moment the run is asked for its own words, and the only one: it has just said it
+        // is finished, either way, so what it has to say is about the page it is looking at. The
+        // call is silent by construction (see `readAnswer`), so a run that ends here ends exactly
+        // where it would have without it, with or without a sentence to show for it.
+        await readAnswer()
         break
       }
       // Looked up in the table the answer was given, not in the observation alone: a candidate the
@@ -1289,13 +1343,18 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // the way past — so the whole record goes through `recordable`, the rule the step record
   // above and every exchange body already pass. Whole record rather than the three fields, so
   // a field added here later cannot quietly arrive unredacted; the shape and the names are
-  // exactly what they were.
+  // exactly what they were. `answer` below is the fourth such field and is covered the same way:
+  // it is a model's sentence about the page, and a page can carry an address with a credential in it.
   artifacts?.trace.write(
     recordable({
       at: Date.now(),
       kind: 'run',
       status,
       reason,
+      // What the run's own model said it found, in its own words, when it had anything to say. A
+      // run whose answer came back empty carries the field not at all, so a reader comparing two
+      // records sees the difference in what happened rather than in a key that is always there.
+      ...(answer ? { answer } : {}),
       steps: history.length,
       decisions: decisionCalls,
       elapsed_ms: elapsedMs(),
@@ -1346,6 +1405,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     follows,
     deadEnds: deadEndsJudged,
     deadEndsExcluded: excludeDeadEnds,
+    answer,
     verification,
     // Read off the page the run actually stopped on, so the sentence is about what the
     // reader is looking at rather than about a page seen three steps ago.

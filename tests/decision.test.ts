@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
 import { actionSpace, trimActionSpace } from '../src/decision/action-space'
-import { askText, fieldContext, fieldText, type DshChunk, type TextHelperSource } from '../src/decision/text-helper'
+import { askText, answerText, fieldContext, fieldText, type DshChunk, type TextHelperSource } from '../src/decision/text-helper'
 import {
   type CorrectedChoice,
   type DecisionContext,
@@ -1006,5 +1006,70 @@ describe('the DSH door of the text helper', () => {
     }
     await expect(askText(source, 'system', 'user')).rejects.toThrow()
     expect(written[0]).toMatchObject({ kind: 'text', door: 'dsh', ok: false, finish: 'max-tokens', reasoning_chars: 2 })
+  })
+})
+
+/**
+ * The one question that has to bring back a sentence rather than a choice: what the run found.
+ *
+ * The decision model answers with a choice and its probabilities and writes nothing, so this is the
+ * only way a run can say what it saw. Its rules are the field door's, with one deliberate exception —
+ * no length cap, because a list read off a page is a real answer — and its failures are the silent
+ * ones the loop swallows (see `loop.test.ts`).
+ */
+describe('the answer the run is asked for at the end', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const source = { baseUrl: 'https://api.deepseek.com/v1', apiKey: 'test-key', model: 'deepseek-chat', reasoning: 'none' as const }
+  const context = {
+    goal: '读出携程第一页的酒店名称和评分',
+    page: { title: '酒店列表', text: '北京国际饭店 4.8 分，共 2318 条点评' },
+  }
+
+  it('asks its own question, with the goal and the page in it, and takes the sentence whole', async () => {
+    let body: { messages?: Array<{ role: string; content: string }> } = {}
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+      body = JSON.parse(init.body) as typeof body
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"text":"北京国际饭店，4.8 分，2318 条点评。"}' } }],
+          usage: { total_tokens: 64 },
+        }),
+      )
+    })
+
+    const result = await answerText(source, context)
+
+    expect(result.text).toBe('北京国际饭店，4.8 分，2318 条点评。')
+    expect(result.model).toBe('deepseek-chat')
+    expect(result.usage).toEqual({ total_tokens: 64 })
+    // The question is this one, not the field door's, and what it is shown is the goal and the
+    // page the run stopped on — a sentence about any other page is not an answer to anything.
+    expect(body.messages?.[0]?.content).toContain('one key, text')
+    expect(body.messages?.[1]?.content).toContain(context.goal)
+    expect(body.messages?.[1]?.content).toContain('北京国际饭店 4.8 分')
+  })
+
+  it.each([
+    ['prose instead of JSON', '北京国际饭店，4.8 分'],
+    ['an empty sentence', '{"text":""}'],
+    ['whitespace only', '{"text":"   "}'],
+    ['a null sentence', '{"text":null}'],
+    ['extra keys', '{"text":"北京国际饭店","steps":"点了两下"}'],
+  ])('answers nothing when the model returns %s', async (_name, content) => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ choices: [{ message: { content } }] })))
+    await expect(answerText(source, context)).rejects.toThrow(/没有给出可用的结论/)
+  })
+
+  it('takes a long answer, because a list read off a page is an answer', async () => {
+    // The field door refuses anything over 2000 characters; this one must not, or a goal that asked
+    // for twenty hotels comes back as "the model said nothing".
+    const long = '酒店'.repeat(1500)
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: long }) } }] })),
+    )
+    await expect(answerText(source, context)).resolves.toMatchObject({ text: long })
   })
 })

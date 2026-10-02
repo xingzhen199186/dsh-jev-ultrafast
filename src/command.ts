@@ -106,8 +106,13 @@ export function summaryText(result: TaskResult, url: string): string {
   const lines = [
     `目标：${result.goal}`,
     `结果：${STATUS_LABEL[result.status]}${result.reason ? `（${result.reason}）` : ''}`,
-    `执行 ${result.steps} 步、${result.decisions} 次决策，用时 ${(result.elapsedMs / 1000).toFixed(1)} 秒`,
   ]
+  // The model's own words, on their own line right under the judgement, and never a line of their
+  // own when there are none: a reader has to be able to tell which of the two sentences is the
+  // plugin's verdict and which is what the model said it saw, and an empty 「它自己说：」 would read
+  // as the model having said nothing when in fact nobody asked it anything.
+  if (result.answer) lines.push(`它自己说：${result.answer}`)
+  lines.push(`执行 ${result.steps} 步、${result.decisions} 次决策，用时 ${(result.elapsedMs / 1000).toFixed(1)} 秒`)
   if (result.verification.checked) lines.push(result.verification.note)
   if (result.page) {
     lines.push(`最后停在：${result.page.title} — ${result.page.url}`)

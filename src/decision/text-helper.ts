@@ -19,7 +19,7 @@
 import { recordable, type TraceSink } from '../artifacts'
 import type { SnapshotAction } from '../browser/session'
 import { requestSignal } from '../net'
-import { TEXT_VALUE } from '../prompts'
+import { FINAL_ANSWER, TEXT_VALUE } from '../prompts'
 import type { HistoryEntry } from './typesafe'
 
 /** One streamed chunk from DSH's model service; only text deltas matter here. */
@@ -141,6 +141,49 @@ export async function fieldText(source: TextHelperSource, context: FieldContext)
   const value = record?.text
   if (Object.keys(record ?? {}).length !== 1 || typeof value !== 'string' || !value.trim() || value.length > 2000) {
     throw new Error('文本模型没有返回可用的字段值，什么都没有输入')
+  }
+  return {
+    text: value,
+    model: source.model,
+    latencyMs: Date.now() - started,
+    usage: answer.usage,
+  }
+}
+
+/** What the helper is shown when it is asked for the run's own answer, once, at the end of a run. */
+export interface AnswerContext {
+  goal: string
+  page: { title: string; text: string }
+}
+
+/**
+ * Ask, once, for the result in the model's own words: the one thing an operation table cannot carry.
+ *
+ * Same door and same one-key JSON shape as the field value above, with the question changed — that
+ * one copies a value into a field, this one says what the page came back with. It refuses in the
+ * same way and for the same reason: a sentence nobody wrote is worse than no sentence at all. What
+ * differs is what the caller does with the refusal, and that belongs to the caller — `loop.ts` reads
+ * every failure here as "there is nothing to say" and lets the run end exactly as it would have
+ * without asking, so this call can never fail a run that would otherwise have succeeded.
+ *
+ * The length is the one rule it does not share with the field door. A 2000-character field value is
+ * a model that has lost the thread; a list read off a page is not, and the goal may have asked for
+ * exactly that. The question asks for a few sentences and the answer is taken as it comes.
+ */
+export async function answerText(source: TextHelperSource, context: AnswerContext): Promise<TextResult> {
+  const started = Date.now()
+  const answer = await askText(source, FINAL_ANSWER, JSON.stringify(context))
+  const content = answer.content
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(typeof content === 'string' ? content : '')
+  } catch {
+    throw new Error('文本模型没有给出可用的结论')
+  }
+  const record = parsed as { text?: unknown } | null
+  const value = record?.text
+  if (Object.keys(record ?? {}).length !== 1 || typeof value !== 'string' || !value.trim()) {
+    throw new Error('文本模型没有给出可用的结论')
   }
   return {
     text: value,
