@@ -308,9 +308,10 @@ export class BrowserSession implements BrowserPort {
   /**
    * Move onto the page that appeared and is worth moving onto.
    *
-   * A tab the site has only just opened often still reads as `about:blank`, and its
-   * URL is what decides whether it is worth following, so a blank newcomer is given
-   * a short moment to say where it is going. Everything that appeared is remembered
+   * A tab the site has only just opened often still reads as `about:blank`, and the browser
+   * lists a target before it has committed a navigation with no address at all, and the URL
+   * is what decides whether it is worth following, so a newcomer that has not said where it
+   * is going yet is given a short moment to say it. Everything that appeared is remembered
    * either way, so a page the run deliberately does not follow is not reported twice —
    * everything with an address, that is: a target that still has none is not remembered,
    * because a page that cannot be named yet is not a page this session has seen (below).
@@ -321,9 +322,9 @@ export class BrowserSession implements BrowserPort {
   async adoptNewPage(options: { onlyIfSameUrl?: boolean; aimedAt?: string } = {}): Promise<AdoptResult | null> {
     let pages = await this.#pageTargets()
     let appeared = this.#unseen(pages)
-    if (appeared.some((page) => page.url === 'about:blank')) {
+    if (appeared.some((page) => addressless(page.url))) {
       const deadline = Date.now() + 1_000
-      while (Date.now() < deadline && appeared.some((page) => page.url === 'about:blank')) {
+      while (Date.now() < deadline && appeared.some((page) => addressless(page.url))) {
         await delay(100)
         pages = await this.#pageTargets()
         appeared = this.#unseen(pages)
@@ -340,6 +341,14 @@ export class BrowserSession implements BrowserPort {
     // reported as appeared on each look until it gets an address, so a run that opened one counts it
     // more than once — the alternative was not reporting it at all, and the record of a click that
     // opened a window the run did not follow is worth more than the count being exact.
+    //
+    // The grace period above was widened to match on 2026-10-02, and for exactly this window: it asked
+    // for `about:blank` and nothing else, so the addressless page this run lost never got the moment
+    // that was meant for it — the record reads `new_tabs: [""]`, a look that gave it no grace, no
+    // second look, and a run that went on to stop on two operations that disagreed. "Has an empty
+    // address" and "reads as `about:blank`" are the same statement — the page has not said where it is
+    // going yet — so both are waited on now, and both still leave here unfollowed until they have an
+    // address that `followable` accepts.
     for (const page of pages) if (page.url !== '') this.#knownPages.add(page.targetId)
     if (appeared.length === 0) return null
     // One list of reportable pages, and `adopted` is the very object listed in it, so a
@@ -555,6 +564,18 @@ function toNewPage(info: TargetInfo): NewPage {
  */
 function followable(url: string): boolean {
   return /^(https?|file):/i.test(url)
+}
+
+/**
+ * Whether a page has not said where it is going yet.
+ *
+ * Two spellings of one thing: the browser lists a target before it has committed a navigation with an
+ * empty address, and a window a site has only just opened reads as `about:blank`. Neither address can
+ * answer whether the page is worth following, so both are given the moment that answer needs — the
+ * grace period in `adoptNewPage`, which asks this and nothing else (2026-10-02).
+ */
+function addressless(url: string): boolean {
+  return url === '' || url === 'about:blank'
 }
 
 /**

@@ -35,6 +35,12 @@ interface TargetLike {
 class ScriptedConnection implements HeldSocket {
   /** What `Target.getTargets` answers with; replaced by a test between looks. */
   pages: TargetLike[] = []
+  /**
+   * Page lists handed out one per `Target.getTargets`, ahead of `pages`, so a test can let a window
+   * land between two polls of the grace period — which is the only way to see that the grace period
+   * ran at all. A test that leaves this empty gets `pages` on every call, as before.
+   */
+  queued: TargetLike[][] = []
   /** Every target this session attached to, in order — which is how it moves onto a page. */
   attachedTo: string[] = []
 
@@ -45,7 +51,7 @@ class ScriptedConnection implements HeldSocket {
       if (typeof targetId === 'string') this.attachedTo.push(targetId)
       return { sessionId: 'session-1' } as T
     }
-    if (method === 'Target.getTargets') return { targetInfos: this.pages } as T
+    if (method === 'Target.getTargets') return { targetInfos: this.queued.shift() ?? this.pages } as T
     // `document.readyState`, which is the one evaluation the open path and a switch make.
     if (method === 'Runtime.evaluate') return { result: { value: 'complete' } } as T
     return {} as T
@@ -127,13 +133,118 @@ describe('a window that appeared before it had an address', () => {
     // The cost of leaving such a page out of the record, stated as the behaviour it is: while it stays
     // addressless it is a newcomer every time. A window the run cannot name is not one it can judge or
     // move onto, so what the record is worth here is that the window was opened at all.
+    //
+    // Known and accepted, and unchanged by the widening of 2026-10-02 (`addressless` in
+    // `browser/session.ts` gives an empty address the grace period `about:blank` already had): what
+    // makes this one repeat is the empty address being left out of the record of seen pages — the
+    // same line that lets it be picked up once it lands. What the count buys is the record of a click
+    // that opened a window; exactness of the count is what it costs.
     const { session, connection } = await attached([OWNED])
     try {
       const blank: TargetLike = { targetId: 'popup', type: 'page', url: '', title: '' }
       connection.pages = [OWNED, blank]
 
-      expect((await session.adoptNewPage({ onlyIfSameUrl: true }))?.appeared).toHaveLength(1)
-      expect((await session.adoptNewPage({ onlyIfSameUrl: true }))?.appeared).toHaveLength(1)
+      const first = await session.adoptNewPage({ onlyIfSameUrl: true })
+      expect(first?.appeared.map((page) => page.url)).toEqual([''])
+      expect(first?.adopted).toBeNull()
+
+      const second = await session.adoptNewPage({ onlyIfSameUrl: true })
+      expect(second?.appeared.map((page) => page.url)).toEqual([''])
+      expect(second?.adopted).toBeNull()
+    } finally {
+      await session.close()
+    }
+  })
+})
+
+/**
+ * The moment a page that has not said where it is going is given.
+ *
+ * A newcomer with no address is not one the run can judge or move onto, and the address is what the
+ * decision turns on, so `adoptNewPage` waits a short while and looks again before answering — the
+ * grace period. Until 2026-10-02 it asked for `about:blank` and nothing else, so a window whose
+ * address read as an empty string got no grace at all: on a real run the look answered with
+ * `new_tabs: [""]`, followed nothing, and never looked at it again (携程, 2026-10, `run-1790900264461`).
+ * Both spellings mean the same thing, and these checks pin that they are treated the same: an empty
+ * address is waited on and can then be followed, a page reading `about:blank` behaves exactly as it
+ * did, and a page that already has an address is not waited on even when it will not be followed.
+ */
+describe('a window that has not said where it is going yet', () => {
+  it('waits the grace period out for an empty address, and follows the page once it has one', async () => {
+    const { session, connection } = await attached([OWNED])
+    try {
+      const blank: TargetLike = { targetId: 'popup', type: 'page', url: '', title: '' }
+      const landed: TargetLike = { targetId: 'popup', type: 'page', url: 'https://example.test/landed', title: 'Landed' }
+      // Two polls see the window still addressless and the third sees it landed, so only a look that
+      // sat through the grace period can answer with the page the click was really going to.
+      connection.queued = [[OWNED, blank], [OWNED, blank], [OWNED, landed]]
+
+      const found = await session.adoptNewPage({ onlyIfSameUrl: true })
+
+      expect(found?.appeared.map((page) => page.url)).toEqual([landed.url])
+      expect(found?.adopted?.url).toBe(landed.url)
+      expect(connection.attachedTo.at(-1)).toBe('popup')
+      // Every list handed out was used: one look waited, and it waited no longer than it had to.
+      expect(connection.queued).toHaveLength(0)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('gives a page reading about:blank the same grace it always had', async () => {
+    const { session, connection } = await attached([OWNED])
+    try {
+      const blank: TargetLike = { targetId: 'popup', type: 'page', url: 'about:blank', title: '' }
+      const landed: TargetLike = { targetId: 'popup', type: 'page', url: 'https://example.test/landed', title: 'Landed' }
+      connection.queued = [[OWNED, blank], [OWNED, landed]]
+
+      const found = await session.adoptNewPage({ onlyIfSameUrl: true })
+
+      expect(found?.appeared.map((page) => page.url)).toEqual([landed.url])
+      expect(found?.adopted?.url).toBe(landed.url)
+      expect(connection.queued).toHaveLength(0)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('still does not follow a page that never leaves about:blank', async () => {
+    const { session, connection } = await attached([OWNED])
+    try {
+      connection.pages = [OWNED, { targetId: 'popup', type: 'page', url: 'about:blank', title: '' }]
+
+      const first = await session.adoptNewPage({ onlyIfSameUrl: true })
+      expect(first?.appeared.map((page) => page.url)).toEqual(['about:blank'])
+      expect(first?.adopted).toBeNull()
+      expect(connection.attachedTo.at(-1)).toBe('owned')
+
+      // Untouched by the widening, and the asymmetry is the old one: `about:blank` is waited on (the
+      // grace period above), is not followable (`followable`), and *is* an address as far as the
+      // record is concerned — so this second look has nothing new to report. Only the empty address
+      // is left out of that record, which is why it, and not this, is the one repeated on every look.
+      expect(await session.adoptNewPage({ onlyIfSameUrl: true })).toBeNull()
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('does not wait for a page that already has an address, even one it will not follow', async () => {
+    const { session, connection } = await attached([OWNED])
+    try {
+      const settings: TargetLike = { targetId: 'settings', type: 'page', url: 'chrome://settings/', title: 'Settings' }
+      const landed: TargetLike = { targetId: 'popup', type: 'page', url: 'https://example.test/landed', title: 'Landed' }
+      connection.queued = [[OWNED, settings], [OWNED, landed]]
+
+      const first = await session.adoptNewPage({ onlyIfSameUrl: true })
+
+      expect(first?.appeared.map((page) => page.url)).toEqual([settings.url])
+      expect(first?.adopted).toBeNull()
+
+      // The look took the one list it was given and answered: `chrome://` is an address, so there is
+      // nothing for the grace period to wait for, and the page that lands next is still followed.
+      const second = await session.adoptNewPage({ onlyIfSameUrl: true })
+      expect(second?.appeared.map((page) => page.url)).toEqual([landed.url])
+      expect(second?.adopted?.url).toBe(landed.url)
     } finally {
       await session.close()
     }
