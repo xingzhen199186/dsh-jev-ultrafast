@@ -296,6 +296,22 @@ const MAX_REPEATED_STEPS = 6
  */
 const MAX_STALE_RETRIES = 6
 
+/**
+ * How many times one run may be refused its finish by its own checklist before it is let through.
+ *
+ * The refusal is not a stop: the answer is sent back with the conditions named, exactly the way an
+ * answer the page has moved out from under is, and it costs one decision out of the run's own
+ * budget. What the run of 2026-10-02 showed is what that becomes with no end: a checklist nothing
+ * on the page could satisfy was refused 106 times, five steps of work spent the whole 120-decision
+ * budget, and the run died on the budget's own sentence — a stop with extra steps, which is the one
+ * thing this layer must not be. Three refusals tell the run, twice over, what is not holding. After
+ * the third, the checklist's judgement is written down and the finish is allowed: the layer may cost
+ * questions, never a run.
+ *
+ * Per run, counted beside the checklist itself; nothing global and nothing shared between runs.
+ */
+const MAX_CONTROL_REFUSALS = 3
+
 export interface TaskResult {
   goal: string
   status: RunStatus
@@ -433,6 +449,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let controlPlan: ControlPlan | null = null
   let controlBudget: ControlBudget | null = null
   let controlStarted = false
+  // How many times this run has been refused its finish by that checklist. Bounded by
+  // MAX_CONTROL_REFUSALS, and belonging to the run the same way the checklist does.
+  let controlRefusals = 0
   let reason = ''
   // A generated value, reused only when the whole field context is identical.
   let pendingText: { context: FieldContext; text: string; helper: TextResult } | null = null
@@ -819,6 +838,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // answer the page has moved under is. Bought out of the run's own decision budget, so a
         // checklist nobody can satisfy costs questions, not a new stop.
         //
+        // Questions, and no more than a few of them: a refusal that never ends is a stop by other
+        // means, which is what the run of 2026-10-02 turned this into. Three times tells the run
+        // what is not holding; after that it is let through, with the checklist's own words for
+        // what stayed unmet recorded below.
+        //
         // The states are taken from the page in front of the run at this moment rather than from
         // the one it started on: a check the model wrote as locally decidable stays "unknown"
         // until something looks, and "unknown" is not "holding" — deciding the finish against a
@@ -826,11 +850,25 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         if (chosen === 'DONE' && controlPlan !== null) {
           controlPlan = applyFacts(controlPlan, { url: page.url, title: page.title, text: page.text })
           if (!canFinish(controlPlan)) {
-            hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
-              .map((check) => check.say)
-              .join('；')}。先把它们弄成立，再说完成`
-            page = await session.observe({ screenshot: screenshots })
-            continue
+            if (controlRefusals < MAX_CONTROL_REFUSALS) {
+              controlRefusals += 1
+              hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
+                .map((check) => check.say)
+                .join('；')}。先把它们弄成立，再说完成`
+              page = await session.observe({ screenshot: screenshots })
+              continue
+            }
+            // Told three times over and still not holding: the run is let through rather than held
+            // here. This record has to be readable as a release and not as a pass. The sentence is
+            // the one the inspector shows for a control record, and `let_through` with the unmet
+            // conditions is what the trace itself says; nothing here claims they were met.
+            artifacts?.trace.write({
+              at: Date.now(),
+              kind: 'control',
+              error: '清单始终没成立，放行了',
+              let_through: true,
+              unmet: blockedChecks(controlPlan).map((check) => check.say),
+            })
           }
         }
         status = chosen === 'DONE' ? 'done' : 'blocked'

@@ -2555,23 +2555,56 @@ describe('retries that buy no step', () => {
       }
     })
 
-    it('refuses a done the checklist does not support, without stopping the run', async () => {
+    it('refuses a done the checklist does not support, then lets the fourth one through', async () => {
       // Every page this run sees is the one the flag says it should not be on, so the finish is
-      // refused every time it is claimed. Nothing new stops it: the only thing that ends this run
-      // is the decision budget it already had, which is what the numbers below are.
+      // refused when it is claimed — three times. The refusal is not a stop, and after the run of
+      // 2026-10-02 it is not endless either: an answer sent back for ever is a stop by other means,
+      // and 106 of them spent a 120-decision budget on five steps of work.
       const control = controlModel(planFor('地址里一直带着结果页', '/results'))
       const h = harness({ pages: [pageState('f0'), pageState('f0'), pageState('f0')], choices: ['DONE'] })
       const result = await run(h.deps, { control: { model: control.model, cap: 12 }, maxSteps: 3 })
 
-      expect(result.status).toBe('blocked')
-      expect(result.reason).toContain('模型调用上限')
+      // Let through, which is an ordinary finish — reached in four questions, never near the budget.
+      expect(result.status).toBe('done')
+      expect(result.reason).toBe('')
       expect(result.steps).toBe(0)
-      // Asked once, refused, asked again, refused... and stopped by the budget, not by the refusal.
-      expect(h.seen.decisions).toBe(6)
-      // The first question carries no sentence; the one after a refusal names the flag that failed,
-      // in the words the control model wrote for it.
+      expect(h.seen.decisions).toBe(4)
+      // The first question carries no sentence; the ones after a refusal name the flag that failed,
+      // in the words the control model wrote for it — and there are exactly three of them.
       expect(h.seen.contexts[0]!.note).toBeUndefined()
       expect(h.seen.contexts[1]!.note).toContain('地址里一直带着结果页')
+      expect(h.seen.contexts.filter((context) => context.note !== undefined)).toHaveLength(3)
+    })
+
+    it('says it was let through, not that the conditions came true', async () => {
+      // Two flags, one of which this page can never satisfy. Told three times over, the fourth claim
+      // is allowed — and what the run leaves behind has to name the condition that stayed unmet and
+      // to read as a release: nothing in the record may look like the checklist having passed.
+      const control = controlModel(
+        JSON.stringify({
+          goal: 'g',
+          checks: [
+            { id: 'u', say: '地址里一直带着结果页', kind: 'url-contains', value: '/results' },
+            { id: 't', say: '页面上一直出现「Where from?」', kind: 'text-contains', value: 'Where from?' },
+          ],
+        }),
+      )
+      const h = harness({ pages: [pageState('f0'), pageState('f0'), pageState('f0')], choices: ['DONE'] })
+      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 }, maxSteps: 3 })
+
+      expect(result.status).toBe('done')
+      // Only the condition that never held is named: the other one was true all along, and the
+      // record is about what the run was released from, not a summary of the checklist. The
+      // sentence is what the inspector shows; `let_through` is what says it was not a pass.
+      expect(traceOf(result.recordDir).filter((record) => record.kind === 'control')).toEqual([
+        expect.objectContaining({
+          error: '清单始终没成立，放行了',
+          let_through: true,
+          unmet: ['地址里一直带着结果页'],
+        }),
+      ])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
     })
 
     it('lets a done through once every flag holds on the page in front of it', async () => {
