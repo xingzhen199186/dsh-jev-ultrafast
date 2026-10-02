@@ -1644,6 +1644,35 @@ describe('run loop', () => {
     ])
   })
 
+  it('still asks again when the answer it settled on is itself under the floor', async () => {
+    // Settling which choice is executed does not make the answer confident, and nothing here is
+    // allowed to. These are the sixth run of 2026-10-02's own numbers: 0.29 was the highest of its
+    // own table and 0.28 was what the service called its confidence, both under the floor the
+    // re-ask has always used — so the step is asked again rather than executed for being top of
+    // its own ranking.
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['e1', 'e1', 'DONE'],
+      confidences: [0.29, 0.55, 0.9],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // The refused asking, the second asking and the finish: the weak answer bought a question, not a step.
+    expect(result.decisions).toBe(3)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'low-confidence',
+        agreed: true,
+        first: { choice: 'e1', confidence: 0.29, probabilities: { e1: 0.29 } },
+        second: { choice: 'e1', confidence: 0.55, probabilities: { e1: 0.55 } },
+      },
+    ])
+  })
+
   it('stops when the two answers name different operations, whatever element each one picked', async () => {
     // A disagreement about what to do is the one this rule still stops on: no rule below can settle
     // "click this" against "type into that", so the run keeps its sentence and spends no step. The

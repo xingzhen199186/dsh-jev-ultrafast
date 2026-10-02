@@ -4,6 +4,7 @@ import type { SnapshotAction } from '../src/browser/session'
 import { actionSpace, trimActionSpace } from '../src/decision/action-space'
 import { askText, fieldContext, fieldText, type DshChunk, type TextHelperSource } from '../src/decision/text-helper'
 import {
+  type CorrectedChoice,
   type DecisionContext,
   InvalidDecision,
   buildQuestionnaire,
@@ -373,28 +374,56 @@ describe('answer validation', () => {
     ['a choice we never offered', { choice: 'c', confidence: 0.5, probabilities: { a: 0.5, b: 0.5 } }],
     ['a probability for an unknown choice', { choice: 'a', confidence: 0.5, probabilities: { a: 0.5, b: 0.3, c: 0.2 } }],
     ['a distribution that does not sum to one', { choice: 'a', confidence: 0.5, probabilities: { a: 0.2, b: 0.2 } }],
-    ['a winner that is not the most probable choice', { choice: 'a', confidence: 0.5, probabilities: { a: 0.3, b: 0.7 } }],
     ['a confidence outside 0..1', { choice: 'a', confidence: 1.4, probabilities: { a: 0.7, b: 0.3 } }],
     ['a missing answer', undefined],
   ])('refuses %s', (_name, answer) => {
     expect(() => validateChoice(answer, ['a', 'b'])).toThrow(InvalidDecision)
   })
 
-  // The refusal is the only thing a reader sees when a run stops on a bad answer, so it
-  // has to say what came back and what was wrong with it. The first case is the shape a
-  // GitHub run actually ended on (2026-10-01, run-1790849761917-uajy): the service named
-  // CLICK at 0.36 while TYPE_TEXT sat at 0.37, and the old sentence said only that
-  // something was wrong.
-  it('names what it picked, and what was actually most probable', () => {
+  /**
+   * The reading that decides what a run does, and the one the sixth run of 2026-10-02 died for
+   * (`run-1790924542952-x19r`): the table is the answer, and a choice that is not its own table's
+   * highest is a slip against it rather than an answer nobody can use. That run had five steps and
+   * 13 decisions behind it, had already reached the hotel list it was aiming for, named TYPE_TEXT
+   * at 0.28 over its own 0.29 CLICK, and ended without taking a single action.
+   */
+  it('settles on the most probable choice when the service named another one', () => {
     const answer = {
-      choice: 'CLICK',
-      confidence: 0.26,
-      probabilities: { CLICK: 0.36, TYPE_TEXT: 0.37, DONE: 0.27 },
+      choice: 'TYPE_TEXT',
+      confidence: 0.28,
+      probabilities: { CLICK: 0.29, TYPE_TEXT: 0.28, DONE: 0.24, WAIT: 0.19 },
     }
-    expect(() => validateChoice(answer, ['CLICK', 'TYPE_TEXT', 'DONE'], '下一步该做哪个操作')).toThrow(
-      '决策服务返回了无法执行的结果，没有执行任何动作：「下一步该做哪个操作」' +
-        '它选的是 CLICK（概率 0.36），但概率最高的是 TYPE_TEXT（概率 0.37）——这一问它自己没拿定主意',
+    const heard: CorrectedChoice[] = []
+    const settled = validateChoice(
+      answer,
+      ['CLICK', 'TYPE_TEXT', 'DONE', 'WAIT'],
+      '下一步该做哪个操作',
+      (corrected) => heard.push(corrected),
     )
+
+    expect(settled.choice).toBe('CLICK')
+    // The confidence stays the service's own number rather than the winning choice's probability.
+    // That is what keeps this from laundering a weak answer into a confident one: 0.28 is still
+    // under the floor, so the loop asks again exactly as it always did.
+    expect(settled.confidence).toBe(0.28)
+    expect(heard).toEqual([
+      {
+        question: '下一步该做哪个操作',
+        chose: 'TYPE_TEXT',
+        choseProbability: 0.28,
+        top: 'CLICK',
+        topProbability: 0.29,
+      },
+    ])
+  })
+
+  it('corrects nothing, and reports nothing, when the table agrees with the choice', () => {
+    const heard: CorrectedChoice[] = []
+    const answer = { choice: 'b', confidence: 0.6, probabilities: { a: 0.4, b: 0.6 } }
+    const settled = validateChoice(answer, ['a', 'b'], '这一问', (corrected) => heard.push(corrected))
+
+    expect(settled.choice).toBe('b')
+    expect(heard).toEqual([])
   })
 
   it('says what came back when the answer is not an object at all', () => {
@@ -510,24 +539,27 @@ describe('decision reading', () => {
     )
   })
 
-  it('names the element a refused target answer picked, and the one it should have', () => {
-    // Target 1 is the Search button, target 2 is the field it would open. The service
-    // named 2 while 1 held the probability, so no click can be executed.
-    expect(() =>
-      readDecision(
-        {
-          answers: {
-            operation: operation('CLICK'),
-            click_target: { choice: '2', confidence: 0.3, probabilities: { '1': 0.7, '2': 0.3 } },
-          },
+  it('corrects a target answer to the element that held the probability', () => {
+    // Target 1 is the Search button, target 2 is the field it would open. The service named 2
+    // while 1 held the probability, so 1 is the element the step gets — and the correction names
+    // the question it was about, because the operation question is settled by the same rule.
+    const heard: CorrectedChoice[] = []
+    const decision = readDecision(
+      {
+        answers: {
+          operation: operation('CLICK'),
+          click_target: { choice: '2', confidence: 0.3, probabilities: { '1': 0.7, '2': 0.3 } },
         },
-        space,
-        questionnaire,
-      ),
-    ).toThrow(
-      '「用 CLICK 时该选哪个元素」它选的是 2「Open Where from?」（概率 0.3），' +
-        '但概率最高的是 1「Search」（概率 0.7）——这一问它自己没拿定主意',
+      },
+      space,
+      questionnaire,
+      (corrected) => heard.push(corrected),
     )
+
+    expect(decision.target).toBe('1')
+    expect(heard).toEqual([
+      { question: '用 CLICK 时该选哪个元素', chose: '2', choseProbability: 0.3, top: '1', topProbability: 0.7 },
+    ])
   })
 })
 
@@ -681,6 +713,53 @@ describe('decision call', () => {
     expect(written[0]!.request).toMatchObject({ model: 'jev-latest' })
     expect(JSON.stringify(written[0])).not.toContain('test-key')
     expect(JSON.stringify(written[0])).toContain('***')
+  })
+
+  it('records the correction when the answer settled on a choice it did not name', async () => {
+    // The record is the only place a corrected step can be seen for what it was: the exchange itself
+    // is well-formed, and the decision that comes out names the choice the service did not.
+    const written: Array<Record<string, unknown>> = []
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(
+          JSON.stringify({
+            answers: {
+              operation: {
+                choice: 'TYPE_TEXT',
+                confidence: 0.28,
+                probabilities: {
+                  CLICK: 0.29,
+                  TYPE_TEXT: 0.28,
+                  SELECT: 0.01,
+                  SCROLL_DOWN: 0.01,
+                  WAIT: 0.17,
+                  DONE: 0.23,
+                  BLOCKED: 0.01,
+                },
+              },
+              click_target: { choice: '1', confidence: 0.7, probabilities: { '1': 0.7, '2': 0.3 } },
+            },
+          }),
+        ),
+    )
+
+    const decision = await choose({ ...source, trace: { write: (record) => written.push(record) } }, space, context)
+
+    expect(decision.operation).toBe('CLICK')
+    expect(decision.choice).toBe('e1')
+    // The exchange first, then the correction — a kind of its own, so nothing about the exchange
+    // record changes and a reader can still see what the service actually said.
+    expect(written.map((record) => record.kind)).toEqual(['decision', 'corrected'])
+    expect(written[1]).toMatchObject({
+      kind: 'corrected',
+      why: '它的选择和它自己的排名不一致，按排名走了',
+      question: '下一步该做哪个操作',
+      chose: 'TYPE_TEXT',
+      chose_probability: 0.28,
+      top: 'CLICK',
+      top_probability: 0.29,
+    })
   })
 
   it('sends the flat body first and the wrapped one only after a refusal about shape', async () => {

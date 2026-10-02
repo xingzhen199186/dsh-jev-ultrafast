@@ -16,8 +16,11 @@
  *
  * The validation is not decoration. The service answers with a probability
  * distribution over the choices *we* offered; anything else — a choice we never
- * offered, probabilities that do not sum to one, a winner that is not the most
- * probable choice — is a malformed answer, and the caller must execute nothing.
+ * offered, probabilities that do not sum to one — is a malformed answer, and the
+ * caller must execute nothing. A distribution whose stated winner is not its most
+ * probable choice is not one of those: the table is the answer and the named choice is
+ * a slip against it, so the most probable choice is the one that gets executed, and
+ * the correction is recorded (`validateChoice`).
  */
 import { recordable, redactUrl, type TraceSink } from '../artifacts'
 import type { SnapshotAction } from '../browser/session'
@@ -146,6 +149,23 @@ export interface ChoiceAnswer {
   choice: string
   confidence: number
   probabilities: Record<string, number>
+}
+
+/**
+ * One answer whose stated choice was not its own most probable one, and was corrected to it.
+ *
+ * The two probabilities are both kept, and both are the ones the service wrote down: the
+ * correction changes which choice is acted on, and nothing else about the answer.
+ */
+export interface CorrectedChoice {
+  /** The question as it was put, e.g. 「下一步该做哪个操作」. */
+  question: string
+  /** What the service named, against its own table. */
+  chose: string
+  choseProbability: number
+  /** The choice that actually held the probability, and is the one returned. */
+  top: string
+  topProbability: number
 }
 
 /** The exact questions asked, kept so the answers can be validated against them. */
@@ -313,15 +333,13 @@ function seen(value: unknown): string {
  * Why one answer cannot be acted on, said so the reader knows what came back and what
  * was wrong with it.
  *
- * This used to be one sentence for every failure, and the one failure that actually
- * stops runs — a distribution whose stated winner is not its most probable choice (the
- * service answering "CLICK" over a 0.37 "TYPE_TEXT" with 0.36) — was indistinguishable
- * from a network or parsing problem. Naming the winner and the runner-up is the evidence
- * a reader needs to tell "the service is unsure" apart from "we asked it badly".
- * `label` names an element index when the question is a target question; it is the same
- * label the question itself carried.
+ * The one failure this used to have to name — a distribution whose stated winner is not its
+ * most probable choice (the service answering "CLICK" over a 0.37 "TYPE_TEXT" with 0.36) — is
+ * no longer a failure: that answer is settled on its top choice and the correction is recorded
+ * instead (`validateChoice`). What is left here is the answers that carry no usable decision at
+ * all, and each of them still names what came back.
  */
-function whyUnusable(answer: unknown, ids: string[], label?: (id: string) => string | undefined): string {
+function whyUnusable(answer: unknown, ids: string[]): string {
   if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
     return `这一问的回答不是一个对象：收到 ${seen(answer)}`
   }
@@ -348,11 +366,6 @@ function whyUnusable(answer: unknown, ids: string[], label?: (id: string) => str
     )
   }
 
-  const named = (id: string): string => {
-    const name = label?.(id)
-    return name ? `${id}「${name}」` : id
-  }
-
   if (typeof choice !== 'string' || !ids.includes(choice)) {
     return `它给出的选择 ${seen(choice)} 不在问题列出的选项里`
   }
@@ -364,31 +377,33 @@ function whyUnusable(answer: unknown, ids: string[], label?: (id: string) => str
   const total = values.reduce((sum, value) => sum + value, 0)
   if (Math.abs(total - 1) >= 0.02) return `概率加起来不等于 1：实际是 ${odds(total)}`
 
-  const top = Math.max(...values)
-  const chosen = (probabilities as Record<string, number>)[choice]!
-  if (chosen < top - 1e-6) {
-    const winners = entries.filter(([, value]) => (value as number) >= top - 1e-9).map(([key]) => key)
-    return (
-      `它选的是 ${named(choice)}（概率 ${odds(chosen)}），但概率最高的是 ` +
-      `${winners.map(named).join('、')}（概率 ${odds(top)}）——这一问它自己没拿定主意`
-    )
-  }
   return '回答缺少必需的字段'
 }
 
 /**
- * Validate one answer against the choices its question actually offered.
- * A probability distribution that does not cover exactly those choices, or whose
- * winner is not the most probable one, is a broken answer rather than a decision.
+ * Validate one answer against the choices its question actually offered, and settle which
+ * choice it is.
  *
- * `question` and `label` exist only to make the refusal readable; neither changes what
- * is accepted. A caller that passes neither gets the same validation as before.
+ * A distribution that does not cover exactly those choices is a broken answer rather than a
+ * decision. A distribution whose stated winner is *not* its most probable choice is a different
+ * thing, and it is not broken: the table is what the service thinks, the named choice is a slip
+ * against it, and the most probable choice is the one returned. The runs of 2026-10-02 are why
+ * this reading won — the sixth of them had already reached the hotel list it was aiming for and
+ * was ended over 0.28 TYPE_TEXT against 0.29 CLICK, with no action taken at all.
+ *
+ * The confidence is deliberately left exactly as the service stated it: that is the number the
+ * caller's floor has always been judged against, and settling the choice must not launder a weak
+ * answer into a confident one. `onCorrected` is told about every correction, so the trace can
+ * carry the fact instead of a reader having to guess why the step did what it did.
+ *
+ * `question` is what the refusal and the correction call the question; `onCorrected` changes
+ * nothing about what is accepted.
  */
 export function validateChoice(
   answer: unknown,
   ids: string[],
   question = '这一问',
-  label?: (id: string) => string | undefined,
+  onCorrected?: (corrected: CorrectedChoice) => void,
 ): ChoiceAnswer {
   const record = answer as { choice?: unknown; confidence?: unknown; probabilities?: unknown } | null | undefined
   const probabilities = record?.probabilities
@@ -409,35 +424,57 @@ export function validateChoice(
       entries.length === ids.length &&
       entries.every(([key]) => ids.includes(key)) &&
       numbers.every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1) &&
-      Math.abs(entries.reduce((sum, [, value]) => sum + (value as number), 0) - 1) < 0.02 &&
-      (probabilities as Record<string, number>)[choice as string]! >=
-        Math.max(...entries.map(([, value]) => value as number)) - 1e-6
+      Math.abs(entries.reduce((sum, [, value]) => sum + (value as number), 0) - 1) < 0.02
   }
 
   if (!valid) {
     throw new InvalidDecision(
-      `决策服务返回了无法执行的结果，没有执行任何动作：「${question}」${whyUnusable(answer, ids, label)}`,
+      `决策服务返回了无法执行的结果，没有执行任何动作：「${question}」${whyUnusable(answer, ids)}`,
     )
   }
-  return {
-    choice: choice as string,
-    confidence: confidence as number,
-    probabilities: probabilities as Record<string, number>,
+
+  // Everything above is about the shape of the answer; this is about which choice it names.
+  // Reaching here means the table covers exactly the offered choices, so there is always a
+  // highest one and the choice above is always one of them.
+  const settled = probabilities as Record<string, number>
+  const chosen = settled[choice as string]!
+  const top = Object.entries(settled).reduce((best, entry) => (entry[1] > best[1] ? entry : best))
+  if (chosen < top[1] - 1e-6) {
+    onCorrected?.({
+      question,
+      chose: choice as string,
+      choseProbability: chosen,
+      top: top[0],
+      topProbability: top[1],
+    })
+    return { choice: top[0], confidence: confidence as number, probabilities: settled }
   }
+  return { choice: choice as string, confidence: confidence as number, probabilities: settled }
 }
 
 /**
  * Read a validated decision out of one service response.
  * Only the target head belonging to the chosen operation is consumed; the other
- * target heads cannot cause an action even if they are malformed.
+ * target heads cannot cause an action even if they are malformed. Both questions are
+ * settled by `validateChoice`, so `onCorrected` hears about each one it had to settle.
  */
-export function readDecision(payload: unknown, space: ActionSpace, questionnaire: Questionnaire): Decision {
+export function readDecision(
+  payload: unknown,
+  space: ActionSpace,
+  questionnaire: Questionnaire,
+  onCorrected?: (corrected: CorrectedChoice) => void,
+): Decision {
   const answers = (payload as { answers?: Record<string, unknown> } | null)?.answers
   if (typeof answers !== 'object' || answers === null) {
     throw new InvalidDecision(`决策服务没有返回 answers 字段（收到 ${seen(payload)}），没有执行任何动作`)
   }
 
-  const operationAnswer = validateChoice(answers.operation, questionnaire.operations, '下一步该做哪个操作')
+  const operationAnswer = validateChoice(
+    answers.operation,
+    questionnaire.operations,
+    '下一步该做哪个操作',
+    onCorrected,
+  )
   const operation = operationAnswer.choice
 
   let choice: string
@@ -451,7 +488,7 @@ export function readDecision(payload: unknown, space: ActionSpace, questionnaire
       answers[`${operation.toLowerCase()}_target`],
       questionnaire.targetIds[operation]!,
       `用 ${operation} 时该选哪个元素`,
-      (id) => candidates[id]?.label.split(' → ')[0],
+      onCorrected,
     )
     target = targetAnswer.choice
     for (const [index, action] of Object.entries(candidates)) {
@@ -497,7 +534,21 @@ export async function choose(
     source.trace,
     source.keyOrigin,
   )
-  const decision = readDecision(payload, space, questionnaire)
+  const decision = readDecision(payload, space, questionnaire, (corrected) => {
+    // A record of its own rather than a field on the decision exchange: nothing about the exchange
+    // was wrong, and what a reader needs is the two choices and the two probabilities that were
+    // compared. `validateChoice` is where the reading of a non-winning choice comes from.
+    source.trace?.write({
+      at: Date.now(),
+      kind: 'corrected',
+      why: '它的选择和它自己的排名不一致，按排名走了',
+      question: corrected.question,
+      chose: corrected.chose,
+      chose_probability: corrected.choseProbability,
+      top: corrected.top,
+      top_probability: corrected.topProbability,
+    })
+  })
   return {
     ...decision,
     model: typeof payload.model === 'string' ? payload.model : source.model,
