@@ -403,6 +403,18 @@ export interface TaskResult {
 const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没做成', failed: '出错了' }
 
 /**
+ * Whether a run that ended this way is reported as one that finished.
+ *
+ * `done` is how the run ended, and `unmet` is what a checklist was still holding out for when its
+ * finish was let through: only the second of those stands between a finish and being reported as one.
+ * Two sentences depend on the answer — the judgement itself (`verdictText` below) and the note about a
+ * result nobody checked (`./verify.ts`) — so it is asked here rather than worked out twice.
+ */
+function judgedAsFinished(status: RunStatus, unmet: readonly string[]): boolean {
+  return status === 'done' && unmet.length === 0
+}
+
+/**
  * The judgement a reader is shown for a run that has ended.
  *
  * A finish the checklist never agreed to is not shown as a finish. The run was told what had to keep
@@ -418,7 +430,7 @@ const STATUS_LABEL: Record<RunStatus, string> = { done: '完成', blocked: '没�
  * exactly as it always did, character for character.
  */
 export function verdictText(status: RunStatus, reason: string, unmet: readonly string[] = []): string {
-  if (status === 'done' && unmet.length > 0) return `没做成（清单没成立：${unmet.join('；')}）`
+  if (status === 'done' && !judgedAsFinished(status, unmet)) return `没做成（清单没成立：${unmet.join('；')}）`
   return `${STATUS_LABEL[status]}${reason ? `（${reason}）` : ''}`
 }
 
@@ -1391,8 +1403,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   }
 
   // The independent check runs before the run is reported, and it can take the run's own
-  // claim back: a `done` the page does not support is a run that did not finish.
-  const verification = verify(page?.text ?? '', options.expect)
+  // claim back: a `done` the page does not support is a run that did not finish. Whether this run is
+  // going to be reported as a finish is asked here rather than after that: the branch below only ever
+  // fires on a run whose pages *were* checked, and that run's note comes from the check itself, so for
+  // the one note that reads it — the sentence about a result nobody checked — this is the final answer.
+  const verification = verify(page?.text ?? '', options.expect, judgedAsFinished(status, unmet))
   if (status === 'done' && verification.checked && !verification.passed) {
     status = 'blocked'
     reason = `模型认为已经完成，但${verification.note}`

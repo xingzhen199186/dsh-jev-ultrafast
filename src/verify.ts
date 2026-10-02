@@ -37,7 +37,16 @@ export interface Verification {
   note: string
 }
 
-export function verify(text: string, expect: string[] | undefined): Verification {
+/**
+ * Check the run's own claim against the page it stopped on.
+ *
+ * `judgedAsDone` is whether this run is going to be reported as one that finished, and only the
+ * sentence for the case where the caller gave nothing to check reads it: that one names the claim
+ * （「完成」…）, and on a run reported as not having done the job — stopped on its own, or let through
+ * with its checklist still unmet — naming a finish would contradict the judgement above it. The other
+ * two notes are about a check that really ran, and read the same either way.
+ */
+export function verify(text: string, expect: string[] | undefined, judgedAsDone = true): Verification {
   const wanted = (expect ?? []).map((item) => item.trim()).filter((item) => item.length > 0)
   const lines = text
     .split('\n')
@@ -72,7 +81,11 @@ export function verify(text: string, expect: string[] | undefined): Verification
       checked,
       passed: true,
       items,
-      note: '没有给核验项，所以「完成」只是模型的声明，本次未经核实',
+      // The same fact twice over: a run reported as a finish can be told which claim went unchecked,
+      // one reported as not having done the job cannot, because there is no 「完成」 to point at.
+      note: judgedAsDone
+        ? '没有给核验项，所以「完成」只是模型的声明，本次未经核实'
+        : '没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实',
     }
   }
   const problems = [

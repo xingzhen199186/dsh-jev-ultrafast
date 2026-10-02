@@ -349,7 +349,24 @@ describe('run loop', () => {
 
     expect(result.status).toBe('done')
     expect(result.verification.checked).toBe(false)
-    expect(result.verification.note).toContain('未经核实')
+    // Written down nothing to check, and reported as a finish: the note names the claim it is about.
+    expect(result.verification.note).toBe('没有给核验项，所以「完成」只是模型的声明，本次未经核实')
+  })
+
+  it('names no finish in that note when the run is reported as not done', async () => {
+    // The same note on a run the report calls 没做成: the page never changed, three steps in, so this
+    // run is stopped rather than finished — and it still has nothing written down to check. The
+    // sentence names the claim 「完成」, which is not the claim a reader has just been shown, so it
+    // says the same fact without naming one.
+    const h = harness({
+      pages: [pageState('same'), pageState('same'), pageState('same'), pageState('same')],
+      choices: ['e1', 'e1', 'e1', 'e1'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.verification.checked).toBe(false)
+    expect(result.verification.note).toBe('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
   })
 
   it('will not accept a terminal answer for a page that has moved on', async () => {
@@ -3167,7 +3184,10 @@ describe('retries that buy no step', () => {
       ])
       // The same release travels with the run, and with the line that reports it: a status of `done`
       // is how the run ended, and `unmet` is what keeps a reader from being shown a finished one.
+      // The note about an unchecked result is part of that report, and this run was let through
+      // without anything written down to check it against either — so it may not name a finish.
       expect(result.unmet).toEqual(['地址里一直带着结果页'])
+      expect(result.verification.note).toBe('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
       expect(events.filter((event) => event.type === 'finished')).toEqual([
         { type: 'finished', status: 'done', reason: '', unmet: ['地址里一直带着结果页'] },
       ])

@@ -46,8 +46,21 @@ describe('verifying a claim against the page', () => {
 
     expect(result.checked).toBe(false)
     expect(result.passed).toBe(true)
-    expect(result.note).toContain('未经核实')
+    // This sentence names the claim 「完成」, which is the claim a reader has just been shown: the
+    // run is reported as a finish here, and this is the wording it has always had.
+    expect(result.note).toBe('没有给核验项，所以「完成」只是模型的声明，本次未经核实')
     expect(verify(page, ['  ', '']).checked).toBe(false)
+  })
+
+  it('does not name a finish when the run is not reported as one', () => {
+    // Stopped on its own, or let through with its checklist unmet: the judgement says the job was not
+    // done, so this sentence says the same fact without naming a 「完成」 that never happened.
+    const stopped = verify(page, undefined, false)
+
+    expect(stopped.note).toBe('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
+    expect(stopped.note).not.toContain('完成')
+    // Nothing to check is nothing to check, whether the caller passed nothing or an empty list.
+    expect(verify(page, [], false).note).toBe(stopped.note)
   })
 
   it('does not call a page successful just because it could not be read', () => {

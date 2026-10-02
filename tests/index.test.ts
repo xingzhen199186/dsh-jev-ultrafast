@@ -259,4 +259,24 @@ describe('what the tool tells a reader about a finished run', () => {
     expect(text).toContain('结果：没做成（清单没成立：页面上一直出现任务点名的地点；页面一直处于附近酒店结果列表语境）')
     expect(text).not.toContain('完成')
   })
+
+  it('does not leave the note about an unchecked result naming a finish either', () => {
+    // Two lines of one answer, and they have to agree. The judgement says the run did not do the job;
+    // the note below it says nothing was written down to check that claim against. On a run reported
+    // as not done that note may not name a 「完成」, so it had to stop naming one as well.
+    const text = summary({
+      status: 'blocked',
+      reason: '模型判断页面上已没有可以推进目标的操作',
+      verification: {
+        checked: false,
+        passed: true,
+        items: [],
+        note: '没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实',
+      },
+    })
+
+    expect(text).toContain('结果：没做成（模型判断页面上已没有可以推进目标的操作）')
+    expect(text).toContain('没有给核验项，所以这次的结果只是模型自己的说法，本次未经核实')
+    expect(text).not.toContain('完成')
+  })
 })
