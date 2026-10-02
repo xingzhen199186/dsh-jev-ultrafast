@@ -364,6 +364,56 @@ describe('run loop', () => {
     expect(result.textCalls).toHaveLength(1)
   })
 
+  it('reuses the paid value when only the page around the field changed', async () => {
+    // The key is the field, not the page it happens to stand on. A page whose own blocks rewrite
+    // themselves between two looks handed the run a different text every time, and a key that
+    // carried that text paid the text model again for the field it had already answered — on 携程
+    // (2026-10-02), five calls for one search box and four of them the same answer.
+    const h = harness({
+      pages: [
+        pageState('f0', { text: 'Where from? 推荐：酒店 A ¥320' }),
+        pageState('f1', { text: 'Where from? 推荐：酒店 B ¥410、酒店 C ¥260' }),
+        pageState('f2', { text: 'Where from? 推荐：酒店 A ¥320' }),
+      ],
+      choices: ['e2', 'e2', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    // Two attempts at the same field, with the page's own text rewritten in between, and one bill.
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e2', 'e2'])
+    expect(h.seen.typedFields).toHaveLength(1)
+    expect(result.textCalls).toHaveLength(1)
+  })
+
+  it('pays again when the field itself is a different field', async () => {
+    // The other half of that key: a control that is not the one the value was generated for must be
+    // asked about on its own. Here the page hands back a control at the same number with different
+    // words, which is what a replaced control looks like from here.
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        pageState('f1', { actions: [button('e1', 1, 'Search'), field('e2', 2, 'Where to?')] }),
+        pageState('f2'),
+      ],
+      choices: ['e2', 'e2', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    expect(h.seen.executed.map((action) => action.label)).toEqual(['Where from?', 'Where to?'])
+    expect(h.seen.typedFields).toHaveLength(2)
+    expect(result.textCalls).toHaveLength(2)
+  })
+
   it('stops after three steps that changed nothing', async () => {
     const h = harness({
       pages: [pageState('same')],
@@ -2178,12 +2228,46 @@ describe('retries that buy no step', () => {
       '在你要执行的目标上连着试了 7 次，每次重新看过都没能执行，先停下——' +
         '它卡在这个目标上了：CLICK 目标 1「Search」',
     )
-    // A refusal with nothing of its own to say leaves the next request exactly as it was: no note.
-    expect(h.seen.contexts.every((context) => context.note === undefined)).toBe(true)
+    // A refusal with nothing standing on the target still has the one thing to say it can prove: the
+    // page it decided on is not the page in front of it. It goes into the next request's note, and
+    // into the one after that for as long as the refusals last — the seventh ends the run before its
+    // own note would have been sent.
+    const refusedNote = '上一个动作没能执行：决定看到的那一页已经不是现在这一页了，请按现在这一页重新选'
+    expect(h.seen.contexts[0]?.note).toBeUndefined()
+    expect(h.seen.contexts.slice(1).map((context) => context.note)).toEqual(
+      Array.from({ length: 6 }, () => refusedNote),
+    )
     // Seven decisions and nothing recorded: the run stops on its own rule, not on the model-call
     // budget the diagnosis found the old unbounded retry burning through.
     expect(result.decisions).toBe(7)
     expect(result.steps).toBe(0)
+  })
+
+  it('does not report a refused step as executed', async () => {
+    // `executed` is what the panel lists, what the CLI prints as "第 N 步" and what the inspector's
+    // index counts. A refusal is none of those: nothing went out, no step was recorded, and the run
+    // only looked at the page again. The step that does land is still reported, once.
+    const events: string[] = []
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      choices: ['e1', 'e1', 'DONE'],
+      execute: (index) => {
+        if (index === 0) throw new StalePage('目标已经变化或被遮挡，请重新观察')
+      },
+    })
+    const result = await runTask({
+      goal: 'Find a flight',
+      startUrl: 'https://example.test/',
+      decision,
+      text,
+      deps: h.deps,
+      onEvent: (event) => events.push(event.type),
+    })
+
+    expect(result.status).toBe('done')
+    expect(result.steps).toBe(1)
+    expect(h.seen.executed).toHaveLength(2)
+    expect(events).toEqual(['observed', 'decided', 'decided', 'executed', 'decided', 'finished'])
   })
 
   it('tells the next request what was standing over a target the page would not be clicked through', async () => {

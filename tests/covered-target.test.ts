@@ -166,6 +166,31 @@ describe('a target something else is standing over', () => {
     expect((taken as Error).message).toBe('目标已经变化或被遮挡，请重新观察')
   })
 
+  it('records the element lookup that found nothing, and which question refused', async () => {
+    // The refusal used to leave nothing behind at all: the run re-observed the page, asked again, and
+    // stopped seven decisions later on a rule about a target no reader could see the reason for. The
+    // record names the site — the element lookup, not the freshness question before it — and the
+    // element the decision chose, and its sentence says what was true of the page.
+    const written: Array<Record<string, unknown>> = []
+    const { port } = sessionOver(new Map(), layer)
+
+    await expect(
+      act(port, page, ACTION, undefined, { write: (record) => written.push(record) }),
+    ).rejects.toBeInstanceOf(StalePage)
+
+    expect(written).toEqual([
+      {
+        at: expect.any(Number),
+        kind: 'refused',
+        where: 'target',
+        why: '这个元素在页面上已经找不到或点不动了（元素重查没过），这个动作没发出去',
+        operation: 'click',
+        node: NODE,
+        label: ' 欢迎度排序',
+      },
+    ])
+  })
+
   it('carries the number the page gave the element in the way, and its guard', async () => {
     // The two fields that turn the sentence into a choice: the element's own number, minted the way
     // the snapshot mints one, and the guard a freshness check compares (see `withCoverActions`).

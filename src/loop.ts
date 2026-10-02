@@ -399,6 +399,29 @@ function repeatedActionState(page: PageState): string {
 }
 
 /**
+ * What makes a paid field value still the right answer for the field in front of the run.
+ *
+ * The same field on the same page, and nothing else: the address it stands on, the element's own
+ * identity (which survives a reorder of the same DOM nodes — see `actionElementKey`), and the three
+ * things that name the control to a reader — its role, its label, and what it currently holds. The
+ * page's own text is deliberately not in here, and neither is the run's recent history. A list page
+ * whose recommendation blocks rewrite themselves between two looks hands the run a different text
+ * every time, and a key that carried that text paid the text model again for a field it had already
+ * been answered: on 携程 (2026-10-02) one search box was asked for five times and four of those
+ * answers were the same text. What this key still has to tell apart is a different field, a
+ * different page, and a control that was replaced rather than repainted — the element identity does.
+ */
+function fieldKey(page: PageState, action: SnapshotAction): string {
+  return JSON.stringify({
+    url: page.url,
+    element: actionElementKey(action) || action.id,
+    role: action.role ?? '',
+    label: action.label,
+    value: action.value ?? '',
+  })
+}
+
+/**
  * The landmark filter an address carries, or `null` when it carries none.
  *
  * A plain match rather than `new URL(...)`: what this reads is an address a page handed over, and a
@@ -471,8 +494,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let landmark: string | null = null
   let landmarkLost = false
   let reason = ''
-  // A generated value, reused only when the whole field context is identical.
-  let pendingText: { context: FieldContext; text: string; helper: TextResult } | null = null
+  // A generated value, reused only when the field it was asked for is the same field on the same
+  // page (`fieldKey`) — never merely when the whole request would have been identical, because the
+  // page's own text changes without the field changing.
+  let pendingText: { key: string; text: string; helper: TextResult } | null = null
   // The sentence the next decision request carries, when there is one: cleared the moment
   // it has been sent, so an ordinary step is an ordinary step.
   let hint = ''
@@ -987,15 +1012,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             continue
           }
           const context = fieldContext(options.goal, action, page, history)
-          if (pendingText && JSON.stringify(pendingText.context) === JSON.stringify(context)) {
+          const key = fieldKey(page, action)
+          if (pendingText && pendingText.key === key) {
             text = pendingText.text
             helper = pendingText.helper
           } else {
             helper = await deps.typeText({ ...textSource, signal: options.signal }, context)
             text = helper.text
-            // Kept so a stale retry of the same field context reuses this value
-            // rather than paying the text model again.
-            pendingText = { context, text, helper }
+            // Kept so a stale retry of the same field reuses this value rather than paying
+            // the text model again.
+            pendingText = { key, text, helper }
             textCalls.push({
               model: helper.model,
               latency_ms: helper.latencyMs,
@@ -1036,10 +1062,18 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             // The same target refused the same way again is the run this is here for; a refusal of a
             // different target starts the count over, and a step that lands clears the whole record.
             cover = coverAfter(cover, covered.covering, decision.target ?? '')
+          } else {
+            // A refusal with nothing standing on the target has no covering element to name, but it
+            // is not nothing to say: the page the decision was made on is not the page in front of
+            // the run any more, and the next request is where that has to reach the model. Until the
+            // refusal was recorded (`browser/act.ts`) this was the one kind of refusal that left the
+            // run with no sentence at all — "没能执行" and no follow-up.
+            hint = '上一个动作没能执行：决定看到的那一页已经不是现在这一页了，请按现在这一页重新选'
           }
           // Reset and re-observe. The paid value is kept: the same field, the same
-          // goal, so the same text is still the right answer.
-          emit({ type: 'executed', step: history.length + 1, action: action.label, elapsedMs: elapsedMs(), pageChanged: true })
+          // goal, so the same text is still the right answer. Nothing is reported as executed here:
+          // the action never went out, and an `executed` event on this path told the panel, the
+          // progress line and the inspector's own index about a step that did not happen.
           page = await session.observe({ screenshot: screenshots })
           continue
         }

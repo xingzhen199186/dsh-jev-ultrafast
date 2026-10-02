@@ -274,18 +274,26 @@ export class BrowserSession implements BrowserPort {
 
   /**
    * Whether the observed page still matches the decision.
-   * The actions aimed at one element — click, select and press_key — compare the target's own
-   * guard, which is cheap and scoped to the control: it asks whether the element the action was
+   * Every action aimed at one element — click, select, press_key and fill — compares the target's
+   * own guard, which is cheap and scoped to the control: it asks whether the element the action was
    * aimed at is still that element, in that state, instead of whether the whole page is unchanged.
-   * The distinction is the point for a key: the pages that need one are the ones that keep
-   * repainting (an autocomplete list redrawn while it is being typed into), which is exactly
-   * where a whole-page marker would throw away a press that was still valid — on 携程 the marker
-   * moved on nearly every step. Everything else compares the full semantic marker.
+   * The distinction is the point for a key, and it is the same one for a field: the pages that keep
+   * repainting around the control — an autocomplete list redrawn while it is being typed into, a home
+   * page whose recommendation blocks rewrite themselves on every look — are exactly where a whole-page
+   * marker throws away a step that was still valid. On 携程 the marker moved on nearly every step, and
+   * a field is what those pages still hand the run: on 2026-10-02 a run spent seven TYPE_TEXT
+   * decisions on the same search box, paid for five of them, and sent no keystroke at all.
+   * A control that really was redrawn is still refused — its own guard is what changed — and the
+   * element the action names is looked up by identity, so a moved or replaced control fails here.
+   * `scroll` and `wait` are aimed at no element and compare the full semantic marker.
    */
   async fresh(page: PageState, action?: SnapshotAction): Promise<boolean> {
     if (
       action &&
-      (action.kind === 'click' || action.kind === 'select' || action.kind === 'press_key')
+      (action.kind === 'click' ||
+        action.kind === 'select' ||
+        action.kind === 'press_key' ||
+        action.kind === 'fill')
     ) {
       const node = action.node
       if (typeof node !== 'number') return false

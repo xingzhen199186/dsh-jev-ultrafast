@@ -364,6 +364,24 @@ export async function act(
   trace?: TraceSink,
 ): Promise<ActResult> {
   if (!(await session.fresh(page, action))) {
+    // Written down, not only thrown: this refusal sends the run back to look again, and the trace is
+    // the only place that says afterwards why the step did not happen. Which question refused is on
+    // `where`, and it is the question `fresh` really asked — an element action is judged by the
+    // target's own guard, and only `scroll` and `wait`, which are aimed at no element, by the
+    // whole-page marker. The element the action named goes on the record rather than staying
+    // implicit in the action the decision chose.
+    const aimed = action.kind !== 'scroll' && action.kind !== 'wait'
+    trace?.write({
+      at: Date.now(),
+      kind: 'refused',
+      where: aimed ? 'guard' : 'marker',
+      why: aimed
+        ? '决定瞄准的那个元素已经不是原来那个了（它自己的状态变了），这个动作没发出去'
+        : '决定看到的那一页已经不是现在这一页了（整页指纹变了），这个动作没发出去',
+      operation: action.kind,
+      node: typeof action.node === 'number' ? action.node : null,
+      label: action.label,
+    })
     throw new StalePage('页面已经变化，这次决定不能再执行，请重新观察')
   }
   if (action.kind === 'wait') await delay(100)
@@ -393,6 +411,18 @@ async function execute(
   if (typeof action.node !== 'number') throw new Error('这个目标不是页面上已经观察到的元素')
   const target = await resolveTarget(session, action)
   if (target === null) {
+    // The second question a step can fail, and the same treatment as the freshness question above:
+    // the element the decision named is no longer there to be acted on, which is a fact about the
+    // page that the next observation cannot recover once the page has moved on again.
+    trace?.write({
+      at: Date.now(),
+      kind: 'refused',
+      where: 'target',
+      why: '这个元素在页面上已经找不到或点不动了（元素重查没过），这个动作没发出去',
+      operation: action.kind,
+      node: action.node,
+      label: action.label,
+    })
     if (action.kind === 'select') throw new ExecutionInterrupted('下拉框的执行没有得到确认，重试前请先重新观察')
     throw new StalePage('目标已经变化或被遮挡，请重新观察')
   }

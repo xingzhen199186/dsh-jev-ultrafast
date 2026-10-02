@@ -1,5 +1,5 @@
 /**
- * A key is not thrown away because the page repainted around it.
+ * A key — and a field — is not thrown away because the page repainted around it.
  *
  * The pages that need `PRESS_KEY` are the ones that redraw themselves while they are being
  * worked on — an autocomplete list rebuilt on every keystroke — so the whole-page marker that
@@ -7,10 +7,16 @@
  * 携程 (2026-10-01) the page changed on nearly every step, which is what left the keyboard as
  * the only move and, under the marker rule, also made it the move most likely to be refused.
  *
+ * A field is the same case one step earlier, and the run of 2026-10-02 is what says so: seven
+ * `TYPE_TEXT` decisions aimed at one search box, five paid answers, and not one keystroke sent,
+ * because the home page's recommendation blocks rewrote themselves between two looks. So the
+ * field is asked about by its own guard too — and a control that really was replaced, rather
+ * than repainted, still fails that question.
+ *
  * These checks drive the real `act` over a scripted CDP connection: the whole-page marker is
  * answered as *changed* for the entire run, while the field's own guard still matches. The
- * press has to go out anyway, and the second check pins that the marker really was different —
- * an action that is judged by it is refused in the same conditions.
+ * press and the fill have to go out anyway; the checks that expect a refusal pin that the marker
+ * really was different, and that a changed guard is still a refusal.
  *
  * Nothing here touches a browser: the connection is a stand-in that answers the three
  * expressions `act` asks for by their shape, and the tab bookkeeping it needs with empty
@@ -71,6 +77,11 @@ class ScriptedConnection implements HeldSocket {
   readonly dispatched: Array<Record<string, unknown>> = []
   /** Every expression the run evaluated, so a test can assert what it asked. */
   readonly evaluated: string[] = []
+  /**
+   * What the target's own guard answers with, when a test needs it to have moved. Left unset it is
+   * the guard the page was observed with, which is the "still the same control" case.
+   */
+  guard: unknown[] | null = null
 
   constructor(private readonly page: PageState) {}
 
@@ -84,7 +95,7 @@ class ScriptedConnection implements HeldSocket {
       // the page-key call, which is what tells this expression from the target lookup below — that
       // one asks the page for a guard as well, so `c.guard` alone no longer names this question.
       if (expression.includes('c.pageKey')) {
-        return { result: { value: [this.page.page_key, this.page.guards['7']] } } as T
+        return { result: { value: [this.page.page_key, this.guard ?? this.page.guards['7']] } } as T
       }
       // Where the action is aimed: still connected, still hit-testable.
       if (expression.includes('isConnected')) return { result: { value: { x: 5, y: 6 } } } as T
@@ -99,6 +110,10 @@ class ScriptedConnection implements HeldSocket {
       return {} as T
     }
     if (method === 'Input.dispatchMouseEvent') {
+      this.dispatched.push({ ...(params ?? {}) })
+      return {} as T
+    }
+    if (method === 'Input.insertText') {
       this.dispatched.push({ ...(params ?? {}) })
       return {} as T
     }
@@ -128,7 +143,7 @@ afterEach(() => {
   clearAttached()
 })
 
-describe('a key on a page that keeps repainting', () => {
+describe('a control on a page that keeps repainting', () => {
   it('presses it while the whole-page marker has already moved on', async () => {
     const { session, connection, page } = await attached()
     try {
@@ -156,6 +171,65 @@ describe('a key on a page that keeps repainting', () => {
       // for the page key and the target's guard together.
       expect(connection.evaluated.some((expression) => expression.includes('c.pageKey'))).toBe(true)
       expect(connection.evaluated.some((expression) => expression.includes('semantics'))).toBe(false)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('fills the field while the whole-page marker has already moved on', async () => {
+    // The run of 2026-10-02 in one line: the page repainted between the observation and the input,
+    // the field itself was untouched, and the text has to go out. Seven decisions were spent on this
+    // box and not one keystroke was sent, because the marker was what decided.
+    const { session, connection, page } = await attached()
+    try {
+      const fill = page.actions.find((action) => action.kind === 'fill')!
+      const result = await act(session, page, fill, '北大医疗产业园')
+
+      expect(result.executed).toBe(fill.id)
+      // Click into it, select what it holds, then type: `Input.insertText` carries no `type` of its
+      // own, so it is the event the four named ones are followed by.
+      expect(connection.dispatched.slice(0, 4).map((event) => event.type)).toEqual([
+        'mousePressed',
+        'mouseReleased',
+        'keyDown',
+        'keyUp',
+      ])
+      expect(connection.dispatched).toHaveLength(5)
+      expect(connection.dispatched.at(-1)).toEqual({ text: '北大医疗产业园' })
+      expect(connection.evaluated.some((expression) => expression.includes('c.pageKey'))).toBe(true)
+      expect(connection.evaluated.some((expression) => expression.includes('semantics'))).toBe(false)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('still refuses a field whose own control was replaced, and records which question refused it', async () => {
+    // The case the change above must not cost: the page still has a control at that node, and the
+    // control is not the one the decision chose — its own guard is what says so. Nothing goes out,
+    // and the trace says which of the questions refused, because an execution that did not happen
+    // used to leave the run with nothing to read (2026-10-02: seven attempts, zero records).
+    const { session, connection, page } = await attached()
+    try {
+      connection.guard = ['destination-field', 'textbox', '目的地', '']
+      const fill = page.actions.find((action) => action.kind === 'fill')!
+      const written: Array<Record<string, unknown>> = []
+
+      await expect(
+        act(session, page, fill, '北大医疗产业园', { write: (record) => written.push(record) }),
+      ).rejects.toBeInstanceOf(StalePage)
+
+      expect(connection.dispatched).toEqual([])
+      expect(written).toEqual([
+        {
+          at: expect.any(Number),
+          kind: 'refused',
+          where: 'guard',
+          why: '决定瞄准的那个元素已经不是原来那个了（它自己的状态变了），这个动作没发出去',
+          operation: 'fill',
+          node: 7,
+          label: '目的地',
+        },
+      ])
     } finally {
       await session.close()
     }
