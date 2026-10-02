@@ -209,6 +209,26 @@ export const LOGIN_HINT =
   '如果卡在要登录的页面：连的是你正在用的浏览器时，登录状态本该就在；连的是插件自己那份数据目录时，它和你日常那个互相独立，' +
   '需要登录的网站得先在它开出来的窗口里登录一次。'
 
+/**
+ * What every channel says when the run's own model handed over no sentence at all.
+ *
+ * A run asks its own model once, at the moment it announces a finish, for the one thing an
+ * operation table cannot carry: the result in words (`prompts.ts` `FINAL_ANSWER`). That call is
+ * allowed to fail, and it is equally allowed to come back `{"text": null}` — the honest "this page
+ * shows no result for the goal". Both used to leave every report quietly missing its 「它自己说：」
+ * line, and the absence read as "there was nothing to say" when in truth nothing had been said. So
+ * each channel says the one thing that is always true, and the two that print the page's own text
+ * right below it point the reader at it.
+ *
+ * The sentence stays this vague on purpose. Which of the two happened is not knowledge the run
+ * keeps: `loop.ts` reads every refusal as "there is nothing to say" deliberately, so that an
+ * optional call at the end can never fail a run that would otherwise have succeeded.
+ */
+export const NO_ANSWER = '它没能把看到的读出来'
+
+/** The same, for the two channels that print the page's own text right below it. */
+export const NO_ANSWER_BODY_BELOW = `${NO_ANSWER}——下面是它最后停住那一页的正文，你自己看看`
+
 /** Chinese wording for a store source id; an unknown id is shown as it came. */
 export function sourceLabel(source: string): string {
   switch (source) {

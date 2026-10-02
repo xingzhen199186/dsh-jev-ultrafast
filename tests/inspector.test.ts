@@ -168,7 +168,10 @@ describe('the inspector page', () => {
     expect(run.trace[2].line).not.toContain('new_tabs')
     expect(run.trace[3].line).toContain('第 2 步开出了新页面：跟过去了')
     expect(run.trace[4].line).toContain('本次运行结束：done')
-    // A run that was asked and said nothing has no such sentence: no empty lead-in either.
+    // A run that was asked and came back with nothing says so, in the words the other two channels
+    // use for the same fact — and still carries no empty 「它自己说：」 lead-in, because nobody said
+    // anything.
+    expect(run.trace[4].line).toContain('；它没能把看到的读出来')
     expect(run.trace[4].line).not.toContain('它自己说')
 
     const frame = await ask(`/frame?run=${RUN}&file=001500.jpg`)
@@ -252,6 +255,26 @@ describe('the inspector page', () => {
     expect(line).toContain('结束：完成 —')
     expect(line).not.toContain('没做成')
     expect(line).toContain('核验通过：2 项都在最终页面上找到了；中控清单另有 1 条没成立：页面上一直保留搜索入口')
+  })
+
+  it('says nothing was handed over in its closing line when the run never answered', () => {
+    // The third copy of the same fact, for a run whose own model came back with no sentence. This
+    // line has no page text under it, so it says only that nothing arrived — but it says it, rather
+    // than stopping after the numbers as if there were nothing to mention.
+    const line = closingLine({
+      status: 'done',
+      reason: '',
+      unmet: [],
+      steps: 8,
+      decisions: 12,
+      elapsedMs: 60219,
+      verification: { checked: false, passed: true, items: [], note: '' },
+      pageNote: '',
+      answer: '',
+    } as unknown as TaskResult)
+
+    expect(line).toContain('；它没能把看到的读出来')
+    expect(line).not.toContain('它自己说')
   })
 
   it('reads frames named by step, and hands the step and action on to the page', async () => {

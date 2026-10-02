@@ -227,15 +227,16 @@ describe('what the tool tells a reader about a finished run', () => {
       ...overrides,
     }) as unknown as TaskResult
 
-  const summary = (overrides: Partial<TaskResult> = {}): string => {
+  const blocksOf = (overrides: Partial<TaskResult> = {}): Array<{ type: string; text: string }> => {
     const [task] = registerWith()
     const toOutputValue = toOutput(result(overrides))
-    const blocks = task!.output.render({ goal: '读出第一页的酒店' } as never, toOutputValue as never) as Array<{
+    return task!.output.render({ goal: '读出第一页的酒店' } as never, toOutputValue as never) as Array<{
       type: string
       text: string
     }>
-    return blocks[0]!.text
   }
+
+  const summary = (overrides: Partial<TaskResult> = {}): string => blocksOf(overrides)[0]!.text
 
   it('puts the model s own sentence on its own line under the judgement', () => {
     // The tool is where a model turn reads the outcome, so this is the copy that has to keep what the
@@ -247,8 +248,27 @@ describe('what the tool tells a reader about a finished run', () => {
     )
   })
 
-  it('grows no such line when the model had nothing to say', () => {
-    expect(summary()).not.toContain('它自己说')
+  it('says the model handed over no sentence, and still hands the page over', () => {
+    // The tool's reader is a model, not a person: it can read the answer off the page text itself,
+    // but it cannot guess that this run's own sentence is missing rather than the result being
+    // absent. So the missing sentence is said, and the page's text follows as it always did.
+    const blocks = blocksOf({
+      page: { url: 'https://example.test/f', title: '榜单页', text: '第一页的酒店：甲乙' },
+    })
+
+    expect(blocks[0]!.text).toContain('它没能把看到的读出来——下面是它最后停住那一页的正文，你自己看看')
+    expect(blocks[0]!.text).not.toContain('它自己说')
+    expect(blocks[1]!.text).toBe('最终页面（榜单页 — https://example.test/f）的可见正文：\n第一页的酒店：甲乙')
+  })
+
+  it('promises no page text when the run never got a page to quote', () => {
+    const text = summary()
+
+    // The default result has no page at all, so there is no body to point at: the sentence says
+    // only what happened.
+    expect(text).toContain('它没能把看到的读出来\n')
+    expect(text).not.toContain('下面是它最后停住那一页的正文')
+    expect(text).not.toContain('它自己说')
   })
 
   it('says the job was not done when the run was let through with a checklist unmet', () => {

@@ -14,7 +14,7 @@ import { runTask, verdictText } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
 import { MAX_PAGE_TEXT } from './prompts'
-import { LOGIN_HINT } from './protocol'
+import { LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW } from './protocol'
 import { browserNote, prepareRun } from './run-setup'
 
 export const name = 'dsh-jev-ultrafast'
@@ -152,8 +152,12 @@ export function apply(ctx: Context, config: ConfigShape): void {
             `结果：${verdictText(value.status, value.reason, value.unmet, value.verified)}`,
           ]
           // What the model said it found, kept apart from the judgement above by its own lead-in and
-          // its own line — and left out entirely when it had nothing to say, rather than shown empty.
+          // its own line — and, when it had nothing to hand over, replaced by the sentence that says
+          // so, with the final page's text below it either way (the caller can read the answer off
+          // that text itself, and a run that came back without one must not look like a run that
+          // found nothing to report).
           if (value.answer) summary.push(`它自己说：${value.answer}`)
+          else summary.push(value.text ? NO_ANSWER_BODY_BELOW : NO_ANSWER)
           summary.push(`执行 ${value.steps} 步、${value.decisions} 次决策，用时 ${(value.elapsedMs / 1000).toFixed(1)} 秒`)
           if (value.verification) summary.push(value.verification)
           if (value.omittedActions > 0) {

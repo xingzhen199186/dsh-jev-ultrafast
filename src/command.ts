@@ -27,7 +27,7 @@ import { deadEndNote } from './dead-ends'
 import type { captureLlm } from './dsh-model'
 import type { LoopEvent, TaskResult } from './loop'
 import { runTask, verdictText } from './loop'
-import { INSPECTOR_PATH, LOGIN_HINT } from './protocol'
+import { INSPECTOR_PATH, LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW } from './protocol'
 import { namedSite, resolveStart } from './resolve-start'
 import { unfinishedDeaths } from './run-history'
 import { prepareRun } from './run-setup'
@@ -101,6 +101,9 @@ export function helpText(): string {
 
 /** What the answer says once a run is over, in the reader's language. */
 export function summaryText(result: TaskResult, url: string): string {
+  // Read before the lines are built rather than where the page is reported below, because the
+  // sentence about a missing answer has to know whether there is any page text to point at.
+  const excerpt = result.page ? pageExcerpt(result.page.text) : ''
   const lines = [
     `目标：${result.goal}`,
     `结果：${verdictText(result.status, result.reason, result.unmet, result.verified)}`,
@@ -109,12 +112,17 @@ export function summaryText(result: TaskResult, url: string): string {
   // own when there are none: a reader has to be able to tell which of the two sentences is the
   // plugin's verdict and which is what the model said it saw, and an empty 「它自己说：」 would read
   // as the model having said nothing when in fact nobody asked it anything.
+  //
+  // Handing over nothing is not the same as having nothing to say, though. The line below used to
+  // be dropped whole, which left the reader with exactly the silence the sentence is there to
+  // break: a run that came back without a conclusion now says so, and — where there is one — points
+  // at the page's own words underneath.
   if (result.answer) lines.push(`它自己说：${result.answer}`)
+  else lines.push(excerpt ? NO_ANSWER_BODY_BELOW : NO_ANSWER)
   lines.push(`执行 ${result.steps} 步、${result.decisions} 次决策，用时 ${(result.elapsedMs / 1000).toFixed(1)} 秒`)
   if (result.verification.checked) lines.push(result.verification.note)
   if (result.page) {
     lines.push(`最后停在：${result.page.title} — ${result.page.url}`)
-    const excerpt = pageExcerpt(result.page.text)
     if (excerpt) lines.push(excerpt)
   } else lines.push(`没能读到页面（起点：${url}）`)
   // Said here as well as in the snapshot: the model's sentence about a page it cannot read

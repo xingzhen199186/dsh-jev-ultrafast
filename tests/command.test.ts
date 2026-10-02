@@ -325,13 +325,28 @@ describe('what the reader is told afterwards', () => {
     expect(text).toContain('结果：完成\n')
   })
 
-  it('adds no line at all when the model had nothing to say', () => {
+  it('says the model handed over no sentence, and brings the page text instead', () => {
     const text = summaryText(result(), 'https://example.test')
 
+    // A run that came back without a conclusion is not a run with nothing to report: the line that
+    // used to be dropped whole says what happened, and the page's own words follow it so the reader
+    // is not sent away empty-handed. Nobody said anything, so the old lead-in stays gone.
+    expect(text).toContain('它没能把看到的读出来——下面是它最后停住那一页的正文，你自己看看')
     expect(text).not.toContain('它自己说')
-    // The lines a finished run has always reported, in the order and the wording they had. Nothing
-    // here is unmet — the control layer is off — and nothing about this line moved for that.
-    expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n执行 2 步、2 次决策，用时 42.0 秒\n')).toBe(true)
+    expect(text).toContain('最后停在：价格页 — https://example.test/price')
+    expect(text).toContain('页面上读到的内容（节选）：\n价格 12 元')
+    // The lines a finished run has always reported, in the order and the wording they had.
+    expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n它没能把看到的读出来——')).toBe(true)
+  })
+
+  it('promises no page text when the run never got a page to quote', () => {
+    const text = summaryText(result({ page: null }), 'https://example.test')
+
+    // The same fact without a body to point at: the sentence says only what happened, and the line
+    // about the page that could not be read says the rest.
+    expect(text).toContain('它没能把看到的读出来\n')
+    expect(text).not.toContain('下面是它最后停住那一页的正文')
+    expect(text).toContain('没能读到页面（起点：https://example.test）')
   })
 
   it('quotes the page back, trimmed, and says when there is more of it', () => {

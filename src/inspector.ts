@@ -26,6 +26,7 @@ import type { captureLlm } from './dsh-model'
 import { readJson, send, sendBytes } from './http'
 import { inspectorPage } from './inspector-page'
 import { runTask, verdictText, type LoopEvent, type TaskResult } from './loop'
+import { NO_ANSWER } from './protocol'
 import { prepareRun } from './run-setup'
 import { hasLastWord } from './run-history'
 
@@ -45,6 +46,10 @@ type LineKind = 'observed' | 'decided' | 'executed' | 'followed' | 'finished' | 
  * The line the inspector shows once a run has ended: the judgement first, then the numbers, then
  * whatever else the run left to say about itself.
  *
+ * A run that came back without a sentence of its own gets the same words the other two channels
+ * use for that (`protocol.ts` `NO_ANSWER`). This line has no page text under it — the inspector
+ * shows the run's steps and its raw trace instead — so it says only that nothing was handed over.
+ *
  * Exported so the judgement half — the part that has to agree with the tool's answer and the slash
  * command's summary — can be held to account without standing up a browser, and read from one place
  * by both the live log and the state the page draws.
@@ -54,7 +59,7 @@ export function closingLine(result: TaskResult): string {
     result.decisions
   } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
     result.pageNote ? `；${result.pageNote}` : ''
-  }${result.answer ? `；它自己说：${result.answer}` : ''}`
+  }${result.answer ? `；它自己说：${result.answer}` : `；${NO_ANSWER}`}`
 }
 
 interface StepLine {
@@ -501,7 +506,10 @@ function describeRecord(record: Record<string, unknown>): string {
     const seconds = typeof record.elapsed_ms === 'number' ? (record.elapsed_ms / 1000).toFixed(1) : '?'
     // The run's own model said something about the page it stopped on: kept apart from the reason
     // above it, which is this plugin's judgement about how the run ended rather than the model's.
-    const said = typeof record.answer === 'string' && record.answer ? `；它自己说：${record.answer}` : ''
+    // A run whose answer never arrived says that too — the record itself carries no `answer` field
+    // in that case, and a line that simply stopped after the numbers told the reader nothing.
+    const said =
+      typeof record.answer === 'string' && record.answer ? `；它自己说：${record.answer}` : `；${NO_ANSWER}`
     return `${prefix}本次运行结束：${String(record.status)}，${String(record.steps)} 步、${String(
       record.decisions,
     )} 次决策，共 ${seconds} 秒${record.reason ? `（${String(record.reason)}）` : ''}${said}`
