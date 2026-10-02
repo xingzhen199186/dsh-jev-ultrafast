@@ -91,11 +91,12 @@ class ScriptedConnection implements HeldSocket {
     if (method === 'Runtime.evaluate') {
       const expression = String(params?.expression ?? '')
       this.evaluated.push(expression)
-      // The target's own guard: the very pair the observation recorded, so it matches. Matched by
-      // the page-key call, which is what tells this expression from the target lookup below — that
-      // one asks the page for a guard as well, so `c.guard` alone no longer names this question.
-      if (expression.includes('c.pageKey')) {
-        return { result: { value: [this.page.page_key, this.guard ?? this.page.guards['7']] } } as T
+      // The target's own guard, and only that: the very value the observation recorded, so it
+      // matches. Matched by the guard call on the page's own node table, which is what tells this
+      // expression from the target lookup below — that one asks the page for a guard as well, about
+      // whatever element sits at a point, so `c.guard` alone would not name this question.
+      if (expression.includes('c.guard(c.nodes.get(')) {
+        return { result: { value: [this.guard ?? this.page.guards['7']] } } as T
       }
       // Where the action is aimed: still connected, still hit-testable.
       if (expression.includes('isConnected')) return { result: { value: { x: 5, y: 6 } } } as T
@@ -167,9 +168,9 @@ describe('a control on a page that keeps repainting', () => {
       })
       expect(connection.dispatched[3]).toEqual({ ...connection.dispatched[2], type: 'keyUp' })
       // The guard was asked about rather than the marker, which is what let the press through. The
-      // page-key call is the same discriminator the connection answers by: only this question asks
-      // for the page key and the target's guard together.
-      expect(connection.evaluated.some((expression) => expression.includes('c.pageKey'))).toBe(true)
+      // guard call on the page's node table is the same discriminator the connection answers by: only
+      // this question asks for the target's own guard and nothing about the page around it.
+      expect(connection.evaluated.some((expression) => expression.includes('c.guard(c.nodes.get('))).toBe(true)
       expect(connection.evaluated.some((expression) => expression.includes('semantics'))).toBe(false)
     } finally {
       await session.close()
@@ -196,7 +197,7 @@ describe('a control on a page that keeps repainting', () => {
       ])
       expect(connection.dispatched).toHaveLength(5)
       expect(connection.dispatched.at(-1)).toEqual({ text: '北大医疗产业园' })
-      expect(connection.evaluated.some((expression) => expression.includes('c.pageKey'))).toBe(true)
+      expect(connection.evaluated.some((expression) => expression.includes('c.guard(c.nodes.get('))).toBe(true)
       expect(connection.evaluated.some((expression) => expression.includes('semantics'))).toBe(false)
     } finally {
       await session.close()

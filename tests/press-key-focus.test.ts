@@ -70,11 +70,12 @@ class ScriptedConnection implements HeldSocket {
     if (method === 'Runtime.evaluate') {
       const expression = String(params?.expression ?? '')
       this.evaluated.push(expression)
-      // The target's own guard: the very pair the observation recorded, so it matches. Matched by
-      // the page-key call, which is what tells this expression from the target lookup below — that
-      // one asks the page for a guard as well, so `c.guard` alone no longer names this question.
-      if (expression.includes('c.pageKey')) {
-        return { result: { value: [this.page.page_key, this.page.guards['7']] } } as T
+      // The target's own guard, and only that: the very value the observation recorded, so it
+      // matches. Matched by the guard call on the page's own node table, which is what tells this
+      // expression from the target lookup below — that one asks the page for a guard as well, about
+      // whatever element sits at a point, so `c.guard` alone would not name this question.
+      if (expression.includes('c.guard(c.nodes.get(')) {
+        return { result: { value: [this.page.guards['7']] } } as T
       }
       // The whole-page marker, answered exactly as the observation recorded it: a fill is judged by
       // it rather than by the field's own guard. Asked before the target lookup below, whose source

@@ -274,18 +274,27 @@ export class BrowserSession implements BrowserPort {
 
   /**
    * Whether the observed page still matches the decision.
-   * Every action aimed at one element — click, select, press_key and fill — compares the target's
-   * own guard, which is cheap and scoped to the control: it asks whether the element the action was
-   * aimed at is still that element, in that state, instead of whether the whole page is unchanged.
-   * The distinction is the point for a key, and it is the same one for a field: the pages that keep
-   * repainting around the control — an autocomplete list redrawn while it is being typed into, a home
-   * page whose recommendation blocks rewrite themselves on every look — are exactly where a whole-page
-   * marker throws away a step that was still valid. On 携程 the marker moved on nearly every step, and
-   * a field is what those pages still hand the run: on 2026-10-02 a run spent seven TYPE_TEXT
-   * decisions on the same search box, paid for five of them, and sent no keystroke at all.
-   * A control that really was redrawn is still refused — its own guard is what changed — and the
-   * element the action names is looked up by identity, so a moved or replaced control fails here.
-   * `scroll` and `wait` are aimed at no element and compare the full semantic marker.
+   *
+   * Every action aimed at one element — click, select, press_key and fill — is judged by that
+   * element's own guard and by nothing else: whether the element the action was aimed at is still
+   * that element, in that state.
+   *
+   * Which of the page's two identities answers for a step is the whole question, and the round of
+   * 2026-10-01/02 on 携程 is what settled it: seven TYPE_TEXT decisions went to one search box, five
+   * answers were paid for and not one keystroke was sent. What refused them was this question being
+   * asked of the whole page as well — `pageKey()` carries the scroll position and every safe field's
+   * value, so another field changing, or the page scrolling itself under the step, threw away an
+   * action aimed at an element nothing had touched. Making the code say what this comment had always
+   * said is what fixed it (see `tests/guard-scope.test.ts`).
+   *
+   * A control that really was redrawn is still refused: the number `snapshot.ts` mints for an element
+   * is part of its guard, so a replaced or re-rendered node is a different element however alike it
+   * looks, and one whose own value, checked, selection, disabled or aria state moved fails on that
+   * state. An element the page's table no longer holds is answered `null` and is a refusal too, and a
+   * node the observation never recorded a guard for is refused rather than compared against nothing.
+   * `scroll` and `wait` are aimed at no element and compare the full semantic marker — which is what
+   * `pageKey` is still for — and the run asks that whole-page question of itself before each step
+   * (`loop.ts`'s `stillFresh`), so a page that really was replaced is caught there.
    */
   async fresh(page: PageState, action?: SnapshotAction): Promise<boolean> {
     if (
@@ -297,12 +306,12 @@ export class BrowserSession implements BrowserPort {
     ) {
       const node = action.node
       if (typeof node !== 'number') return false
+      const wanted = page.guards[String(node)]
+      if (wanted === undefined) return false
       const current = await this.evaluate<unknown[] | null>(
-        `(() => { const c=window.__jevFast; return c ? [c.pageKey(),c.guard(c.nodes.get(${node}))] : null; })()`,
+        `(() => { const c=window.__jevFast; return c ? [c.guard(c.nodes.get(${node}))] : null; })()`,
       )
-      return (
-        Array.isArray(current) && JSON.stringify(current) === JSON.stringify([page.page_key, page.guards[String(node)]])
-      )
+      return Array.isArray(current) && JSON.stringify(current) === JSON.stringify([wanted])
     }
     const marker = await this.evaluate(markerSource(this.#guessClickableElements), { commandLineApi: true })
     return JSON.stringify(marker) === JSON.stringify(page.marker)
