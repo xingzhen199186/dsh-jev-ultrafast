@@ -266,13 +266,16 @@ const MAX_REPEATED_STEPS = 6
  * How many retries that bought no step may happen in a row before the run stops and names the
  * target it could not get past.
  *
- * Three places re-observe the page and go round again without recording a step: a terminal answer
+ * Four places re-observe the page and go round again without recording a step: a terminal answer
  * (`DONE` / `BLOCKED`) that the page has moved out from under before it is believed, a field that
- * is stale the moment before it is typed into, and an action `act` refused to execute because the
- * page no longer matched it — a repaint, or a target that cannot be found or is covered. Each of
+ * is stale the moment before it is typed into, an action `act` refused to execute because the
+ * page no longer matched it — a repaint, or a target that cannot be found or is covered — and a
+ * step whose two answers are both under the confidence floor and name different operations. Each of
  * them pays for a fresh decision out of the same budget an ordinary step spends, and none of them
- * was bounded on its own before this count. They share one count rather than three separate limits,
- * which is what lets the sentence below name the one target that kept the run from moving.
+ * was bounded on its own before this count. They share one count rather than four separate limits,
+ * which is what lets the sentence below name the one target that kept the run from moving — three of
+ * the four stop on that sentence, and the swing between two weak answers stops on the sentence its
+ * own branch has always used.
  *
  * Six, and not two, is the number because the first step of the run this was written for was
  * refused four times before its input went through — an ordinary page repainting under a live run —
@@ -692,6 +695,27 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // used. Said about the first answer's confidence, because the second one may well be sure
           // — certain and different is exactly the disagreement this stops on.
           if (second.decision.operation !== first.decision.operation) {
+            // Unless both answers are under the floor. A swing between two weak answers is not the
+            // disagreement this stop is for: it is the service saying it has no answer to this step,
+            // twice — "click this" against "wait" at 0.28 and 0.20 is nobody standing behind either
+            // operation — so the two are discarded rather than judged, the page is observed again
+            // and the question is asked again. That is the same "ask once more" an unsure answer
+            // gets, and it is bought out of `MAX_STALE_RETRIES` with the looks that buy no step, so
+            // a service that really does swing between two weak answers costs a bounded number of
+            // questions and then ends the run on the sentence below, the one this branch has always
+            // used. (2026-10-02, the same 携程 task: a WAIT at 0.28 against a CLICK at 0.20 stopped
+            // one run at its ninth decision, and a CLICK at 0.29 against another operation stopped a
+            // second run the same way after it had already reached the hotel list it was aiming for.)
+            if (
+              first.decision.confidence < CONFIDENCE_FLOOR &&
+              second.decision.confidence < CONFIDENCE_FLOOR
+            ) {
+              staleRetries += 1
+              if (staleRetries <= MAX_STALE_RETRIES) {
+                page = await session.observe({ screenshot: screenshots })
+                continue
+              }
+            }
             status = 'blocked'
             reason = `决策服务两次给的操作不一样（第一次把握低于 ${CONFIDENCE_FLOOR}），先停下`
             break

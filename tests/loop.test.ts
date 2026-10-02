@@ -1794,27 +1794,79 @@ describe('run loop', () => {
     expect(result.reasks).toEqual([])
   })
 
-  it('says the same thing whether or not the second answer was sure', async () => {
+  it('stops on two different operations when the second answer is sure', async () => {
     // The sentence is about the first answer's confidence because the second one may well be
-    // certain — certain and different is the case it exists for. Two unsure answers get the same
-    // sentence rather than a second wording to keep in step. The two answers here are a click and a
-    // fill, so they disagree about the operation: that is what this sentence still stops.
-    for (const [second, confident] of [
-      [0.6, true],
-      [0.3, false],
-    ] as Array<[number, boolean]>) {
-      const h = harness({
-        pages: [pageState('f0')],
-        choices: ['e1', 'e2'],
-        confidences: [0.2, second],
-      })
-      const result = await run(h.deps)
+    // certain — certain and different is the case it exists for. The two answers here are a click and
+    // a fill, so they disagree about the operation, and the second one came back at 0.6: somebody
+    // does stand behind an operation other than the one the run was about to take, and that stops.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: ['e1', 'e2'],
+      confidences: [0.2, 0.6],
+    })
+    const result = await run(h.deps)
 
-      expect(result.status).toBe('blocked')
-      expect(result.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
-      expect(result.reasks[0]).toMatchObject({ agreed: false, second: { confidence: second } })
-      expect(confident ? second >= 0.5 : second < 0.5).toBe(true)
-    }
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
+    expect(result.steps).toBe(0)
+    expect(result.decisions).toBe(2)
+    expect(h.seen.executed).toHaveLength(0)
+    expect(result.reasks[0]).toMatchObject({ agreed: false, second: { confidence: 0.6 } })
+  })
+
+  it('asks again instead of stopping when both answers that disagree are under the floor', async () => {
+    // Two weak answers are not the disagreement the sentence above is for: nobody stood behind either
+    // operation, so both are discarded rather than judged, the page is looked at again and the
+    // question is asked again — the answer at 0.9 is the one that stands. (2026-10-02, one 携程 task:
+    // a WAIT at 0.28 against a CLICK at 0.20 stopped a run at its ninth decision, and a CLICK at 0.29
+    // against another operation stopped a second run the same way after it had already reached the
+    // hotel list it was aiming for.)
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1'), pageState('f2')],
+      choices: ['e1', 'e2', 'e1', 'DONE'],
+      confidences: [0.2, 0.3, 0.9, 0.9],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.reason).toBe('')
+    // The pair that swung, the answer that stood, and the terminal one.
+    expect(result.decisions).toBe(4)
+    expect(result.steps).toBe(1)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    // Looked at again rather than asked the same question against the same screen: the starting look,
+    // the one the retry bought, and the one the step landed on.
+    expect(h.seen.observations).toBe(3)
+    // What the run was shown is still written down, as for every re-ask.
+    expect(result.reasks).toEqual([
+      {
+        step: 1,
+        reason: 'low-confidence',
+        agreed: false,
+        first: { choice: 'e1', confidence: 0.2, probabilities: { e1: 0.2 } },
+        second: { choice: 'e2', confidence: 0.3, probabilities: { e2: 0.3 } },
+      },
+    ])
+  })
+
+  it('stops on the sentence it always used once the looks that buy no step are spent', async () => {
+    // The swing is worth asking about again, not for ever: every look it buys comes out of the one
+    // count `MAX_STALE_RETRIES` bounds — six retries allowed and the seventh is the stop, as for a
+    // refused execution — and the run that keeps swinging ends on the sentence this branch always
+    // ended on. Nothing is executed and no step is recorded.
+    const h = harness({
+      pages: [pageState('f0')],
+      choices: Array.from({ length: 2 * 7 }, (_unused, at) => (at % 2 === 0 ? 'e1' : 'e2')),
+      confidences: Array.from({ length: 2 * 7 }, (_unused, at) => (at % 2 === 0 ? 0.2 : 0.3)),
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe('决策服务两次给的操作不一样（第一次把握低于 0.5），先停下')
+    expect(result.steps).toBe(0)
+    expect(result.decisions).toBe(2 * 7)
+    expect(h.seen.executed).toHaveLength(0)
+    expect(result.reasks).toHaveLength(7)
   })
 
   it('runs the first answer when the two answers name one operation and a different element', async () => {
