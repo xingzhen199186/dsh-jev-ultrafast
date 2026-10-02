@@ -29,7 +29,7 @@
  *    default, and while it is off the run judges the dead ends, reports them, and takes nothing away.
  */
 import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
-import { actionSpace, trimActionSpace, withoutElements } from './decision/action-space'
+import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
 import { nextDeadEnds, type DeadEndRecord } from './dead-ends'
 import type { FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { fieldContext, fieldText } from './decision/text-helper'
@@ -363,7 +363,8 @@ function repeatedActionState(page: PageState): string {
     url: page.url,
     elements: page.actions
       .filter((action) => action.guess === undefined)
-      .map((action) => [action.id, action.role ?? '', action.label]),
+      .map((action) => [actionElementKey(action) || action.id, action.role ?? '', action.label])
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
   })
 }
 
@@ -436,7 +437,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // whether its state was a replay of an earlier one. Together these are what tells a page that
   // keeps producing something new apart from one that is going round in circles.
   const seenStates = new Set<string>()
-  const recentSteps: Array<{ replayed: boolean; target: string | null }> = []
+  const recentSteps: Array<{ replayed: boolean; target: string | null; targetKey: string | null }> = []
   // The elements this run has found to be dead ends: a step acted on one and the screen did not move
   // for it. Read once per request, by `nextDeadEnds`, and emptied by a screen that really changed.
   // The judgement is the plugin's own rather than a sentence to the model — see `./dead-ends.ts` for
@@ -445,6 +446,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // whether or not anything is taken away.
   let deadEnds = new Set<string>()
   const deadEndsJudged: DeadEndRecord[] = []
+  let lastElementKey: string | null = null
   // The action the run stopped on because it kept repeating it, when it stopped that way. It
   // rides along into the run's trace, so the file explains the stop without the conversation.
   let stuckOn: { operation: string; target: string | null; action: string; times: number } | null = null
@@ -539,17 +541,18 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // cannot drift. The judgement is made whether or not it is acted on: with the setting off, the set
       // is what the run reports instead of what it takes away.
       const lastStep = history[history.length - 1]
-      const judged = nextDeadEnds(deadEnds, lastStep, full.elements.length)
+      const judged = nextDeadEnds(deadEnds, lastStep ? { ...lastStep, element_key: lastElementKey } : lastStep, full.elements.length)
       for (const element of judged) {
         if (deadEnds.has(element)) continue
+        const currentIndex = elementIndicesForKeys(full, new Set([element])).values().next().value ?? element
         // Written down as it is judged, with the step it came from, because that is the only thing that
         // lets a reader check the judgement later — and with the setting off it is the only trace it
         // leaves at all.
         deadEndsJudged.push({
           step: lastStep?.step ?? 0,
-          element,
+          element: currentIndex,
           target: lastStep?.target ?? '',
-          label: full.elements.find((entry) => entry.index === element)?.label ?? '',
+          label: full.elements.find((entry) => entry.index === currentIndex)?.label ?? '',
         })
       }
       deadEnds = judged
@@ -563,7 +566,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // and `sentElements + omittedElements` is still the table's own element count — the table the
       // cut was handed, which is the page's own plus the cover's row where a cover added one. With the
       // removal off, nothing is taken away at all and the request is the page's own table.
-      const live = excludeDeadEnds ? withoutElements(full, deadEnds) : full
+      const live = excludeDeadEnds ? withoutElements(full, elementIndicesForKeys(full, deadEnds)) : full
       const recent = history.map((entry) => entry.target)
       // What the service is told about a page the snapshot could only partly see, plus the one-off
       // sentence the last answer earned. Built from the count because the table may still be cut
@@ -902,6 +905,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         executed_ms: elapsedMs(),
         elapsed_ms: elapsedMs(),
       })
+      lastElementKey = actionElementKey(action) || null
       const record = history[history.length - 1]!
       // The step is recorded, so the retry count starts over: what `MAX_STALE_RETRIES` bounds is
       // retries that bought no step, not retries in a run. The cover goes with it, for the same
@@ -1006,11 +1010,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       const seen = repeatedActionState(page)
       const replayed = seenStates.has(seen)
       seenStates.add(seen)
-      recentSteps.push({ replayed, target: record.target })
+      recentSteps.push({ replayed, target: record.target, targetKey: lastElementKey })
       if (recentSteps.length > MAX_REPEATED_STEPS) recentSteps.shift()
       if (
         recentSteps.length === MAX_REPEATED_STEPS &&
-        recentSteps.every((step) => step.replayed && step.target === recentSteps[0]!.target)
+        recentSteps.every((step) => step.replayed && step.targetKey === recentSteps[0]!.targetKey)
       ) {
         status = 'blocked'
         stuckOn = {

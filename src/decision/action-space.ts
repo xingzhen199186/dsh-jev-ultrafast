@@ -208,13 +208,32 @@ export function withoutElements(space: ActionSpace, excluded: ReadonlySet<string
   for (const [operation, group] of Object.entries(space.targets)) {
     const survivors: Record<string, SnapshotAction> = {}
     for (const [target, action] of Object.entries(group)) {
-      if (excluded.has(elementIndexOf(target))) cut = true
+      if (excluded.has(elementIndexOf(target)) || excluded.has(actionElementKey(action))) cut = true
       else survivors[target] = action
     }
     if (Object.keys(survivors).length > 0) targets[operation] = survivors
   }
   if (!cut) return space
   return { elements: space.elements, targets, controls: space.controls }
+}
+
+/** Resolve internal element identities back to the current request's display indices. */
+export function elementIndicesForKeys(space: ActionSpace, keys: ReadonlySet<string>): Set<string> {
+  const indices = new Set<string>()
+  for (const element of space.elements) {
+    if (keys.has(element.index)) indices.add(element.index)
+  }
+  for (const group of Object.values(space.targets)) {
+    for (const [target, action] of Object.entries(group)) {
+      if (keys.has(actionElementKey(action))) indices.add(elementIndexOf(target))
+    }
+  }
+  return indices
+}
+
+/** The browser's node identity survives a reorder of the same DOM nodes. */
+export function actionElementKey(action: SnapshotAction): string {
+  return typeof action.node === 'number' ? `node:${action.node}` : ''
 }
 
 /** The element a target key belongs to: `7`, `7:2` and `7:enter` are all element `7`. */

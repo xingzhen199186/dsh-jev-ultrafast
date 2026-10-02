@@ -50,6 +50,8 @@ export interface StepOutcome {
   target: string | null
   /** Whether that step changed the screen; `null` until its aftermath has been read back. */
   page_changed: boolean | null
+  /** Stable identity for the element when the browser supplied one. */
+  element_key?: string | null
 }
 
 /**
@@ -82,7 +84,7 @@ export function nextDeadEnds(
   // does a step whose aftermath was never read back: both leave the set as it stands.
   if (last.target === null || last.page_changed !== false) return new Set(dead)
 
-  const element = elementIndexOf(last.target)
+  const element = last.element_key ?? elementIndexOf(last.target)
   const next = new Set(dead)
   if (next.has(element)) return next
   // The floor: taking this one away has to leave at least `MIN_OPEN_ELEMENTS` behind.

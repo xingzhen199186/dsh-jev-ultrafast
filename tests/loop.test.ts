@@ -393,6 +393,36 @@ describe('run loop', () => {
     )
   })
 
+  it('uses the browser node identity when the same elements change display order', async () => {
+    const first = pageState('f0')
+    const second = pageState('f1')
+    second.actions = second.actions.map((action) => ({ ...action, label: action.label })).reverse()
+    const h = harness({ pages: [first, second, second], choices: ['e1', 'DONE'] })
+    const result = await run(h.deps)
+    expect(result.status).toBe('done')
+    expect(result.history[0]?.page_changed).toBe(false)
+  })
+
+  it('counts a repeated loop when the same node receives different display indices', async () => {
+    const first = pageState('f0')
+    const cycle = ['f1', 'f2', 'f3'].map((state, index) =>
+      pageState(state, {
+        actions: [
+          ...Array.from({ length: index + 1 }, (_unused, extra) => button(`x${state}${extra}`, 90 + extra, `Other ${state}`)),
+          ...actions,
+        ],
+      }),
+    )
+    const h = harness({
+      pages: [first, ...Array.from({ length: 4 }, () => cycle).flat()],
+      choices: Array.from({ length: 12 }, () => 'e1'),
+    })
+    const result = await run(h.deps)
+    expect(result.status).toBe('blocked')
+    expect(result.steps).toBe(9)
+    expect(result.reason).toContain('同一个动作连着做了 6 次')
+  })
+
   it('does not stop when a state the run has never shown turns up inside the window', async () => {
     const h = harness({
       // The wheel runs seven steps, then one state nothing has shown before, then the wheel again.

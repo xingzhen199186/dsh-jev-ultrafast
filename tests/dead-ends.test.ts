@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
 import { deadEndNote, nextDeadEnds } from '../src/dead-ends'
-import { actionSpace, withoutElements } from '../src/decision/action-space'
+import { actionSpace, elementIndicesForKeys, withoutElements } from '../src/decision/action-space'
 import type { DecisionContext } from '../src/decision/typesafe'
 import { buildQuestionnaire } from '../src/decision/typesafe'
 
@@ -18,6 +18,11 @@ describe('dead ends', () => {
   it('marks the element the last step acted on when the screen did not move', () => {
     const next = nextDeadEnds(new Set(), { target: '4', page_changed: false }, 12)
     expect([...next]).toEqual(['4'])
+  })
+
+  it('keeps the same element identity when its display index changes', () => {
+    const next = nextDeadEnds(new Set(), { target: '9', element_key: 'node:42', page_changed: false }, 12)
+    expect([...next]).toEqual(['node:42'])
   })
 
   it('marks a field that took text and showed nothing for it', () => {
@@ -144,6 +149,15 @@ const bodyOf = (excluded: ReadonlySet<string>): string =>
   JSON.stringify(buildQuestionnaire(withoutElements(actionSpace(observed), excluded), context, 'jev-latest').request)
 
 describe('the table a request is built from', () => {
+  it('maps a stable node identity to its current display index', () => {
+    const reordered = actionSpace([
+      { id: 'e9', kind: 'click', node: 9, role: 'button', label: 'Other' },
+      { id: 'e3', kind: 'click', node: 3, role: 'combobox', label: 'Arrive' },
+    ])
+    expect([...elementIndicesForKeys(reordered, new Set(['node:3']))]).toEqual(['2'])
+    expect(Object.keys(withoutElements(reordered, new Set(['node:3'])).targets.CLICK!)).toEqual(['1'])
+  })
+
   it('takes the element out of every operation and leaves the element list whole', () => {
     const live = withoutElements(actionSpace(observed), new Set(['3']))
 
