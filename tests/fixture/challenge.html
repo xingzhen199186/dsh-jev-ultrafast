@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Just a moment...</title>
+  </head>
+  <body>
+    <!--
+      A stand-in for Cloudflare's interstitial, for `tests/browser.integration.test.ts`: the three
+      things `src/browser/challenge.ts` names it by are the ones the real page carries — this title,
+      this wording, and this container id.
+
+      The frame below is the other half of the check: a document this page cannot read into. Measured
+      on Edge (2026-10-02, raw CDP, this fixture under `file://`): `iframe.contentDocument` answers
+      `null` rather than throwing — that is how Chromium refuses a read across origins — so the check
+      has to step over it and still name the page. The throwing shape (what Firefox does, and what the
+      sibling implementation catches) is forced in `tests/challenge.test.ts` against a stand-in
+      document, because no page on this machine produces one.
+    -->
+    <div id="challenge-running">
+      <p>Verifying you are human. This may take a few seconds.</p>
+    </div>
+    <iframe src="./newtab.html"></iframe>
+  </body>
+</html>

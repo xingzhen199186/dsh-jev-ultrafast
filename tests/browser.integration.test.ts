@@ -23,6 +23,7 @@ const enabled = process.env.JEV_BROWSER === '1'
 const fixtureUrl = pathToFileURL(fileURLToPath(new URL('./fixture/probe.html', import.meta.url))).href
 const longUrl = pathToFileURL(fileURLToPath(new URL('./fixture/long.html', import.meta.url))).href
 const lateUrl = pathToFileURL(fileURLToPath(new URL('./fixture/late.html', import.meta.url))).href
+const challengeUrl = pathToFileURL(fileURLToPath(new URL('./fixture/challenge.html', import.meta.url))).href
 /** Paragraphs in tests/fixture/long.html, each carrying its own 「第 N 段」 marker. */
 const PARAGRAPHS = 24
 
@@ -167,6 +168,34 @@ describe.skipIf(!enabled)('browser layer', () => {
     // The tab this test opened stays behind (only the tab the session created is
     // closed), which is also the intended product behaviour: the page the task ended
     // on is left open for whoever asked for it.
+  })
+
+  it('names a human-verification page, and is not troubled by a frame it may not read', async () => {
+    // The two halves of the page-side check only meet a real browser here: `innerText` and the
+    // selectors as Chromium answers them, and the frame the fixture carries, whose document this page
+    // is refused — as `null` on Edge, measured 2026-10-02, which is the shape Chromium uses for a read
+    // across origins. The check skips it and names the page anyway. `tests/challenge.test.ts` pins the
+    // same answers against a stand-in document, plus the two shapes no page here produces: a frame
+    // whose read throws, and one that really is readable.
+    await session.call('Page.navigate', { url: challengeUrl })
+    const page = await session.observe()
+
+    expect(page.challenge).toEqual({
+      kind: 'cloudflare',
+      reason: 'Cloudflare interstitial ("Just a moment")',
+    })
+    // The observation still read the page it was on: a challenge is never a reason for one to fail.
+    expect(page.title).toBe('Just a moment...')
+    expect(page.text).toContain('Verifying you are human')
+    // And a page that offers nothing to act on is the shape the loop stops on, rather than one more
+    // page to guess at (`challengeStopping` in `src/loop.ts`).
+    expect(page.actions.some((action) => action.kind === 'click')).toBe(false)
+
+    // Back on an ordinary fixture, the field is absent rather than present and empty.
+    await session.call('Page.navigate', { url: fixtureUrl })
+    const ordinary = await session.observe()
+    expect(ordinary.challenge).toBeUndefined()
+    expect(Object.keys(ordinary)).not.toContain('challenge')
   })
 })
 

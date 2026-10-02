@@ -41,6 +41,7 @@ import { applyFacts, blockedChecks, canFinish, type ControlPlan } from './contro
 import { newControlBudget, readChecklist, type ControlBudget, type ControlModel } from './control/control-model'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage, type SnapshotOptions } from './browser/session'
+import type { ChallengeKind, PageChallenge } from './browser/challenge'
 import { nestedNote } from './browser/nested'
 import type { ActResult, CoverRecord } from './browser/act'
 import { TargetCovered, act, coverAfter, withCoverActions, withCoverCandidates } from './browser/act'
@@ -462,6 +463,41 @@ export function verdictText(
 }
 
 /**
+ * What each marker is called in the sentence a reader is shown, and in the line the run leaves behind.
+ *
+ * `browser/challenge.ts` names what it saw in English, as the sibling implementation writes it; this
+ * is the same fact in the words this plugin's report is written in, so a reader who has never heard of
+ * a "Turnstile" is still told what is in front of them.
+ */
+const CHALLENGE_NAME: Record<ChallengeKind, string> = {
+  cloudflare: 'Cloudflare 的拦截页，「Just a moment」那一类',
+  hcaptcha: 'hCaptcha 的人机验证',
+  recaptcha: 'Google reCAPTCHA 的人机验证',
+  turnstile: 'Cloudflare Turnstile 的人机验证',
+  generic: '页面上写着人机验证、安全验证这类话',
+}
+
+/**
+ * Thrown by a look that found a page asking for a person.
+ *
+ * It is not a failure and is not reported as one: it is how the observation hands the loop a stop it
+ * already knows the shape of, and the catch that owns the run's ending turns it into the same
+ * `blocked` every other "cannot go on from here" ends with — with the page it was seen on riding
+ * along, so the report can show what the run stopped in front of rather than only what it stopped on.
+ */
+class ChallengeStop extends Error {
+  readonly challenge: PageChallenge
+  readonly page: PageState
+
+  constructor(challenge: PageChallenge, page: PageState) {
+    super(challenge.reason)
+    this.name = 'ChallengeStop'
+    this.challenge = challenge
+    this.page = page
+  }
+}
+
+/**
  * One screen, as the repeated-action rule below tells two of them apart: the address, plus the
  * element table reduced to where each element sits, the role it plays and the name it carries.
  *
@@ -716,17 +752,59 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
    * spends that count and then the error goes on exactly as it always did — a run that failed on
    * 「页面正在跳转」 fails on it still — while a page that comes up a moment later costs a few looks and
    * the run continues on the page it was going to.
+   *
+   * The challenge the page carries is read here, on the way back, so that it is read on *every* look
+   * this run makes: the first one, the one after a step, the one a refusal re-took. A look that finds
+   * one raises rather than returns, which is what keeps the stop from costing a decision, a dead end or
+   * a retry — see `challengeStopping`.
    */
   const observePage = async (screenshot: boolean): Promise<PageState> => {
     for (;;) {
       try {
-        return await session!.observe({ screenshot })
+        const looked = await session!.observe({ screenshot })
+        const stopping = challengeStopping(looked)
+        if (stopping) throw new ChallengeStop(stopping, looked)
+        return looked
       } catch (error) {
         if (!(error instanceof StalePage)) throw error
         staleRetries += 1
         if (staleRetries > MAX_STALE_RETRIES) throw error
       }
     }
+  }
+
+  /**
+   * The challenge that ends this run, when the page it was looking at carries one it cannot get past.
+   *
+   * Detecting a challenge and stopping on it are deliberately two questions. `browser/challenge.ts`
+   * answers the first broadly, because it reads markers — a Cloudflare interstitial says so in words,
+   * but reCAPTCHA and hCaptcha are only ever books of script and a frame address that any ordinary
+   * login page may carry. Answered "stop" on that alone, every such page would end a run that was
+   * working perfectly well.
+   *
+   * So the second question is whether the page in hand gave this run anything to do, and it is asked
+   * with one test: no action on it beyond the `wait`/`scroll` every table carries. That is the shape
+   * of a wall — an interstitial, or a captcha standing alone on the page: no form, no link out,
+   * nothing to click but the thing that is asking for a person. It stops the run the moment it lands,
+   * on the first look of a run as much as on the tenth of one.
+   *
+   * Everything else is a challenged page with something to do on it, and the run goes on with it.
+   * That is the honest reading of a marker heuristic: a login page with a reCAPTCHA badge and a form
+   * standing on it is a page this run has no business stopping on — the badge may be on the page
+   * whether or not the site ever asks anyone to solve anything — and if that page really is the end of
+   * the road, the brakes further down say so in their own words, a few steps later than they would
+   * have without this check and with the page named. What is deliberately not read here is the run's
+   * own "no progress": on a page that still offers controls to act on, the first look after a step
+   * cannot yet say whether the step moved anything (that verdict is written a few lines below, from
+   * this look), so a run would spend one more decision to learn what the brakes already track.
+   */
+  const challengeStopping = (looked: PageState): PageChallenge | null => {
+    const challenge = looked.challenge
+    if (challenge === undefined) return null
+    // `wait` and `scroll` are the table's own entries and stand on every page, so they are not what
+    // "the page gave this run something to do" can mean.
+    const actionable = looked.actions.some((action) => action.kind !== 'wait' && action.kind !== 'scroll')
+    return actionable ? null : challenge
   }
 
   /**
@@ -1476,8 +1554,36 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       }
     }
   } catch (error) {
-    status = 'failed'
-    reason = error instanceof Error ? error.message : String(error)
+    if (error instanceof ChallengeStop) {
+      // A page that wants a person is not a failure of the run and not a thing to retry: nothing this
+      // plugin sends can answer it, and every attempt spent on it is spent for nothing. It ends the
+      // way every other "cannot go on from here" ends — `blocked`, the status whose words already
+      // mean 没做成 — with the sentence saying what the page is and what the reader has to do about
+      // it. The check below then runs against the page the run stopped in front of, which is the page
+      // the reader is being sent to.
+      status = 'blocked'
+      reason =
+        `页面要人过一下验证（${CHALLENGE_NAME[error.challenge.kind]}）——` +
+        '这是从页面上的标记猜出来的，不是安全策略，插件也不会替你去过这个验证；' +
+        '请到浏览器窗口里自己过一下这个页面，再重跑'
+      page = error.page
+      artifacts?.trace.write(
+        recordable({
+          at: Date.now(),
+          kind: 'challenge',
+          // The marker by name, what the page-side check saw in its own words, and the address it saw
+          // it at. This page's address can carry a token, so the record goes through `recordable`
+          // exactly as the run record below does.
+          challenge: error.challenge.kind,
+          seen: error.challenge.reason,
+          url: error.page.url,
+          reason,
+        }) as Record<string, unknown>,
+      )
+    } else {
+      status = 'failed'
+      reason = error instanceof Error ? error.message : String(error)
+    }
   } finally {
     await session?.close()
   }

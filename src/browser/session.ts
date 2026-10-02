@@ -11,6 +11,7 @@
  * guard before a click or select, the full semantic marker otherwise).
  */
 import { createHash } from 'node:crypto'
+import { asChallenge, CHALLENGE_SOURCE, type PageChallenge } from './challenge'
 import type { DiscoverOptions } from './discover'
 import { acquireConnection, type HeldSocket } from './held'
 import type { NestedFacts } from './nested'
@@ -76,6 +77,17 @@ export interface PageState {
    * snapshot that did not count them (a test double, or a page built before this was added).
    */
   nested?: NestedFacts
+  /**
+   * A human-verification page, when the page looks like one (`./challenge.ts`). Absent on every page
+   * that does not, which is nearly all of them, and absent too when the check could not be run at all:
+   * this is a marker heuristic riding along with an observation, never a reason for one to fail.
+   *
+   * It is not part of `fingerprint` and not part of the guard of anything. A page that gained a
+   * challenge marker while its text and controls stayed as they were is the same page by the rules the
+   * run already uses — and the loop reads that "nothing changed" beside this field, which is one of
+   * the two things that let it stop on a challenge instead of walking into it (`../loop.ts`).
+   */
+  challenge?: PageChallenge
 }
 
 interface VersionResult {
@@ -504,6 +516,20 @@ export class BrowserSession implements BrowserPort {
     const state = await this.evaluate<PageState | null>(this.#snapshotSource(), { commandLineApi: true })
     if (state === null) throw new StalePage('页面正在跳转')
     state.fingerprint = fingerprint(state)
+    // Asked second, and deliberately as its own expression rather than folded into the snapshot: the
+    // snapshot is a copy of upstream's script, and the one block this project added to it is behind a
+    // switch whose "off" reading is meant to stay the reading every page had before (`./snapshot.ts`).
+    //
+    // Failing here is failing towards "no challenge": the run then walks into the page exactly as it
+    // did before this check existed, which is what an observation whose page-side check threw (or a
+    // page that navigated between the two reads) leaves behind. Nothing about a challenge may turn a
+    // readable page into an unreadable one.
+    try {
+      const said = asChallenge(await this.evaluate<unknown>(CHALLENGE_SOURCE))
+      if (said) state.challenge = said
+    } catch {
+      // No challenge to name, and nothing else to say about it.
+    }
     if (screenshot) {
       const shot = await this.call<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality: 72 })
       state.screenshot = shot.data

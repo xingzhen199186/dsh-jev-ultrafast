@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { AdoptResult, BrowserPort, PageState, SnapshotAction, SnapshotOptions } from '../src/browser/session'
 import { StalePage } from '../src/browser/session'
+import type { PageChallenge } from '../src/browser/challenge'
 import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import type { ControlModel } from '../src/control/control-model'
@@ -2240,6 +2241,138 @@ describe('run loop', () => {
     } finally {
       rmSync(result.recordDir, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * A page that asks for a person: a CAPTCHA, or a bot-detection interstitial.
+ *
+ * `browser/challenge.ts` marks the page (see `tests/challenge.test.ts`); these are what the run does
+ * about it. Two things are pinned here, and the second one is the reason the check is split in two:
+ * a wall is ended on the look that finds it, before the run spends a decision, a step or a dead end
+ * on a page nothing it sends can get past — while a page that merely *carries* a challenge marker and
+ * still has something to act on keeps the run going, because markers cannot tell a badge from a wall.
+ */
+describe('a page that asks for a person', () => {
+  const wall: PageChallenge = { kind: 'cloudflare', reason: 'Cloudflare interstitial ("Just a moment")' }
+  /** The two entries the table always carries, and nothing else: what a wall offers a run. */
+  const nothingToActOn = [{ id: 'wait', kind: 'wait' as const, label: 'Wait for the page to update' }]
+  const sentence =
+    '页面要人过一下验证（Cloudflare 的拦截页，「Just a moment」那一类）——' +
+    '这是从页面上的标记猜出来的，不是安全策略，插件也不会替你去过这个验证；' +
+    '请到浏览器窗口里自己过一下这个页面，再重跑'
+
+  it('stops on it as blocked, on the look that finds it, paying nothing for a step it never took', async () => {
+    const h = harness({
+      pages: [pageState('f0', { title: 'Just a moment...', text: 'Verifying you are human', actions: nothingToActOn, challenge: wall })],
+      // A decision the run would have been paid for had the wall not been read on the look itself.
+      choices: ['e1'],
+    })
+    const result = await run(h.deps, { record: true })
+    try {
+      expect(result.status).toBe('blocked')
+      expect(result.reason).toBe(sentence)
+      // What the reader is shown, through the same function the tool and the panel use.
+      expect(verdictText(result.status, result.reason)).toBe(`没做成（${sentence}）`)
+      // No decision, no step, no dead end, and nothing dispatched: the wall is recognised on the way
+      // back from the observation, which is before all of those are spent.
+      expect(h.seen.decisions).toBe(0)
+      expect(h.seen.executed).toEqual([])
+      expect(result.decisions).toBe(0)
+      expect(result.steps).toBe(0)
+      expect(result.deadEnds).toEqual([])
+      expect(result.history).toEqual([])
+      // The page it stopped in front of is the page it reports, rather than the one before it.
+      expect(result.page?.title).toBe('Just a moment...')
+      expect(h.seen.closed).toBe(true)
+
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+      // One line for the marker and what the page-side check saw, then the run's own last word.
+      expect(trace[trace.length - 2]).toEqual({
+        at: expect.any(Number),
+        kind: 'challenge',
+        challenge: 'cloudflare',
+        seen: 'Cloudflare interstitial ("Just a moment")',
+        url: 'https://example.test/',
+        reason: sentence,
+      })
+      expect(trace[trace.length - 1]).toMatchObject({ kind: 'run', status: 'blocked', reason: sentence, steps: 0, decisions: 0 })
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('stops the same way when the wall is what the run lands on after a step', async () => {
+    const h = harness({
+      pages: [
+        pageState('f0'),
+        pageState('f1', { url: 'https://example.test/verify', title: 'Just a moment...', actions: nothingToActOn, challenge: wall }),
+      ],
+      choices: ['e1', 'e2'],
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toBe(sentence)
+    // The one decision that acted, and the one step it bought — then the look that found the wall.
+    // Nothing after it was paid for: no second decision, no re-observation, no dead end.
+    expect(result.decisions).toBe(1)
+    expect(result.steps).toBe(1)
+    expect(h.seen.decisions).toBe(1)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    expect(result.deadEnds).toEqual([])
+    expect(result.page?.url).toBe('https://example.test/verify')
+  })
+
+  it('goes on when the page carries a challenge and still has something to act on', async () => {
+    // The login page with a reCAPTCHA badge: the markers fire (see `tests/challenge.test.ts`), and the
+    // run is not the least bit interested, because the page is full of things to do.
+    const h = harness({
+      pages: [
+        pageState('f0', {
+          title: '登录',
+          text: '用户名 密码 登录',
+          challenge: { kind: 'recaptcha', reason: 'Google reCAPTCHA widget on the page' },
+        }),
+        pageState('f1', { url: 'https://example.test/inbox' }),
+      ],
+      choices: ['e1', 'DONE'],
+    })
+    const result = await run(h.deps, { record: true })
+    try {
+      expect(result.status).toBe('done')
+      expect(result.reason).toBe('')
+      expect(result.steps).toBe(1)
+      expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+      // And nothing about it reached the trace: no line, because nothing stopped.
+      const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
+      expect(trace).not.toContain('"kind":"challenge"')
+    } finally {
+      rmSync(result.recordDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not read a page that went on carrying a challenge as a fresh reason to stop', async () => {
+    // The same challenged login page on every look: the run is allowed to work on it for as long as it
+    // keeps working, and it is the existing "no progress" brake that ends the run if it stops.
+    const h = harness({
+      pages: [
+        pageState('f0', { challenge: { kind: 'hcaptcha', reason: 'hCaptcha widget on the page' } }),
+        pageState('f0', { challenge: { kind: 'hcaptcha', reason: 'hCaptcha widget on the page' } }),
+        pageState('f0', { challenge: { kind: 'hcaptcha', reason: 'hCaptcha widget on the page' } }),
+        pageState('f0', { challenge: { kind: 'hcaptcha', reason: 'hCaptcha widget on the page' } }),
+      ],
+      choices: ['e1', 'e1', 'e1', 'e1'],
+    })
+    const result = await run(h.deps)
+
+    // Four steps that changed nothing is the brake's own ending, in the brake's own words.
+    expect(result.status).toBe('blocked')
+    expect(result.reason).toContain('当前页面没有任何变化')
+    expect(result.reason).not.toContain('要人过一下验证')
   })
 })
 
