@@ -2560,6 +2560,94 @@ describe('retries that buy no step', () => {
       rmSync(plain.recordDir, { recursive: true, force: true })
     })
 
+    it('writes one line when an address drops the landmark the run was pinned to', async () => {
+      // The sixth run of 2026-10-02 (run-1790924542952-x19r) reached `landmark=58397117` and then
+      // lost it, and nothing in its trace said so: the parameter is simply gone from the address and
+      // the page it is looking at reads like any other hotel list. The pin comes from the first
+      // address that carries one, the loss is what gets written — and the run itself is untouched:
+      // the same two questions, the same one executed step, the same finish.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const h = harness({
+        pages: [
+          pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117' }),
+          pageState('f1', { url: 'https://hotels.test/list?cityId=1&old=1' }),
+        ],
+        choices: ['e1', 'DONE'],
+      })
+      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+      expect(result.status).toBe('done')
+      expect(result.steps).toBe(1)
+      expect(result.decisions).toBe(2)
+      expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+      expect(traceOf(result.recordDir).filter((record) => 'landmark' in record)).toEqual([
+        {
+          at: expect.any(Number),
+          kind: 'control',
+          error: '地标从地址里掉了，钉住的是 58397117，现在这一步的地址是 https://hotels.test/list?cityId=1&old=1',
+          landmark: '58397117',
+          url: 'https://hotels.test/list?cityId=1&old=1',
+        },
+      ])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('writes no line for a run that never meets a landmark, and none either when the layer is off', async () => {
+      // Two ways of having nothing to report. A run whose addresses never carry `landmark=` is the
+      // ordinary case and has to stay ordinary: its control lines are the checklist's own and no
+      // more — which is also the setting this ships with, so a run that never asked for the layer
+      // cannot grow a line here at all.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const never = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+      const plain = await run(never.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+      expect(plain.status).toBe('done')
+      expect(traceOf(plain.recordDir).filter((record) => 'landmark' in record)).toEqual([])
+      rmSync(plain.recordDir, { recursive: true, force: true })
+
+      // The same pages with the layer off: the trace is the one every run left before any of this
+      // existed, landmark or not.
+      const off = harness({
+        pages: [
+          pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117' }),
+          pageState('f1', { url: 'https://hotels.test/list?cityId=1&old=1' }),
+        ],
+        choices: ['e1', 'DONE'],
+      })
+      const quiet = await run(off.deps, { record: true })
+
+      expect(quiet.status).toBe('done')
+      expect(traceOf(quiet.recordDir)).toEqual([expect.objectContaining({ kind: 'run', status: 'done' })])
+      rmSync(quiet.recordDir, { recursive: true, force: true })
+    })
+
+    it('writes it again only after an address has carried a landmark back', async () => {
+      // The edge rather than the step: this run loses the landmark, is brought back to it, and loses
+      // it a second time. Addresses without it in a row would still be one event; these are two, and
+      // each record says which address the run was on when it happened.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const h = harness({
+        pages: [
+          pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117' }),
+          pageState('f1', { url: 'https://hotels.test/list?cityId=1' }),
+          pageState('f2', { url: 'https://hotels.test/list?city=1&landmark=58397117&page=2' }),
+          pageState('f3', { url: 'https://hotels.test/list?cityId=1&old=1' }),
+        ],
+        choices: ['e1', 'e1', 'e1', 'DONE'],
+      })
+      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+      expect(result.status).toBe('done')
+      expect(result.steps).toBe(3)
+      expect(traceOf(result.recordDir).filter((record) => 'landmark' in record).map((record) => record.url)).toEqual([
+        'https://hotels.test/list?cityId=1',
+        'https://hotels.test/list?cityId=1&old=1',
+      ])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
     it('carries on, and says so, when the checklist cannot be read', async () => {
       // The two ways a read fails land on the same promise, and the one line they leave tells them
       // apart: a door that refused, and a model that answered something the parser would not take —

@@ -399,6 +399,18 @@ function repeatedActionState(page: PageState): string {
 }
 
 /**
+ * The landmark filter an address carries, or `null` when it carries none.
+ *
+ * A plain match rather than `new URL(...)`: what this reads is an address a page handed over, and a
+ * page that reports something the URL parser refuses must not be able to take a run down over a
+ * fact that is only ever written down. A `landmark=` with nothing behind it carries no landmark.
+ */
+function landmarkIn(url: string): string | null {
+  const found = /[?&]landmark=([^&#]+)/.exec(url)
+  return found ? found[1]! : null
+}
+
+/**
  * Run one task to a stop. It never throws for a run that merely failed: a browser
  * that will not start, a decision service that will not answer and a task that ran
  * out of budget all come back as a result with a reason.
@@ -452,6 +464,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // How many times this run has been refused its finish by that checklist. Bounded by
   // MAX_CONTROL_REFUSALS, and belonging to the run the same way the checklist does.
   let controlRefusals = 0
+  // The landmark this run was pinned to, and whether the address has dropped it since. The value is
+  // the first `landmark=` the run ever saw in an address, and until it sees one the whole matter is
+  // inert — which is most of a run: the sixth run of 2026-10-02 spent its first eight decisions on
+  // the home page it started from, and only met `landmark=58397117` on the hotel list it reached.
+  let landmark: string | null = null
+  let landmarkLost = false
   let reason = ''
   // A generated value, reused only when the whole field context is identical.
   let pendingText: { context: FieldContext; text: string; helper: TextResult } | null = null
@@ -691,6 +709,34 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // names its checks, which is what lets a quiet gate be read as "nothing was wrong"
           // rather than "nobody ever asked".
           artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单读成了，' + controlPlan.checks.length + ' 条', says: controlPlan.checks.map((check) => check.say) })
+        }
+      }
+
+      // ---- the landmark the run is pinned to ----
+      // A `landmark=` in the address is the filter a task like this one is about, and once an address
+      // has dropped it nothing on the page says it was ever there. The sixth run of 2026-10-02 reached
+      // its hotel list through one and lost it to the sort option the goal itself asked for: the
+      // address that came back was the whole city's list. Written on the edge rather than per step —
+      // the first address that drops it is one event, and an address that carries it again earns
+      // another — because a run that keeps re-reporting the same loss is a run nobody can read.
+      // Nothing here reads a candidate, spends a decision or touches `page`: it is the fact itself,
+      // for a reader, and only a run that asked for the control layer writes it at all.
+      if (options.control !== undefined) {
+        const seen = landmarkIn(page.url)
+        if (seen === null) {
+          if (landmark !== null && !landmarkLost) {
+            landmarkLost = true
+            artifacts?.trace.write({
+              at: Date.now(),
+              kind: 'control',
+              error: `地标从地址里掉了，钉住的是 ${landmark}，现在这一步的地址是 ${page.url}`,
+              landmark,
+              url: page.url,
+            })
+          }
+        } else {
+          landmark ??= seen
+          landmarkLost = false
         }
       }
 
