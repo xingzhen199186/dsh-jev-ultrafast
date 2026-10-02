@@ -36,6 +36,8 @@ import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
+import { blockedChecks, canFinish, type ControlPlan } from './control/checklist'
+import { newControlBudget, readChecklist, type ControlBudget, type ControlModel } from './control/control-model'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage, type SnapshotOptions } from './browser/session'
 import { nestedNote } from './browser/nested'
@@ -141,6 +143,15 @@ export interface TaskOptions {
   browser?: DiscoverOptions
   maxSteps?: number
   screenshots?: boolean
+  /**
+   * The control layer for this run: a model that writes down, before the first question, what
+   * has to keep being true, and how many times it may be asked. Left out — and no run asks
+   * anybody, which is what every run did before this existed.
+   */
+  control?: {
+    model: ControlModel
+    cap: number
+  }
   /**
    * Whether an element the run judged a dead end is taken out of the candidates. Off by default, and
    * the judgement is made and reported either way — see `./dead-ends.ts` for why the removal waits for
@@ -417,6 +428,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let session: BrowserPort | null = null
   let page: PageState | null = null
   let status: RunStatus = 'done'
+  // The control layer's own state for this run: the checklist once it has been read, the
+  // allowance it draws on, and whether it has been asked at all. Empty, nothing happens.
+  let controlPlan: ControlPlan | null = null
+  let controlBudget: ControlBudget | null = null
+  let controlStarted = false
   let reason = ''
   // A generated value, reused only when the whole field context is identical.
   let pendingText: { context: FieldContext; text: string; helper: TextResult } | null = null
@@ -624,6 +640,22 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           return { decision: null, unusable: error.message }
         }
       }
+      // ---- the checklist, asked once ----
+      // What this run has to keep being true is written down before the first question is put,
+      // by a model that is not the one choosing the steps. Without it the run has no memory of
+      // what it set out to do; with it, a claim of "done" can be refused further down. Reading
+      // it can fail for any reason at all — no route, no budget, an answer nobody can parse —
+      // and when it does the run simply carries on as though the layer were not there.
+      if (!controlStarted && options.control !== undefined) {
+        controlStarted = true
+        controlBudget = newControlBudget(options.control.cap)
+        controlPlan = await readChecklist(
+          options.control.model,
+          { goal: options.goal, url: page.url, title: page.title },
+          controlBudget,
+        )
+      }
+
       const first = await ask()
       hint = ''
 
@@ -765,6 +797,18 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             reason = stopped
             break
           }
+          page = await session.observe({ screenshot: screenshots })
+          continue
+        }
+        // The checklist gets the last word on "done". A run that announces it is finished while
+        // something it was told has to keep holding no longer holds is not finished — but it is
+        // not stopped either: it is asked again, with the conditions named, exactly the way an
+        // answer the page has moved under is. Bought out of the run's own decision budget, so a
+        // checklist nobody can satisfy costs questions, not a new stop.
+        if (chosen === 'DONE' && controlPlan !== null && !canFinish(controlPlan)) {
+          hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
+            .map((check) => check.say)
+            .join('；')}。先把它们弄成立，再说完成`
           page = await session.observe({ screenshot: screenshots })
           continue
         }
