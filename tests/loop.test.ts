@@ -5,6 +5,7 @@ import type { AdoptResult, BrowserPort, PageState, SnapshotAction, SnapshotOptio
 import { StalePage } from '../src/browser/session'
 import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
+import type { ControlModel } from '../src/control/control-model'
 import { actionSpace, type ActionSpace } from '../src/decision/action-space'
 import type { FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
@@ -227,6 +228,8 @@ function run(
     dismissCoveredTarget?: boolean
     /** Whether a step that opened new windows is told what it was aiming at. On, as the page ships it. */
     preferRelevantTab?: boolean
+    /** The control layer's own model and allowance; left out, which is what every run did before. */
+    control?: { model: ControlModel; cap: number }
   } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
@@ -2475,5 +2478,114 @@ describe('retries that buy no step', () => {
     expect(still.status).toBe('blocked')
     expect(still.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
     expect(still.steps).toBe(3)
+  })
+
+  describe('the checklist the control model writes', () => {
+    /**
+     * A scripted control model: it answers with exactly what the test says, it keeps every question
+     * it was asked, and it never touches the network — which is what lets these four tests run in
+     * milliseconds and still say how often the layer was reached at all.
+     */
+    function controlModel(reply: string | Error): { model: ControlModel; asked: string[] } {
+      const asked: string[] = []
+      return {
+        asked,
+        model: {
+          async call({ user }) {
+            asked.push(user)
+            if (reply instanceof Error) throw reply
+            return reply
+          },
+        },
+      }
+    }
+
+    /** One plan with a single locally decidable flag: the kind the prompt asks for first. */
+    const planFor = (say: string, value: string): string =>
+      JSON.stringify({ goal: 'g', checks: [{ id: 'u', say, kind: 'url-contains', value }] })
+
+    const traceOf = (dir: string): Array<Record<string, unknown>> =>
+      readFileSync(join(dir, 'trace.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+
+    it('asks nobody, and writes nothing, when the run is handed no control model', async () => {
+      // Off is the absence of the model on the run: nothing is built, nothing is called, and the
+      // trace is the trace every run left before any of this existed — its last word and no more.
+      // (Which switch fills that option in is the settings' business; here it is deliberately
+      // never handed over, and the model built for it stays untouched.)
+      const never = controlModel('{"checks":[]}')
+      const off = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+      const plain = await run(off.deps, { record: true })
+
+      expect(plain.status).toBe('done')
+      expect(never.asked).toEqual([])
+      expect(traceOf(plain.recordDir)).toEqual([expect.objectContaining({ kind: 'run', status: 'done' })])
+
+      // The other half of the same switch, one option away: handed the model, the run asks it once.
+      const on = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+      await run(on.deps, { control: { model: never.model, cap: 12 } })
+      expect(never.asked).toHaveLength(1)
+
+      rmSync(plain.recordDir, { recursive: true, force: true })
+    })
+
+    it('carries on, and says so, when the checklist cannot be read', async () => {
+      // The two ways a read fails land on the same promise: a door that refuses, and an answer
+      // nobody can read as a plan. Neither is the run's problem, and neither is silent either —
+      // the trace is where a finished run can be seen to have had no flags to answer to.
+      for (const reply of [new Error('route is down'), 'not a plan at all']) {
+        const control = controlModel(reply)
+        const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+        const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+        expect(result.status).toBe('done')
+        expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+        // Asked once and never again: a checklist nobody could read is not retried on every step.
+        expect(control.asked).toHaveLength(1)
+        expect(traceOf(result.recordDir).filter((record) => record.kind === 'control')).toEqual([
+          { at: expect.any(Number), kind: 'control', error: '清单没读成' },
+        ])
+
+        rmSync(result.recordDir, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses a done the checklist does not support, without stopping the run', async () => {
+      // Every page this run sees is the one the flag says it should not be on, so the finish is
+      // refused every time it is claimed. Nothing new stops it: the only thing that ends this run
+      // is the decision budget it already had, which is what the numbers below are.
+      const control = controlModel(planFor('地址里一直带着结果页', '/results'))
+      const h = harness({ pages: [pageState('f0'), pageState('f0'), pageState('f0')], choices: ['DONE'] })
+      const result = await run(h.deps, { control: { model: control.model, cap: 12 }, maxSteps: 3 })
+
+      expect(result.status).toBe('blocked')
+      expect(result.reason).toContain('模型调用上限')
+      expect(result.steps).toBe(0)
+      // Asked once, refused, asked again, refused... and stopped by the budget, not by the refusal.
+      expect(h.seen.decisions).toBe(6)
+      // The first question carries no sentence; the one after a refusal names the flag that failed,
+      // in the words the control model wrote for it.
+      expect(h.seen.contexts[0]!.note).toBeUndefined()
+      expect(h.seen.contexts[1]!.note).toContain('地址里一直带着结果页')
+    })
+
+    it('lets a done through once every flag holds on the page in front of it', async () => {
+      // The flag is read on the page the run starts from, where it does not hold, and it is the
+      // page the step landed on that satisfies it. So this run ends well only because the flags
+      // are decided against the screen the run is actually on when it says it is finished.
+      const control = controlModel(planFor('地址里一直带着结果页', '/results'))
+      const h = harness({
+        pages: [pageState('f0'), pageState('f1', { url: 'https://example.test/results' })],
+        choices: ['e1', 'DONE'],
+      })
+      const result = await run(h.deps, { control: { model: control.model, cap: 12 } })
+
+      expect(result.status).toBe('done')
+      expect(result.reason).toBe('')
+      expect(result.steps).toBe(1)
+      expect(h.seen.decisions).toBe(2)
+    })
   })
 })

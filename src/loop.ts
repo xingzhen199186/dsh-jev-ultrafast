@@ -645,7 +645,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // by a model that is not the one choosing the steps. Without it the run has no memory of
       // what it set out to do; with it, a claim of "done" can be refused further down. Reading
       // it can fail for any reason at all — no route, no budget, an answer nobody can parse —
-      // and when it does the run simply carries on as though the layer were not there.
+      // and when it does the run simply carries on as though the layer were not there, with one
+      // line in the trace saying it did.
       if (!controlStarted && options.control !== undefined) {
         controlStarted = true
         controlBudget = newControlBudget(options.control.cap)
@@ -654,6 +655,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           { goal: options.goal, url: page.url, title: page.title },
           controlBudget,
         )
+        // A run that finished with no checklist is not the same as a run that was never asked for
+        // one, and the trace is the only place the difference survives: the reader who wonders why
+        // a "done" was never questioned finds the reason here rather than inferring it.
+        if (controlPlan === null) artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单没读成' })
       }
 
       const first = await ask()
