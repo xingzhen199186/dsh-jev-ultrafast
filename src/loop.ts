@@ -30,12 +30,13 @@
  */
 import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
 import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
-import { nextDeadEnds, type DeadEndRecord } from './dead-ends'
+import { nextDeadEnds, MIN_OPEN_ELEMENTS, type DeadEndRecord } from './dead-ends'
 import type { AnswerContext, FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
 import { answerText, fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
+import { inRange, narrowToRange, rangeOf, shapeName, type Narrowed, type RangeShape } from './range'
 import { applyFacts, blockedChecks, canFinish, type ControlPlan } from './control/checklist'
 import { newControlBudget, readChecklist, type ControlBudget, type ControlModel } from './control/control-model'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
@@ -441,18 +442,6 @@ function fieldKey(page: PageState, action: SnapshotAction): string {
 }
 
 /**
- * The landmark filter an address carries, or `null` when it carries none.
- *
- * A plain match rather than `new URL(...)`: what this reads is an address a page handed over, and a
- * page that reports something the URL parser refuses must not be able to take a run down over a
- * fact that is only ever written down. A `landmark=` with nothing behind it carries no landmark.
- */
-function landmarkIn(url: string): string | null {
-  const found = /[?&]landmark=([^&#]+)/.exec(url)
-  return found ? found[1]! : null
-}
-
-/**
  * Run one task to a stop. It never throws for a run that merely failed: a browser
  * that will not start, a decision service that will not answer and a task that ran
  * out of budget all come back as a result with a reason.
@@ -506,12 +495,18 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // How many times this run has been refused its finish by that checklist. Bounded by
   // MAX_CONTROL_REFUSALS, and belonging to the run the same way the checklist does.
   let controlRefusals = 0
-  // The landmark this run was pinned to, and whether the address has dropped it since. The value is
-  // the first `landmark=` the run ever saw in an address, and until it sees one the whole matter is
-  // inert — which is most of a run: the sixth run of 2026-10-02 spent its first eight decisions on
-  // the home page it started from, and only met `landmark=58397117` on the hotel list it reached.
-  let landmark: string | null = null
-  let landmarkLost = false
+  // The range this run was pinned to, and whether an address has dropped it since. The shape is the
+  // first range-shaped address the run ever saw, and until it sees one the whole matter is inert —
+  // which is most of a run: the sixth run of 2026-10-02 spent its first eight decisions on the home
+  // page it started from, and only met `?city=1&landmark=58397117` on the hotel list it reached.
+  // `rangeLost` is the edge, not the step: it is set by the address that dropped the range and
+  // cleared by the first address that carries it again (see `./range.ts`).
+  let range: RangeShape | null = null
+  let rangeLost = false
+  // Whether the line about the floor has been written for this loss. It belongs to the episode for
+  // the same reason the loss itself does: a run that stops matching its range for ten steps is one
+  // event, and ten identical sentences about the candidates of ten requests is a trace nobody reads.
+  let rangeRescuedNoted = false
   let reason = ''
   // What the run's own model said the page came back with, asked once, at the end, and used for
   // nothing but the report and the record. The bare empty string is every failure and every
@@ -651,6 +646,39 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // step continues with the fresh page. Retrying the freshness check instead
       // would spin forever on a page that never settles.
       if (!(await session.fresh(page))) page = await session.observe({ screenshot: screenshots })
+
+      // ---- the range the run is pinned to ----
+      // An address with parameters at a real path is the range a task like this one is about — "the
+      // hotels in this city, filtered like this" — and once an address has dropped it nothing on the
+      // page says it was ever there. The sixth run of 2026-10-02 reached its hotel list through
+      // `?city=1&landmark=58397117` and lost it to the sort option the goal itself asked for: the
+      // address that came back was the whole city's list. Written on the edge rather than per step —
+      // the first address that drops it is one event, and an address that carries it again earns
+      // another — because a run that keeps re-reporting the same loss is a run nobody can read.
+      // Read here, before the request is built from this same page, because what it says decides
+      // whether this request's candidates are narrowed (see `./range.ts`). It is the page's own
+      // address, so it costs nothing: no decision, no candidate, and only a run that asked for the
+      // control layer reads it at all.
+      if (options.control !== undefined) {
+        if (range === null) {
+          range = rangeOf(page.url)
+          rangeLost = false
+        } else if (!inRange(range, page.url)) {
+          if (!rangeLost) {
+            rangeLost = true
+            artifacts?.trace.write({
+              at: Date.now(),
+              kind: 'control',
+              error: `范围从地址里掉了，钉住的是 ${shapeName(range)}，现在这一步的地址是 ${page.url}`,
+              range: shapeName(range),
+              url: page.url,
+            })
+          }
+        } else {
+          rangeLost = false
+          rangeRescuedNoted = false
+        }
+      }
       // The page's own table can be far larger than one decision can carry — the GitHub run of the
       // 2026-10 audit grew it from 14 elements to 97 inside one run — so what is sent is a
       // selection. The selection is said out loud rather than passed off as the whole page.
@@ -696,8 +724,35 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // and `sentElements + omittedElements` is still the table's own element count — the table the
       // cut was handed, which is the page's own plus the cover's row where a cover added one. With the
       // removal off, nothing is taken away at all and the request is the page's own table.
-      const live = excludeDeadEnds ? withoutElements(full, elementIndicesForKeys(full, deadEnds)) : full
+      const offered = excludeDeadEnds ? withoutElements(full, elementIndicesForKeys(full, deadEnds)) : full
       const recent = history.map((entry) => entry.target)
+      // ---- and the one thing that is done about a range that has been lost ----
+      // The candidates are cut to the controls that could put it back, and only on the step after the
+      // address dropped it: by then the step the goal itself asked for has already been taken — the
+      // sort click that threw the filter away was executed from a table that still had everything in
+      // it — so this cannot take away the candidate a task depended on. It is written down when the
+      // cut came up so short that the floor had to put the most relevant elements back, which is the
+      // one fact about the narrowing itself that a reader cannot work out from the loss alone. The
+      // cut is measured on the table the request is built from, but it is the page's own table that
+      // decides what is worth keeping, so `narrowToRange` is handed both.
+      let narrow: Narrowed | null = null
+      if (options.control !== undefined && rangeLost && range !== null) {
+        narrow = narrowToRange(offered, full, options.goal, recent)
+        if (narrow.rescued && !rangeRescuedNoted) {
+          rangeRescuedNoted = true
+          artifacts?.trace.write({
+            at: Date.now(),
+            kind: 'control',
+            error:
+              `范围没回来，候选已收窄到可能把它带回来的控件；筛完只剩 ${narrow.picked} 个，` +
+              `不足 ${MIN_OPEN_ELEMENTS} 个，已按相关性保底放回，现共 ${narrow.offered} 个`,
+            range: shapeName(range),
+            narrowed: narrow.offered,
+            url: page.url,
+          })
+        }
+      }
+      const live = narrow === null ? offered : narrow.space
       // What the service is told about a page the snapshot could only partly see, plus the one-off
       // sentence the last answer earned. Built from the count because the table may still be cut
       // again below; nothing at all on an ordinary step.
@@ -783,34 +838,6 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // names its checks, which is what lets a quiet gate be read as "nothing was wrong"
           // rather than "nobody ever asked".
           artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单读成了，' + controlPlan.checks.length + ' 条', says: controlPlan.checks.map((check) => check.say) })
-        }
-      }
-
-      // ---- the landmark the run is pinned to ----
-      // A `landmark=` in the address is the filter a task like this one is about, and once an address
-      // has dropped it nothing on the page says it was ever there. The sixth run of 2026-10-02 reached
-      // its hotel list through one and lost it to the sort option the goal itself asked for: the
-      // address that came back was the whole city's list. Written on the edge rather than per step —
-      // the first address that drops it is one event, and an address that carries it again earns
-      // another — because a run that keeps re-reporting the same loss is a run nobody can read.
-      // Nothing here reads a candidate, spends a decision or touches `page`: it is the fact itself,
-      // for a reader, and only a run that asked for the control layer writes it at all.
-      if (options.control !== undefined) {
-        const seen = landmarkIn(page.url)
-        if (seen === null) {
-          if (landmark !== null && !landmarkLost) {
-            landmarkLost = true
-            artifacts?.trace.write({
-              at: Date.now(),
-              kind: 'control',
-              error: `地标从地址里掉了，钉住的是 ${landmark}，现在这一步的地址是 ${page.url}`,
-              landmark,
-              url: page.url,
-            })
-          }
-        } else {
-          landmark ??= seen
-          landmarkLost = false
         }
       }
 

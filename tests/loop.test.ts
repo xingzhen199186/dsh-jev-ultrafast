@@ -6,7 +6,7 @@ import { StalePage } from '../src/browser/session'
 import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import type { ControlModel } from '../src/control/control-model'
-import { actionSpace, type ActionSpace } from '../src/decision/action-space'
+import { actionSpace, elementIndexOf, type ActionSpace } from '../src/decision/action-space'
 import type { AnswerContext, FieldContext, TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
@@ -2784,6 +2784,27 @@ describe('retries that buy no step', () => {
         .split('\n')
         .map((line) => JSON.parse(line) as Record<string, unknown>)
 
+    /** The control layer's own lines about the run's range: the loss, and the floor's sentence. */
+    const rangeLines = (dir: string): Array<Record<string, unknown>> =>
+      traceOf(dir).filter((record) => typeof record.error === 'string' && record.error.startsWith('范围'))
+    /** Only the lines about a range being dropped, told apart from the floor's own sentence. */
+    const lossLines = (dir: string): Array<Record<string, unknown>> =>
+      rangeLines(dir).filter((record) => String(record.error).startsWith('范围从地址里掉了'))
+
+    /**
+     * What one request offered, as the labels of the elements a candidate is keyed to: the list a
+     * reader can actually read, in the page's own order.
+     */
+    const offeredLabels = (space: ActionSpace): string[] => {
+      const offered = new Set<string>()
+      for (const group of Object.values(space.targets)) {
+        for (const target of Object.keys(group)) offered.add(elementIndexOf(target))
+      }
+      return [...offered]
+        .sort((a, b) => Number(a) - Number(b))
+        .map((index) => space.elements.find((element) => element.index === index)?.label ?? `[${index}]`)
+    }
+
     it('asks nobody, and writes nothing, when the run is handed no control model', async () => {
       // Off is the absence of the model on the run: nothing is built, nothing is called, and the
       // trace is the trace every run left before any of this existed — its last word and no more.
@@ -2805,12 +2826,12 @@ describe('retries that buy no step', () => {
       rmSync(plain.recordDir, { recursive: true, force: true })
     })
 
-    it('writes one line when an address drops the landmark the run was pinned to', async () => {
-      // The sixth run of 2026-10-02 (run-1790924542952-x19r) reached `landmark=58397117` and then
-      // lost it, and nothing in its trace said so: the parameter is simply gone from the address and
-      // the page it is looking at reads like any other hotel list. The pin comes from the first
-      // address that carries one, the loss is what gets written — and the run itself is untouched:
-      // the same two questions, the same one executed step, the same finish.
+    it('writes one line when an address drops the range the run was pinned to', async () => {
+      // The sixth run of 2026-10-02 (run-1790924542952-x19r) reached `?city=1&landmark=58397117` and
+      // then lost it, and nothing in its trace said so: the parameters are simply gone from the
+      // address and the page it is looking at reads like any other hotel list. The shape comes from
+      // the first range-shaped address the run meets, the loss is what gets written — and the run
+      // itself is untouched: the same two questions, the same one executed step, the same finish.
       const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
       const h = harness({
         pages: [
@@ -2825,12 +2846,14 @@ describe('retries that buy no step', () => {
       expect(result.steps).toBe(1)
       expect(result.decisions).toBe(2)
       expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
-      expect(traceOf(result.recordDir).filter((record) => 'landmark' in record)).toEqual([
+      expect(lossLines(result.recordDir)).toEqual([
         {
           at: expect.any(Number),
           kind: 'control',
-          error: '地标从地址里掉了，钉住的是 58397117，现在这一步的地址是 https://hotels.test/list?cityId=1&old=1',
-          landmark: '58397117',
+          error:
+            '范围从地址里掉了，钉住的是 hotels.test/list（city、landmark），' +
+            '现在这一步的地址是 https://hotels.test/list?cityId=1&old=1',
+          range: 'hotels.test/list（city、landmark）',
           url: 'https://hotels.test/list?cityId=1&old=1',
         },
       ])
@@ -2838,8 +2861,8 @@ describe('retries that buy no step', () => {
       rmSync(result.recordDir, { recursive: true, force: true })
     })
 
-    it('writes no line for a run that never meets a landmark, and none either when the layer is off', async () => {
-      // Two ways of having nothing to report. A run whose addresses never carry `landmark=` is the
+    it('writes no line for a run that never meets a range, and none either when the layer is off', async () => {
+      // Two ways of having nothing to report. A run whose addresses never carry a range is the
       // ordinary case and has to stay ordinary: its control lines are the checklist's own and no
       // more — which is also the setting this ships with, so a run that never asked for the layer
       // cannot grow a line here at all.
@@ -2848,11 +2871,11 @@ describe('retries that buy no step', () => {
       const plain = await run(never.deps, { record: true, control: { model: control.model, cap: 12 } })
 
       expect(plain.status).toBe('done')
-      expect(traceOf(plain.recordDir).filter((record) => 'landmark' in record)).toEqual([])
+      expect(rangeLines(plain.recordDir)).toEqual([])
       rmSync(plain.recordDir, { recursive: true, force: true })
 
       // The same pages with the layer off: the trace is the one every run left before any of this
-      // existed, landmark or not.
+      // existed, range or not.
       const off = harness({
         pages: [
           pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117' }),
@@ -2867,10 +2890,12 @@ describe('retries that buy no step', () => {
       rmSync(quiet.recordDir, { recursive: true, force: true })
     })
 
-    it('writes it again only after an address has carried a landmark back', async () => {
-      // The edge rather than the step: this run loses the landmark, is brought back to it, and loses
-      // it a second time. Addresses without it in a row would still be one event; these are two, and
-      // each record says which address the run was on when it happened.
+    it('writes it again only after an address has carried the range back', async () => {
+      // The edge rather than the step: this run loses the range, is brought back to it, and loses it
+      // a second time. Addresses without it in a row would still be one event; these are two, and
+      // each record says which address the run was on when it happened. The address that brings it
+      // back carries a parameter the pinned one did not (`page=2`) and is still the same range: what
+      // is pinned is the set of names, not the string.
       const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
       const h = harness({
         pages: [
@@ -2885,9 +2910,176 @@ describe('retries that buy no step', () => {
 
       expect(result.status).toBe('done')
       expect(result.steps).toBe(3)
-      expect(traceOf(result.recordDir).filter((record) => 'landmark' in record).map((record) => record.url)).toEqual([
+      expect(lossLines(result.recordDir).map((record) => record.url)).toEqual([
         'https://hotels.test/list?cityId=1',
         'https://hotels.test/list?cityId=1&old=1',
+      ])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('offers only the ways back once the range has been dropped, and says the range was lost', async () => {
+      // Six controls on a hotel list, five of which could put the range back: the field, the button
+      // beside it, the search button, the way back and the filter reset. The request after the loss
+      // offers those five and nothing else — the sort option that cost the range is not among them.
+      // What it does *not* do is run on a different table before that: the first request is the
+      // page's own, which is what makes this safe to do at all.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const list = [
+        button('e1', 1, '排序：价格从低到高'),
+        button('e2', 2, '加入收藏'),
+        field('e3', 3, '目的地'),
+        button('e4', 4, '搜索'),
+        button('e5', 5, '返回'),
+        button('e6', 6, '重置筛选'),
+      ]
+      const pages = (): PageState[] => [
+        pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117', actions: list }),
+        pageState('f1', { url: 'https://hotels.test/list?city=1', actions: list }),
+        pageState('f2', { url: 'https://hotels.test/list?city=1', actions: list }),
+      ]
+      const h = harness({ pages: pages(), choices: ['e5', 'e5', 'DONE'], targets: { e5: '5' } })
+      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+      expect(result.status).toBe('done')
+      expect(offeredLabels(h.seen.spaces[0]!)).toEqual([
+        '排序：价格从低到高',
+        '加入收藏',
+        '目的地',
+        '搜索',
+        '返回',
+        '重置筛选',
+      ])
+      expect(offeredLabels(h.seen.spaces[1]!)).toEqual(['加入收藏', '目的地', '搜索', '返回', '重置筛选'])
+      // The entries are all still sent — the model reads the screen from them — and only the choices
+      // were cut, which is the same division the dead-end rule makes (see `withoutElements`).
+      expect(h.seen.spaces[1]!.elements.map((element) => element.label)).toEqual([
+        '排序：价格从低到高',
+        '加入收藏',
+        '目的地',
+        '搜索',
+        '返回',
+        '重置筛选',
+      ])
+      // Five ways back is exactly the floor, so nothing had to be put back: one line, about the loss.
+      expect(lossLines(result.recordDir)).toHaveLength(1)
+      expect(rangeLines(result.recordDir)).toHaveLength(1)
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('offers everything again the moment an address carries the range back', async () => {
+      // The run's own table before this feature and with it, on the same pages: the one yardstick
+      // that means anything here is a run the control layer was never handed. The range comes back
+      // on the last page, and the candidates are the page's own again, element for element.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const list = [
+        button('e1', 1, '排序：价格从低到高'),
+        button('e2', 2, '加入收藏'),
+        field('e3', 3, '目的地'),
+        button('e4', 4, '搜索'),
+        button('e5', 5, '返回'),
+        button('e6', 6, '重置筛选'),
+      ]
+      const pages = (): PageState[] => [
+        pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117', actions: list }),
+        pageState('f1', { url: 'https://hotels.test/list?city=1', actions: list }),
+        pageState('f2', { url: 'https://hotels.test/list?city=1&landmark=58397117&page=2', actions: list }),
+      ]
+      const on = harness({ pages: pages(), choices: ['e5', 'e5', 'DONE'], targets: { e5: '5' } })
+      const off = harness({ pages: pages(), choices: ['e5', 'e5', 'DONE'], targets: { e5: '5' } })
+      const result = await run(on.deps, { record: true, control: { model: control.model, cap: 12 } })
+      await run(off.deps)
+
+      expect(offeredLabels(on.seen.spaces[2]!)).toEqual(offeredLabels(off.seen.spaces[2]!))
+      expect(offeredLabels(on.seen.spaces[2]!)).toEqual([
+        '排序：价格从低到高',
+        '加入收藏',
+        '目的地',
+        '搜索',
+        '返回',
+        '重置筛选',
+      ])
+      // Lost once and brought back once: one line, and nothing about a floor.
+      expect(lossLines(result.recordDir)).toHaveLength(1)
+      expect(rangeLines(result.recordDir)).toHaveLength(1)
+      // The step before it really was narrowed, so the test above is about the recovery rather than
+      // about a rule that never fired.
+      expect(offeredLabels(on.seen.spaces[1]!)).toEqual(['加入收藏', '目的地', '搜索', '返回', '重置筛选'])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('leaves the candidates alone when no range was ever pinned', async () => {
+      // A run that starts at a front door and never meets a range: the parameters are never there,
+      // so nothing is pinned and nothing is narrowed. The paths differ between the two pages, which
+      // is not a range either way — a range is the parameters.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const pages = (): PageState[] => [
+        pageState('f0', { url: 'https://hotels.test/' }),
+        pageState('f1', { url: 'https://hotels.test/hotels' }),
+      ]
+      const on = harness({ pages: pages(), choices: ['e1', 'DONE'] })
+      const off = harness({ pages: pages(), choices: ['e1', 'DONE'] })
+      const result = await run(on.deps, { record: true, control: { model: control.model, cap: 12 } })
+      await run(off.deps)
+
+      expect(result.status).toBe('done')
+      expect(offeredLabels(on.seen.spaces[1]!)).toEqual(offeredLabels(off.seen.spaces[1]!))
+      expect(offeredLabels(on.seen.spaces[1]!)).toEqual(['Search', 'Where from?'])
+      expect(rangeLines(result.recordDir)).toEqual([])
+
+      rmSync(result.recordDir, { recursive: true, force: true })
+    })
+
+    it('puts the most relevant elements back when the ways back are fewer than the floor', async () => {
+      // Eight controls, one of them typeable and at the very end of the table: the ways back are that
+      // field and the button beside it, two out of eight. The floor is the one the dead-end rule
+      // keeps — `MIN_OPEN_ELEMENTS`, five — so the most relevant of the page go back in with them,
+      // and the request says so in its own line. What the floor puts back is `trimActionSpace`'s own
+      // ordering: nothing here invents a second idea of relevance.
+      const control = controlModel(planFor('地址里一直在酒店站内', 'hotels.test'))
+      const list = [
+        button('e1', 1, '价格从低到高'),
+        button('e2', 2, '评分优先'),
+        button('e3', 3, '加入收藏'),
+        button('e4', 4, '分享'),
+        button('e5', 5, '地图模式'),
+        button('e6', 6, '服务设施'),
+        button('e7', 7, '展开筛选'),
+        field('e8', 8, '目的地'),
+      ]
+      const pages = (): PageState[] => [
+        pageState('f0', { url: 'https://hotels.test/list?city=1&landmark=58397117', actions: list }),
+        pageState('f1', { url: 'https://hotels.test/list?city=1', actions: list }),
+        pageState('f2', { url: 'https://hotels.test/list?city=1', actions: list }),
+      ]
+      const h = harness({ pages: pages(), choices: ['e8', 'e8', 'DONE'], targets: { e8: '8' } })
+      const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
+
+      expect(result.status).toBe('done')
+      // Five of the eight are offered, which is the floor exactly: the field, its neighbour, and the
+      // three most relevant of the rest. The floor stops the moment it is met rather than putting
+      // back everything it ranked.
+      expect(offeredLabels(h.seen.spaces[1]!)).toEqual([
+        '价格从低到高',
+        '评分优先',
+        '加入收藏',
+        '展开筛选',
+        '目的地',
+      ])
+      expect(lossLines(result.recordDir)).toHaveLength(1)
+      expect(rangeLines(result.recordDir).filter((record) => String(record.error).startsWith('范围没回来'))).toEqual([
+        {
+          at: expect.any(Number),
+          kind: 'control',
+          error:
+            '范围没回来，候选已收窄到可能把它带回来的控件；筛完只剩 2 个，不足 5 个，' +
+            '已按相关性保底放回，现共 5 个',
+          range: 'hotels.test/list（city、landmark）',
+          narrowed: 5,
+          url: 'https://hotels.test/list?city=1',
+        },
       ])
 
       rmSync(result.recordDir, { recursive: true, force: true })
