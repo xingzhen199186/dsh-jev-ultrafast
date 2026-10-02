@@ -26,7 +26,7 @@
 import { DECISION_PROVIDERS, DECISION_PROVIDER_IDS } from '../decision/providers'
 
 /** The blocks the page is divided into, in the order they are drawn. */
-export type FieldGroupId = 'browser' | 'decision' | 'text' | 'run' | 'advanced'
+export type FieldGroupId = 'browser' | 'decision' | 'text' | 'run' | 'control' | 'advanced'
 
 /** The four blocks a block of text can belong to; 高级设置 is not one of them. */
 export type SectionId = 'browser' | 'decision' | 'text' | 'run'
@@ -63,6 +63,13 @@ export const FIELD_GROUPS: readonly FieldGroup[] = [
       '插件预设由插件直连，DSH 内置则由 DSH 管地址和凭据。',
   },
   { id: 'run', title: '任务', note: '一次任务最多走多少步、要不要留下每一步的截图。' },
+  {
+    id: 'control',
+    title: '中控',
+    note:
+      '开跑前，让另一个模型把这次任务写成一串「必须一直成立」的标志，运行中每步核对。' +
+      '某个标志不成立了，就不许宣布任务完成——但不会因此停下，运行照常往下走。默认关。',
+  },
   {
     id: 'advanced',
     title: '高级设置',
@@ -225,6 +232,41 @@ export const FIELDS: readonly FieldSpec[] = [
     choiceLabels: { none: '不推理', auto: '自动' },
     group: 'advanced',
     section: 'text',
+  },
+  {
+    key: 'controlEnabled',
+    label: '开中控',
+    hint: '开跑时让另一个模型写一份可核对的清单，运行中每步核对。默认关。',
+    kind: 'switch',
+    group: 'control',
+  },
+  {
+    key: 'controlProvider',
+    label: '中控模型走哪条路',
+    hint: '留空就走 DSH 内置路由；也可以选插件预设的那几家。',
+    kind: 'provider',
+    group: 'control',
+  },
+  {
+    key: 'controlModel',
+    label: '模型',
+    hint: '留空就用这条路由自己的模型。',
+    kind: 'text',
+    group: 'control',
+  },
+  {
+    key: 'controlCallCap',
+    label: '每轮最多叫几次',
+    hint: '与问决策模型的次数分开算；叫满就不再叫，运行不停。',
+    kind: 'number',
+    group: 'control',
+  },
+  {
+    key: 'controlPin',
+    label: '钉住候选（排障用）',
+    hint: '填元素编号，把这些元素一直留在候选里；排查「该点的东西没出现在候选里」时用。留空就是正常行为。',
+    kind: 'text',
+    group: 'control',
   },
   { key: 'maxSteps', label: '最多走多少步', hint: '一次任务的上限。', kind: 'number', group: 'run' },
   {
