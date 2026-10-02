@@ -102,7 +102,7 @@ describe('why a checklist was lost, for whoever reads the run afterwards', () =>
       onFailure: (why) => heard.push(why),
     })
     expect(plan).toBeNull()
-    expect(heard).toEqual([`答非所问：${said}`])
+    expect(heard).toEqual([`答非所问（不是能解析的 JSON：JSON 本身对不上（引号、逗号或括号））：${said}`])
 
     // A long answer is cut short: this is a reason to read, not a transcript.
     const long = 'x'.repeat(500)
@@ -110,7 +110,9 @@ describe('why a checklist was lost, for whoever reads the run afterwards', () =>
     await readChecklist(controlModelFrom(async () => long), asked, newControlBudget(3), {
       onFailure: (why) => cut.push(why),
     })
-    expect(cut).toEqual([`答非所问：${'x'.repeat(200)}`])
+    expect(cut).toEqual([
+      `答非所问（不是能解析的 JSON：JSON 本身对不上（引号、逗号或括号））：${'x'.repeat(200)}`,
+    ])
 
     // And a read that worked reports nothing at all: the sentence is for the failures only.
     const quiet: string[] = []

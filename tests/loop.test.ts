@@ -2654,7 +2654,7 @@ describe('retries that buy no step', () => {
       // the second one is a prompt problem, and its sentence carries the words it actually said.
       for (const [reply, why] of [
         [new Error('route is down'), '调用出错：route is down'],
-        ['not a plan at all', '答非所问：not a plan at all'],
+        ['not a plan at all', '答非所问（不是能解析的 JSON：JSON 本身对不上（引号、逗号或括号））：not a plan at all'],
       ] as const) {
         const control = controlModel(reply)
         const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })

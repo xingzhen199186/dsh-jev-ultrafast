@@ -84,11 +84,16 @@ export async function readChecklist(
         }, timeoutMs)
       }),
     ])
-    const plan = parseControlPlan(raw, input.goal)
-    // The one worth knowing about: the model answered, and this parser would not have it. The
-    // words it actually said are the whole diagnosis — a summary of them would hide the shape
-    // the prompt failed to get across — so they are what the sentence carries, cut short.
-    if (plan === null) report(options.onFailure, `答非所问：${String(raw).slice(0, 200)}`)
+    // The one worth knowing about: the model answered, and this parser would not have it. What it
+    // takes to act on that is two things, and neither is much use without the other: the rule it
+    // broke, which says whether the prompt, the door or the answer is at fault, and the words it
+    // actually said — a summary of those would hide the shape the prompt failed to get across — so
+    // they are what the sentence carries too, cut short.
+    let refusal = ''
+    const plan = parseControlPlan(raw, input.goal, (why) => {
+      refusal = why
+    })
+    if (plan === null) report(options.onFailure, `答非所问${refusal === '' ? '' : `（${refusal}）`}：${String(raw).slice(0, 200)}`)
     return plan
   } catch (error) {
     report(options.onFailure, timedOut ? `超时（${timeoutMs} 毫秒）` : `调用出错：${messageOf(error)}`)

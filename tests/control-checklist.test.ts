@@ -75,6 +75,67 @@ describe('reading a plan out of what the control model said', () => {
     })
     expect(parseControlPlan(raw, 'g')?.checks).toHaveLength(12)
   })
+
+  it('reads the answer one real run refused, where the extra goal key was never the reason', () => {
+    // Character for character what the trace of run-1790932184390-wrft kept of the control model's
+    // answer: the record cuts the model's own words at 200 characters, and the cut landed inside the
+    // second check, so what survives cannot be valid json whatever the answer said next. The one
+    // thing that run's sentence does show is the key the answer carried — `goal`, which the prompt's
+    // own shape example asks for and which this parser has always ignored. Written out to its end,
+    // the same answer parses: the `goal` beside `checks` is not what a refusal can be about.
+    const kept =
+      '{"goal":"在携程搜索「北大医疗产业园」进入酒店列表，设置位置筛选并按「直线距离 近→远」排序后，读出第一家酒店的名字、直线距离和点评数。","checks":[{"id":"site-domain","say":"地址一直在携程域内","kind":"url-contains","value":"ctrip.com"},{"id":"brand","say":"页面上一直出现携程品牌词",'
+    expect(kept).toHaveLength(200)
+    let why = ''
+    expect(parseControlPlan(kept, 'g', (said) => { why = said })).toBeNull()
+    // Cut off, not answered wrongly: the reason says so, which is the whole point of reporting it.
+    expect(why).toMatch(/不是能解析的 JSON/)
+    expect(why).toMatch(/还没写完就断了/)
+
+    const whole = kept + '"kind":"text-contains","value":"携程"}]}'
+    expect(parseControlPlan(whole, 'g')?.checks.map((check) => check.id)).toEqual(['site-domain', 'brand'])
+
+    // And it is not `goal` in particular: every key beside `checks` is the model's own business.
+    const noisy = whole.replace('"goal":', '"notes":"这些是我随手加的","goal":')
+    expect(parseControlPlan(noisy, 'g')?.checks).toHaveLength(2)
+  })
+
+  it('says which rule refused a plan, so a trace can tell the ways apart', () => {
+    // Every refusal used to arrive as one and the same sentence, which left a run that asked a
+    // real question with a record nobody could act on: not-json, prose-wrapped json, thirteen
+    // checks and a check with no value all read as 答非所问 and nothing more.
+    const whyOf = (raw: unknown): string => {
+      let why = ''
+      expect(parseControlPlan(raw as string, 'g', (said) => { why = said })).toBeNull()
+      return why
+    }
+    expect(whyOf('   ')).toBe('模型什么都没说')
+    expect(whyOf(JSON.stringify({ checks: [] }) + ' and that is all')).toBe(
+      '不是能解析的 JSON：JSON 后面还跟着别的话（不是纯 JSON）',
+    )
+    expect(whyOf("I think the landmark matters, so here's a sentence instead of json")).toBe(
+      '不是能解析的 JSON：JSON 本身对不上（引号、逗号或括号）',
+    )
+    expect(whyOf('[]')).toBe('顶层不是一个 JSON 对象')
+    expect(whyOf('{"goal":"g"}')).toBe('没有 checks 数组')
+    expect(whyOf('{"checks":[]}')).toBe('checks 是空的')
+    expect(whyOf(JSON.stringify({
+      checks: Array.from({ length: 13 }, (_, i) => ({ id: `c${i}`, say: 's', kind: 'url-contains', value: 'x' })),
+    }))).toBe('checks 有 13 条，超过 12 条上限')
+    expect(whyOf('{"checks":[{"id":"a","say":"s","kind":"nonsense","value":"x"}]}')).toBe(
+      '第 1 条的 kind「nonsense」不在 url-contains / text-contains / text-absent / ask 里',
+    )
+    expect(whyOf('{"checks":[{"id":"a","say":"","kind":"url-contains","value":"x"}]}')).toBe('第 1 条的 id 或 say 是空的')
+    expect(whyOf('{"checks":[{"id":"a","say":"s","kind":"url-contains"}]}')).toBe('第 1 条（id=a）没有可判定的 value')
+    expect(whyOf('{"checks":[{"id":"a","say":"s","kind":"ask","value":"x"}]}')).toBe('第 1 条是 ask，不能带 value')
+    expect(
+      whyOf('{"checks":[{"id":"a","say":"s","kind":"url-contains","value":"x"},{"id":"a","say":"t","kind":"text-contains","value":"y"}]}'),
+    ).toBe('第 2 条的 id「a」和前面的一条重复了')
+    // A read that works reports nothing, which is what keeps this out of the way of good runs.
+    let quiet = 'unset'
+    expect(parseControlPlan('{"checks":[{"id":"a","say":"s","kind":"url-contains","value":"x"}]}', 'g', (said) => { quiet = said })).not.toBeNull()
+    expect(quiet).toBe('unset')
+  })
 })
 
 describe('deciding a check against one page', () => {
