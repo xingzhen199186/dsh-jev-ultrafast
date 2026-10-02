@@ -670,11 +670,64 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     )
   }
 
+  /**
+   * Look at the page, waiting out one that is only on its way to the next document.
+   *
+   * A snapshot taken while a page is between documents comes back with nothing to read, and
+   * `browser/session.ts` answers that with a `StalePage` — 「页面正在跳转」, or 「页面在取值过程中发生了变化」
+   * when the evaluation outlives the context it was made in. Both are transient: they last as long as
+   * the next document takes to arrive. A same-tab navigation is exactly that state, and it is what made
+   * this a failure: on 豆瓣读书 a search that lands in the same tab spent longer between documents than
+   * the ten looks the session takes for itself, so the look right after the click ended the run as
+   * `failed` on those two words with the results page never seen (run-1790941414586-t83x, 2026-10-02 —
+   * an input that landed, a click that landed, and then 「结果：出错了（页面正在跳转）」 while the page
+   * was still the one it started on). A click that opens a *new* window never met it: that page is
+   * followed by the tab rule below, and the tab the run stays on is not the one navigating.
+   *
+   * Waited out with the looks that buy no step, the same count the refusals below are bounded by: no
+   * allowance of its own, and nothing of the session's own bound moved. A page that never does come up
+   * spends that count and then the error goes on exactly as it always did — a run that failed on
+   * 「页面正在跳转」 fails on it still — while a page that comes up a moment later costs a few looks and
+   * the run continues on the page it was going to.
+   */
+  const observePage = async (screenshot: boolean): Promise<PageState> => {
+    for (;;) {
+      try {
+        return await session!.observe({ screenshot })
+      } catch (error) {
+        if (!(error instanceof StalePage)) throw error
+        staleRetries += 1
+        if (staleRetries > MAX_STALE_RETRIES) throw error
+      }
+    }
+  }
+
+  /**
+   * Whether the page is still the one the decision was made on — read as "no" when it cannot be read
+   * at all.
+   *
+   * A page between documents has no answer to this question: `browser/session.ts` refuses the reading
+   * the way it refuses a snapshot, with the same `StalePage`. An answer the run does not have is not
+   * a licence to act, and the one thing the question is asked for is whether the screen in front of
+   * the run is the screen the answer was made on — so "not the same page any more" is what a refusal
+   * means here, and the caller looks again. Without this, a freshness check that lands during a
+   * navigation in the tab the run is on ends the run on 「页面在取值过程中发生了变化」 for the same
+   * reason the look above ended one on 「页面正在跳转」: the same state, read somewhere else.
+   */
+  const stillFresh = async (candidate: PageState): Promise<boolean> => {
+    try {
+      return await session!.fresh(candidate)
+    } catch (error) {
+      if (error instanceof StalePage) return false
+      throw error
+    }
+  }
+
   try {
     session = await deps.open(options.startUrl, options.browser, {
       guessClickableElements: options.guessClickableElements !== false,
     })
-    page = await session.observe({ screenshot: screenshots })
+    page = await observePage(screenshots)
     emit({ type: 'observed', step: 0, url: page.url, elements: page.actions.length })
     // The page the run started on is a state it has now shown, like every state after a step.
     seenStates.add(repeatedActionState(page))
@@ -702,7 +755,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // A page that is no longer what the last decision saw is re-observed, and the
       // step continues with the fresh page. Retrying the freshness check instead
       // would spin forever on a page that never settles.
-      if (!(await session.fresh(page))) page = await session.observe({ screenshot: screenshots })
+      if (!(await stillFresh(page))) page = await observePage(screenshots)
 
       // ---- the range the run is pinned to ----
       // An address with parameters at a real path is the range a task like this one is about — "the
@@ -986,7 +1039,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             ) {
               staleRetries += 1
               if (staleRetries <= MAX_STALE_RETRIES) {
-                page = await session.observe({ screenshot: screenshots })
+                page = await observePage(screenshots)
                 continue
               }
             }
@@ -1030,7 +1083,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       const chosen = decision.choice
       if (chosen === 'DONE' || chosen === 'BLOCKED') {
         // A terminal answer is only trustworthy if the page has not moved since.
-        if (!(await session.fresh(page))) {
+        if (!(await stillFresh(page))) {
           // A terminal answer names no element of its own, so a stop here can only say which
           // operation the run kept answering with.
           const stopped = staleRetryStop(decision.operation, decision.target, '')
@@ -1039,7 +1092,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             reason = stopped
             break
           }
-          page = await session.observe({ screenshot: screenshots })
+          page = await observePage(screenshots)
           continue
         }
         // The checklist gets the last word on "done". A run that announces it is finished while
@@ -1065,7 +1118,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
                 .map((check) => check.say)
                 .join('；')}。先把它们弄成立，再说完成`
-              page = await session.observe({ screenshot: screenshots })
+              page = await observePage(screenshots)
               continue
             }
             // Told three times over and still not holding: the run is let through rather than held
@@ -1115,7 +1168,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           break
         }
         hint = '你上次选的编号在页面里已经找不到了，页面可能自己刷新过，请重新选'
-        page = await session.observe({ screenshot: screenshots })
+        page = await observePage(screenshots)
         continue
       }
       lostTargets = 0
@@ -1142,14 +1195,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       let helper: TextResult | null = null
       try {
         if (action.kind === 'fill') {
-          if (!(await session.fresh(page))) {
+          if (!(await stillFresh(page))) {
             const stopped = staleRetryStop(decision.operation, decision.target, action.label)
             if (stopped) {
               status = 'blocked'
               reason = stopped
               break
             }
-            page = await session.observe({ screenshot: screenshots })
+            page = await observePage(screenshots)
             continue
           }
           const context = fieldContext(options.goal, action, page, history)
@@ -1215,7 +1268,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // goal, so the same text is still the right answer. Nothing is reported as executed here:
           // the action never went out, and an `executed` event on this path told the panel, the
           // progress line and the inspector's own index about a step that did not happen.
-          page = await session.observe({ screenshot: screenshots })
+          page = await observePage(screenshots)
           continue
         }
         // The action failed and the run ends here, but a step that threw is exactly the one a
@@ -1273,7 +1326,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // it had never read (2026-09-30). `page` is still the state from before the action, which is
       // what tells "the content has arrived" apart from "this page looks unchanged".
       await session.settle?.(page)
-      page = await session.observe({ screenshot: screenshots })
+      page = await observePage(screenshots)
       // One frame per step, taken after the step landed and named by the step it belongs to.
       // It is what lets a finished run be replayed at its real speed instead of imagined, and
       // the step in the name is what answers "was this before or after the key press?" without
@@ -1297,7 +1350,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       if (found) {
         let adopted = found.adopted
         if (adopted) {
-          page = await session.observe({ screenshot: screenshots })
+          page = await observePage(screenshots)
           // A tab can be reported before it has a title. The observation made right
           // after arriving on it knows the name, and the step line is the only place
           // that name is ever shown, so it is worth the one assignment.

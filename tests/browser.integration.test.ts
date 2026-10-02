@@ -9,6 +9,7 @@
  *   chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\chrome-cdp"
  */
 import { readFileSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -16,7 +17,7 @@ import { TargetCovered, act } from '../src/browser/act'
 import { readPage } from '../src/browser/read'
 import { BrowserSession, StalePage, type PageState, type SnapshotAction } from '../src/browser/session'
 import type { Decision } from '../src/decision/typesafe'
-import { runTask, type TaskDeps } from '../src/loop'
+import { runTask, type TaskDeps, type TaskResult } from '../src/loop'
 
 const enabled = process.env.JEV_BROWSER === '1'
 const fixtureUrl = pathToFileURL(fileURLToPath(new URL('./fixture/probe.html', import.meta.url))).href
@@ -399,6 +400,185 @@ describe.skipIf(!enabled)('holding a run before it acts', () => {
       } finally {
         rmSync(result.recordDir, { recursive: true, force: true })
         await session.close()
+      }
+    },
+    120_000,
+  )
+})
+
+describe.skipIf(!enabled)('a step that lands in the same tab', () => {
+  /**
+   * 豆瓣读书, 2026-10-02 (run-1790941414586-t83x): the 「搜索」 click landed in the tab the run was
+   * already on, and the run ended on 「结果：出错了（页面正在跳转）」 with the results page never seen.
+   * The state it died in is a document whose body has not arrived yet — `browser/snapshot.ts` answers
+   * `null` while `document.body` does not exist, and `browser/session.ts` turns that into a
+   * `StalePage`. A page whose head is committed while its body is held back holds a run in exactly
+   * that state for as long as it likes, which is what makes it testable here; a real site only does it
+   * for as long as its own network takes, which is why this was found on a search that took a moment.
+   *
+   * Both halves of the rule are pinned below: a jump that lasts a moment costs the run a few looks and
+   * nothing else, and one that never ends still stops it on the same words, at the same count.
+   */
+  const terminal: Decision = {
+    choice: 'DONE',
+    operation: 'DONE',
+    target: null,
+    confidence: 0.9,
+    probabilities: { DONE: 0.9 },
+    operationProbabilities: {},
+    targetProbabilities: {},
+    targetConfidence: null,
+    usage: {},
+    model: 'scripted',
+    latencyMs: 1,
+  }
+
+  /**
+   * A server whose `/slow` commits its head at once and holds its body back for `stallMs`, so the run
+   * that lands there is on a document that exists with no body in it yet.
+   */
+  async function servingLateBody(stallMs: number): Promise<{ url: string; close: () => Promise<void> }> {
+    const timers = new Set<NodeJS.Timeout>()
+    const server = createServer((_request, response) => {
+      if ((_request.url ?? '').startsWith('/slow')) {
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        response.write('<!doctype html><html><head><title>慢</title></head>')
+        const timer = setTimeout(() => {
+          timers.delete(timer)
+          response.end('<body><h1>到了</h1></body></html>')
+        }, stallMs)
+        timers.add(timer)
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end('<!doctype html><html><body><a id="go" href="/slow">去下一页</a></body></html>')
+    })
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+    const address = server.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    return {
+      url: `http://127.0.0.1:${port}/`,
+      close: async () => {
+        for (const timer of timers) clearTimeout(timer)
+        timers.clear()
+        server.closeAllConnections()
+        await new Promise<void>((done) => server.close(() => done()))
+      },
+    }
+  }
+
+  /**
+   * Click the link the first page offers, then finish; every page the run was working on is recorded,
+   * so the test can say which page the run's last answer was about. The page it lands on has no link,
+   * so nothing is clicked a second time however the timing goes.
+   */
+  function clickThroughOnce(asked: string[]): TaskDeps['decide'] {
+    return async (_source, space, context) => {
+      asked.push(context.page.url)
+      const index = space.elements.find((element) => element.label.includes('去下一页'))?.index ?? ''
+      const id = space.targets.CLICK?.[index]?.id
+      if (id === undefined) return terminal
+      return { ...terminal, choice: id, operation: 'CLICK', target: index, probabilities: { [id]: 0.9 } }
+    }
+  }
+
+  /**
+   * The same session, with the loop's closing of it skipped: a run closes the browser it was handed,
+   * which is right for a tool and unhelpful for a test that reads the page after the run.
+   */
+  function keepOpen(session: BrowserSession): BrowserSession {
+    return new Proxy(session, {
+      get(target, property) {
+        if (property === 'close') return async () => {}
+        const value = Reflect.get(target, property) as unknown
+        return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value
+      },
+    })
+  }
+
+  /** The tab's own body text, read from the page rather than from the run's record of it. */
+  async function bodyText(session: BrowserSession): Promise<string> {
+    const answer = (await session.call('Runtime.evaluate', {
+      expression: 'document.body ? document.body.innerText : ""',
+      returnByValue: true,
+    })) as { result?: { value?: unknown } }
+    return typeof answer.result?.value === 'string' ? answer.result.value : ''
+  }
+
+  /** One run over the late-body pages, with the session and the server left open for the caller. */
+  async function runOnto(
+    stallMs: number,
+  ): Promise<{ result: TaskResult; asked: string[]; read: () => Promise<string>; done: () => Promise<void> }> {
+    const asked: string[] = []
+    const serving = await servingLateBody(stallMs)
+    const session = await BrowserSession.open(serving.url, { cdpUrl: process.env.JEV_CDP_URL })
+    try {
+      const result = await runTask({
+        goal: '打开下一页',
+        startUrl: serving.url,
+        decision: { endpoint: 'https://decisions.test/v1', apiKey: '', model: 'scripted' },
+        text: { baseUrl: '', apiKey: '', model: 'scripted', reasoning: 'none' as const },
+        screenshots: false,
+        maxSteps: 3,
+        deps: { open: async () => keepOpen(session), decide: clickThroughOnce(asked) },
+      })
+      return {
+        result,
+        asked,
+        read: () => bodyText(session),
+        done: async () => {
+          await session.close()
+          await serving.close()
+        },
+      }
+    } catch (error) {
+      await session.close()
+      await serving.close()
+      throw error
+    }
+  }
+
+  it(
+    'waits a moment of it out and finishes on the page it was going to',
+    async () => {
+      // The body arrives 5.6 seconds in, which is where this hurts and where it is worth pinning: the
+      // run's own settle waits `#waitForLoad`'s five seconds out first (the document never reaches
+      // `complete` without a body), so the observation that follows is the one that meets the jump.
+      // A body that arrived sooner than that would be waited out by the settle and prove nothing.
+      const run = await runOnto(5_600)
+      try {
+        expect(run.result.status).toBe('done')
+        expect(run.result.reason).toBe('')
+        // The click is the run's only step, and it is kept.
+        expect(run.result.steps).toBe(1)
+        // Two answers were asked for, and the second one was asked about the page the run was trying
+        // to reach — not about the page it started on, which is where a run that died on the jump
+        // never got past.
+        expect(run.asked).toHaveLength(2)
+        expect(run.asked[1]).toContain('/slow')
+        // And the tab really is that document, body and all.
+        await expect(run.read()).resolves.toContain('到了')
+      } finally {
+        await run.done()
+      }
+    },
+    120_000,
+  )
+
+  it(
+    'still stops when the body never arrives, on the same words',
+    async () => {
+      // The same page with a body that never comes: nothing here is a matter of timing, so this is
+      // also what says the state above is real rather than missed. The run is allowed its looks, all
+      // seven of them, and then ends on the words it always ended on.
+      const run = await runOnto(30_000)
+      try {
+        expect(run.result.status).toBe('failed')
+        expect(run.result.reason).toBe('页面正在跳转')
+        // What happened before the stop is kept: the click is still a step the run took.
+        expect(run.result.steps).toBe(1)
+      } finally {
+        await run.done()
       }
     },
     120_000,

@@ -316,6 +316,63 @@ describe('run loop', () => {
     })
   })
 
+  it('waits out a page that is between documents instead of failing the run', async () => {
+    // 豆瓣读书, 2026-10-02 (run-1790941414586-t83x): a search typed into the box, the 「搜索」 button
+    // clicked, and the run over — 「结果：出错了（页面正在跳转）」 after two steps. The click landed in
+    // the tab the run was already on, and the look right after it met a page that was between
+    // documents for longer than the session's own ten looks. That state is transient, so it is waited
+    // out here: the step survives, the run carries on, and the page it was on its way to is read.
+    const results = 'https://search.douban.com/book/subject_search?search_text=活着'
+    let looks = 0
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1', { url: results, text: '活着 · 搜索结果' })],
+      choices: ['e1', 'DONE'],
+      // The look the run makes after the click, and the one right after it, arrive while the page is
+      // still on its way: exactly what `browser/session.ts` reports with these two words.
+      observe: () => {
+        looks += 1
+        if (looks === 2 || looks === 3) throw new StalePage('页面正在跳转')
+      },
+    })
+
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('done')
+    expect(result.reason).toBe('')
+    // The click was the only step, and it is in the run's history rather than lost to the jump.
+    expect(result.steps).toBe(1)
+    expect(h.seen.executed.map((action) => action.id)).toEqual(['e1'])
+    // Three looks after the step: refused, refused, and then the results page — which is the page the
+    // next decision was asked about, so the run reached where it was going.
+    expect(h.seen.calls).toEqual(['observe', 'settle', 'observe', 'observe', 'observe'])
+    expect(h.seen.contexts.at(-1)?.page.url).toBe(results)
+  })
+
+  it('still fails a run whose page never comes up, on the existing count', async () => {
+    // The other half of the same rule: a page that never stops being between documents is a run that
+    // cannot go on, and it ends on the same words and the same bound it always did — the looks that
+    // buy no step (`MAX_STALE_RETRIES`), not a wait of its own.
+    let looks = 0
+    const h = harness({
+      pages: [pageState('f0'), pageState('f1')],
+      choices: ['e1'],
+      observe: () => {
+        looks += 1
+        if (looks > 1) throw new StalePage('页面正在跳转')
+      },
+    })
+
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('failed')
+    expect(result.reason).toBe('页面正在跳转')
+    // The initial look, then the seven the post-step one is allowed: `MAX_STALE_RETRIES` (6) retries
+    // plus the attempt that spent the last of them.
+    expect(h.seen.calls.filter((call) => call === 'observe')).toHaveLength(8)
+    // The step that did happen is still reported: what the failure explains is the page, not the click.
+    expect(result.steps).toBe(1)
+  })
+
   it('keeps a DONE the finished page supports', async () => {
     const h = harness({
       pages: [pageState('f0'), pageState('f1', { text: '预订成功，确认号 AB-1234' }), pageState('f1')],
