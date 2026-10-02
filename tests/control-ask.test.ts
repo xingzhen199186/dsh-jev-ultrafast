@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../src/decision/text-helper', () => ({ askText: vi.fn() }))
 
 import { askText } from '../src/decision/text-helper'
-import { CONTROL_MAX_TOKENS, controlModelFromTextDoor } from '../src/control/ask-control'
+import { controlModelFromTextDoor } from '../src/control/ask-control'
 
 const mockAsk = vi.mocked(askText)
 beforeEach(() => {
@@ -25,7 +25,7 @@ describe('the control model through the run\u2019s own text door', () => {
     const [sent, system, user, maxTokens] = mockAsk.mock.calls[0]
     expect(system).toBe('S')
     expect(user).toBe('U')
-    expect(maxTokens).toBe(CONTROL_MAX_TOKENS)
+    expect(maxTokens).toBeUndefined()
     expect(sent.model).toBe('a-model')
   })
 

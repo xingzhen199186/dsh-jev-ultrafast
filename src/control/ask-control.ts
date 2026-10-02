@@ -15,14 +15,16 @@
 import { askText, type TextHelperSource } from '../decision/text-helper'
 import type { ControlModel } from './control-model'
 
-/** A checklist is a short json payload; this is not a place to spend a model's output budget. */
-export const CONTROL_MAX_TOKENS = 800
-
 /** Wrap the run's text door so it answers the checklist question instead of a filling one. */
 export function controlModelFromTextDoor(source: () => TextHelperSource): ControlModel {
   return {
     async call({ system, user, signal }) {
-      const { content } = await askText({ ...source(), signal }, system, user, CONTROL_MAX_TOKENS)
+      // No ceiling of our own. A model that reasons spends the same allowance on thinking as on
+      // prose — the first real run came back empty for that reason, and the second one said so in
+      // as many words — so the checklist question is asked exactly as the rest of the plugin asks
+      // it, under the text door's own default and its re-ask for a vendor that refuses a number
+      // above its maximum. Trying to be frugal here bought two runs that could not speak at all.
+      const { content } = await askText({ ...source(), signal }, system, user)
       return content
     },
   }
