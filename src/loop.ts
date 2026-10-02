@@ -685,6 +685,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // a "done" was never questioned finds the reason here rather than inferring it.
         if (controlPlan === null) {
           artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单没读成', why })
+        } else {
+          // A read that worked used to leave no trace at all, so a run that asked and a run that was
+          // never asked looked the same afterwards. The record now says the checklist exists and
+          // names its checks, which is what lets a quiet gate be read as "nothing was wrong"
+          // rather than "nobody ever asked".
+          artifacts?.trace.write({ at: Date.now(), kind: 'control', error: '清单读成了，' + controlPlan.checks.length + ' 条', says: controlPlan.checks.map((check) => check.say) })
         }
       }
 

@@ -2596,7 +2596,7 @@ describe('retries that buy no step', () => {
       // Only the condition that never held is named: the other one was true all along, and the
       // record is about what the run was released from, not a summary of the checklist. The
       // sentence is what the inspector shows; `let_through` is what says it was not a pass.
-      expect(traceOf(result.recordDir).filter((record) => record.kind === 'control')).toEqual([
+      expect(traceOf(result.recordDir).filter((record) => record.kind === 'control' && record.let_through === true)).toEqual([
         expect.objectContaining({
           error: '清单始终没成立，放行了',
           let_through: true,
