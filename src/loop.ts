@@ -36,7 +36,7 @@ import { fieldContext, fieldText } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
-import { blockedChecks, canFinish, type ControlPlan } from './control/checklist'
+import { applyFacts, blockedChecks, canFinish, type ControlPlan } from './control/checklist'
 import { newControlBudget, readChecklist, type ControlBudget, type ControlModel } from './control/control-model'
 import type { BrowserPort, NewPage, PageState, SnapshotAction } from './browser/session'
 import { BrowserSession, StalePage, type SnapshotOptions } from './browser/session'
@@ -805,12 +805,20 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // not stopped either: it is asked again, with the conditions named, exactly the way an
         // answer the page has moved under is. Bought out of the run's own decision budget, so a
         // checklist nobody can satisfy costs questions, not a new stop.
-        if (chosen === 'DONE' && controlPlan !== null && !canFinish(controlPlan)) {
-          hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
-            .map((check) => check.say)
-            .join('；')}。先把它们弄成立，再说完成`
-          page = await session.observe({ screenshot: screenshots })
-          continue
+        //
+        // The states are taken from the page in front of the run at this moment rather than from
+        // the one it started on: a check the model wrote as locally decidable stays "unknown"
+        // until something looks, and "unknown" is not "holding" — deciding the finish against a
+        // checklist nobody ever judged would refuse every run that has one.
+        if (chosen === 'DONE' && controlPlan !== null) {
+          controlPlan = applyFacts(controlPlan, { url: page.url, title: page.title, text: page.text })
+          if (!canFinish(controlPlan)) {
+            hint = `清单里这几条还没成立：${blockedChecks(controlPlan)
+              .map((check) => check.say)
+              .join('；')}。先把它们弄成立，再说完成`
+            page = await session.observe({ screenshot: screenshots })
+            continue
+          }
         }
         status = chosen === 'DONE' ? 'done' : 'blocked'
         reason = chosen === 'DONE' ? '' : '模型判断页面上已没有可以推进目标的操作'
