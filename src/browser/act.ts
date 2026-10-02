@@ -444,8 +444,41 @@ async function execute(
   const focus: FocusReading | null = action.kind === 'press_key' ? await isFocused(session, action) : null
   const clicked = focus !== 'yes'
   if (clicked) {
-    for (const type of ['mousePressed', 'mouseReleased'] as const) {
-      await session.call('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 })
+    // A press alone is not a click. The sibling implementation (`dsh-browser`, which drives an
+    // Electron view) puts the pointer on the target before pressing, because Chromium routes a
+    // synthesised press to the control the view is *currently* hovering rather than to whatever sits
+    // at the coordinates: a view that has never received a mouse event has no hover target, and there
+    // the first press of a fresh tab went nowhere while CDP still answered success. Every click this
+    // plugin sends is a fresh tab's first one, so the pointer goes in first — aimed at the same x/y
+    // the in-place geometry just produced, with no second coordinate computed here.
+    //
+    // Measured on our own path (raw CDP, Edge, 2026-10-02), the first click of a fresh tab landed
+    // without this move as well: four runs of the new browser-layer tests below passed with the move
+    // commented out, and the move is not what was observed to rescue anything here. What it buys is
+    // the hover state a real pointer would have left behind — which is what a control that reveals
+    // itself on hover is waiting for — and it is the line those tests would show as missing if this
+    // path ever did start losing first clicks.
+    await session.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+    // The press may land late, or not at all, and the connection that failed may be the only reason
+    // the call did not answer. Either way a release is owed: a button the run left held down is a
+    // page that goes on behaving as if a hand were still on it, which every later step inherits. The
+    // compensating release is best effort — not awaited, its own failure silent — because what must
+    // survive is the failure being reported here, not a second one replacing it.
+    const release = (): void => {
+      void session.call('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        clickCount: 1,
+      }).catch(() => {})
+    }
+    try {
+      await session.call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+      await session.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+    } catch (error) {
+      release()
+      throw error
     }
   }
   // What the branch just decided, written down before the key is dispatched: "the field already had

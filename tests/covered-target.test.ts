@@ -89,17 +89,27 @@ function evaluate(
   return run(window, document, 1120, 780)
 }
 
+/** Which input event, if any, this page's connection refuses to deliver. */
+type Breakage = 'none' | 'press' | 'press-and-release'
+
 /** A connection that answers what `act` sends: the lookup by running it, the input by recording it. */
 function sessionOver(
   held: Map<number, unknown>,
   hit: unknown,
   cache?: Record<string, unknown>,
+  breakage: Breakage = 'none',
 ): { port: BrowserPort; dispatched: Array<Record<string, unknown>> } {
   const dispatched: Array<Record<string, unknown>> = []
   const port: BrowserPort = {
     async call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
       if (method !== 'Runtime.evaluate') {
         dispatched.push({ method, ...(params ?? {}) })
+        // Recorded before it fails, which is the point: what this file checks about a broken press is
+        // that the release was sent anyway, and a connection that never heard either call cannot say.
+        if (breakage !== 'none' && params?.type === 'mousePressed') throw new Error('连接在按下的那一刻断了')
+        if (breakage === 'press-and-release' && params?.type === 'mouseReleased') {
+          throw new Error('连接在松开的那一刻断了')
+        }
         return {} as T
       }
       return { result: { value: evaluate(String(params?.expression ?? ''), held, hit, cache) } } as T
@@ -147,12 +157,43 @@ describe('a target something else is standing over', () => {
     const result = await act(port, page, ACTION)
 
     expect(result.executed).toBe('e1')
-    // The centre of the element, dispatched as it always was: the new answer is not in the way of a
-    // target nothing is standing over.
+    // The centre of the element, dispatched as it always was — with the pointer put on it first, so
+    // the press has a hover target to land on even though this tab has never seen a mouse event. The
+    // move carries the same two numbers the geometry produced; no second coordinate is computed.
     expect(dispatched).toEqual([
+      { method: 'Input.dispatchMouseEvent', type: 'mouseMoved', x: 120, y: 110 },
       { method: 'Input.dispatchMouseEvent', type: 'mousePressed', x: 120, y: 110, button: 'left', clickCount: 1 },
       { method: 'Input.dispatchMouseEvent', type: 'mouseReleased', x: 120, y: 110, button: 'left', clickCount: 1 },
     ])
+  })
+
+  it('releases the button even though the press is what failed', async () => {
+    // A press that throws can still have landed: the page is left holding the button down, and every
+    // step after this one inherits a page behaving as if a hand were on it. The compensating release
+    // is best effort — sent, its own failure silent — and it must not replace the failure that says
+    // this step did not work.
+    const { port, dispatched } = sessionOver(nodes(() => true), layer, undefined, 'press')
+    const failure = await act(port, page, ACTION).then(
+      () => null,
+      (error: unknown) => error,
+    )
+
+    expect((failure as Error).message).toBe('连接在按下的那一刻断了')
+    expect(dispatched.map((event) => event.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
+    expect(dispatched.at(-1)).toMatchObject({ type: 'mouseReleased', x: 120, y: 110, button: 'left', clickCount: 1 })
+  })
+
+  it('keeps a release that failed from replacing the failure that caused it', async () => {
+    // The same page, with the connection gone for the compensating release as well: two failures, and
+    // the one the caller is told about is the press. A silent release is what makes that possible.
+    const { port, dispatched } = sessionOver(nodes(() => true), layer, undefined, 'press-and-release')
+    const failure = await act(port, page, ACTION).then(
+      () => null,
+      (error: unknown) => error,
+    )
+
+    expect((failure as Error).message).toBe('连接在按下的那一刻断了')
+    expect(dispatched.map((event) => event.type)).toEqual(['mouseMoved', 'mousePressed', 'mouseReleased'])
   })
 
   it('keeps a number the page does not have a plain stale page', async () => {

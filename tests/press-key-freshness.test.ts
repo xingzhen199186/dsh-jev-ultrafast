@@ -151,14 +151,17 @@ describe('a control on a page that keeps repainting', () => {
       const enter = page.actions.find((action) => action.kind === 'press_key' && action.key === 'enter')!
       const result = await act(session, page, enter)
       expect(result.executed).toBe(enter.id)
-      // Focus first: the page's own candidate list listens on the field, not on the document.
+      // Focus first: the page's own candidate list listens on the field, not on the document. The
+      // pointer goes on the field before the press — the same coordinates, and what a tab that has
+      // never received a mouse event needs before a press has anywhere to land.
       expect(connection.dispatched.map((event) => event.type)).toEqual([
+        'mouseMoved',
         'mousePressed',
         'mouseReleased',
         'keyDown',
         'keyUp',
       ])
-      expect(connection.dispatched[2]).toMatchObject({
+      expect(connection.dispatched[3]).toMatchObject({
         type: 'keyDown',
         key: 'Enter',
         code: 'Enter',
@@ -166,7 +169,7 @@ describe('a control on a page that keeps repainting', () => {
         nativeVirtualKeyCode: 13,
         text: '\r',
       })
-      expect(connection.dispatched[3]).toEqual({ ...connection.dispatched[2], type: 'keyUp' })
+      expect(connection.dispatched[4]).toEqual({ ...connection.dispatched[3], type: 'keyUp' })
       // The guard was asked about rather than the marker, which is what let the press through. The
       // guard call on the page's node table is the same discriminator the connection answers by: only
       // this question asks for the target's own guard and nothing about the page around it.
@@ -187,15 +190,16 @@ describe('a control on a page that keeps repainting', () => {
       const result = await act(session, page, fill, '北大医疗产业园')
 
       expect(result.executed).toBe(fill.id)
-      // Click into it, select what it holds, then type: `Input.insertText` carries no `type` of its
-      // own, so it is the event the four named ones are followed by.
-      expect(connection.dispatched.slice(0, 4).map((event) => event.type)).toEqual([
+      // Move onto it, click into it, select what it holds, then type: `Input.insertText` carries no
+      // `type` of its own, so it is the event the five named ones are followed by.
+      expect(connection.dispatched.slice(0, 5).map((event) => event.type)).toEqual([
+        'mouseMoved',
         'mousePressed',
         'mouseReleased',
         'keyDown',
         'keyUp',
       ])
-      expect(connection.dispatched).toHaveLength(5)
+      expect(connection.dispatched).toHaveLength(6)
       expect(connection.dispatched.at(-1)).toEqual({ text: '北大医疗产业园' })
       expect(connection.evaluated.some((expression) => expression.includes('c.guard(c.nodes.get('))).toBe(true)
       expect(connection.evaluated.some((expression) => expression.includes('semantics'))).toBe(false)

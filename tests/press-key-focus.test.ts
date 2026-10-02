@@ -180,12 +180,16 @@ describe('a key on a field the page has already focused', () => {
       await act(session, page, enter)
 
       expect(connection.dispatched.map((event) => event.type)).toEqual([
+        'mouseMoved',
         'mousePressed',
         'mouseReleased',
         'keyDown',
         'keyUp',
       ])
-      expect(connection.dispatched[0]).toMatchObject({ x: 5, y: 6, button: 'left', clickCount: 1 })
+      // The pointer is put on the target before the press, at the same two numbers: the move is what
+      // gives a tab that has never seen a mouse event the hover target the press is routed to.
+      expect(connection.dispatched[0]).toMatchObject({ type: 'mouseMoved', x: 5, y: 6 })
+      expect(connection.dispatched[1]).toMatchObject({ x: 5, y: 6, button: 'left', clickCount: 1 })
     } finally {
       await session.close()
     }
@@ -201,6 +205,7 @@ describe('a key on a field the page has already focused', () => {
 
         expect(result.executed).toBe(enter.id)
         expect(connection.dispatched.map((event) => event.type)).toEqual([
+          'mouseMoved',
           'mousePressed',
           'mouseReleased',
           'keyDown',
@@ -221,6 +226,7 @@ describe('a key on a field the page has already focused', () => {
       await act(session, page, fill, '生命科学园')
 
       expect(connection.dispatched.map((event) => event.type)).toEqual([
+        'mouseMoved',
         'mousePressed',
         'mouseReleased',
         'keyDown',

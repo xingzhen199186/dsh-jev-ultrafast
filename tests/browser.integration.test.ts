@@ -170,6 +170,71 @@ describe.skipIf(!enabled)('browser layer', () => {
   })
 })
 
+/**
+ * The one click this plugin always sends: the first click of a tab that has never been touched.
+ *
+ * The sibling implementation (`dsh-browser`, on an Electron view) puts the pointer on the target first
+ * because Chromium routes a synthesised press to the control the view is *currently* hovering rather
+ * than to whatever sits at the coordinates — a view that has never received a mouse event has no hover
+ * target, and there the first press of a fresh tab went nowhere while CDP still answered success.
+ * Every click this plugin sends is that first one, on a tab it has just opened, which is why these two
+ * tests exist: they drive exactly that click for real and check the page it was aimed at.
+ *
+ * What they measured on 2026-10-02 (raw CDP, Edge): the click landed both ways. Two runs of this whole
+ * file with the `mouseMoved` dispatch in `act.ts` (19 tests each) and four runs of these two tests with
+ * it commented out all passed, so the move is not what rescues the click on this path — the tests stay
+ * because the click they drive is the one under every real run, and a version of it that stopped
+ * landing would show up here first.
+ */
+describe.skipIf(!enabled)('the first click in a tab that has never seen a mouse event', () => {
+  it(
+    'lands it, and the page really changes',
+    async () => {
+      // A tab of this test's own, opened and never clicked in: nothing before this point has sent
+      // the view a mouse event, which is exactly the state the plugin's every click starts from.
+      const fresh = await BrowserSession.open(fixtureUrl, { cdpUrl: process.env.JEV_CDP_URL })
+      try {
+        const before = await fresh.observe()
+        const button = byLabel(before, 'Add one')
+        expect(button).toBeDefined()
+        expect(await fresh.evaluate<number>('window.__probeCount()')).toBe(0)
+
+        const result = await act(fresh, before, button!)
+
+        expect(result.executed).toBe(button!.id)
+        expect(await fresh.evaluate<number>('window.__probeCount()')).toBe(1)
+        expect(await fresh.evaluate<string>('document.getElementById("counter").textContent')).toBe('1')
+        const after = await fresh.observe()
+        expect(after.fingerprint).not.toBe(before.fingerprint)
+      } finally {
+        await fresh.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    'opens the window the link asked for',
+    async () => {
+      const fresh = await BrowserSession.open(fixtureUrl, { cdpUrl: process.env.JEV_CDP_URL })
+      try {
+        const before = await fresh.observe()
+        const link = byLabel(before, 'Open a second page')
+        expect(link?.kind).toBe('click')
+
+        await act(fresh, before, link!)
+
+        const found = await fresh.adoptNewPage({ onlyIfSameUrl: true })
+        expect(found?.appeared.length).toBeGreaterThan(0)
+        expect(found?.adopted?.url.endsWith('newtab.html')).toBe(true)
+      } finally {
+        await fresh.close()
+      }
+    },
+    60_000,
+  )
+})
+
 describe.skipIf(!enabled)('reading a long page', () => {
   it(
     'collects a page taller than the viewport, losing no paragraph and repeating none',
