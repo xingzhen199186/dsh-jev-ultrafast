@@ -26,7 +26,7 @@ import {
   localBrowserStatus,
 } from './browser/discover'
 import { heldStatus, reconnectConnection } from './browser/held'
-import { launchBrowser } from './browser/launch'
+import { launchBrowser, launchDailyBrowser } from './browser/launch'
 import { CopyTargetError, copyDailyLoginsIntoPluginBrowser } from './browser/login-copy'
 import { probeDailyLogins } from './browser/login-probe'
 import type { Config as ConfigShape } from './config'
@@ -491,9 +491,14 @@ function firstSentence(text: string): string {
  * presses this button for the reader — not page load, not a task — which is what makes the box
  * appear at a moment the reader is looking.
  *
- * A page load does not do this, and must not start doing it: the state line is drawn from the files
- * on this machine, and connecting there would put the box on screen every time the page opened —
- * the exact regression this release fixes.
+ * When that browser is not open, this press opens it too — the ruling of 2026-10-03: the way the
+ * reader opens it themselves (no debug flag; the profile's own switch decides whether a port
+ * appears), at the moment they are looking, with the connection's wait on the box unchanged. A
+ * pinned 数据目录 is not started here, and neither is anything while the box itself is the answer.
+ *
+ * A page load does not open anything or connect, and must not start: the state line is drawn from
+ * the files on this machine, and connecting there would put the box on screen every time the page
+ * opened — the exact regression this release fixes.
  */
 async function connectDailyBrowser(config: ConfigShape): Promise<ConnectReport> {
   const kind = config.browserKind.get()
@@ -507,6 +512,25 @@ async function connectDailyBrowser(config: ConfigShape): Promise<ConnectReport> 
     await reconnectConnection(endpoint.wsUrl, { route: 'daily', kind })
     return { ok: true, browser: await browserReport(config) }
   } catch (error) {
+    if (
+      error instanceof DailyBrowserError &&
+      error.problem !== 'not-authorized' &&
+      config.userDataDir.get().trim() === ''
+    ) {
+      const opened = await launchDailyBrowser(kind, { exeOverride: config.browserPath.get() || undefined })
+      if (opened !== null) {
+        try {
+          const fresh = await discoverDailyBrowser(kind, { profileDir: undefined })
+          await reconnectConnection(fresh.wsUrl, { route: 'daily', kind })
+          return { ok: true, browser: await browserReport(config) }
+        } catch (retry) {
+          if (retry instanceof DailyBrowserError) {
+            return { ok: false, browser: await browserReport(config), message: retry.message }
+          }
+          throw retry
+        }
+      }
+    }
     if (error instanceof DailyBrowserError) {
       return { ok: false, browser: await browserReport(config), message: error.message }
     }

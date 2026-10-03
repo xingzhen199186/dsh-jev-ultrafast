@@ -7,6 +7,7 @@ import { resolveDecisionRoute } from '../src/decision/providers'
 import { resolveTextRoute } from '../src/decision/text-providers'
 import type { TaskResult } from '../src/loop'
 import { Config, apply, cutNote, followNotes, inject, launchNote, name, saveScreenshot, toOutput } from '../src/index'
+import { dailyProfileDir } from '../src/browser/discover'
 
 /**
  * The plugin's registration surface: what it asks the harness for, what it
@@ -181,6 +182,24 @@ describe('the line that reports a browser the run started itself', () => {
     })
     expect(note).toContain('启动 Edge')
     expect(note).toContain('登录')
+  })
+
+  it('says the opened one is their own browser when it is, with the click only they can make', () => {
+    // The ruling of 2026-10-03: what opened is their everyday profile, so the login warning would
+    // be wrong — what it needs instead is the permission box, which only they can click.
+    const profileDir = dailyProfileDir('edge')
+    const note = launchNote({
+      kind: 'edge',
+      label: 'Edge',
+      exe: 'C:\\msedge.exe',
+      endpoint: 'http://127.0.0.1:9222',
+      profileDir,
+      source: `你正在用的 Edge（${profileDir} 里的 DevToolsActivePort）`,
+    })
+    expect(note).toContain('打开 Edge')
+    expect(note).toContain('登录状态')
+    expect(note).toContain('允许远程调试')
+    expect(note).not.toContain('分开')
   })
 })
 

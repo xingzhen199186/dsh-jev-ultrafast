@@ -204,15 +204,16 @@ describe('keeping the logins across a restart', () => {
 describe('the browser a task finds or starts', () => {
   const unreachable = new Error('没有找到可用的浏览器调试端口。设置页里的「启动并连接」可以由插件自己启动一个 Chrome 或 Edge；')
   /**
-   * The three answers a test gives instead of the machine's: whether an endpoint that was discovered
-   * still answers, whether the browser is already running, and whether one of this plugin's own is up.
-   * A real one would open a socket, and the second would list this machine's processes — neither
-   * belongs in a test.
+   * The answers a test gives instead of the machine's: whether an endpoint that was discovered
+   * still answers, whether the reader's browser shows a window, whether one of this plugin's own
+   * is up, and what starting the reader's browser would produce. A real one would open a socket,
+   * and the window check would list this machine's processes — none of it belongs in a test.
    */
-  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser'> = {
+  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser' | 'launchDaily'> = {
     endpointAlive: async () => true,
     browserRunning: async () => false,
     ownBrowser: async () => null,
+    launchDaily: async () => null,
   }
   const found: BrowserEndpoint = {
     httpUrl: 'http://127.0.0.1:9222',

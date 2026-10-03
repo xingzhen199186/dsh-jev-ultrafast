@@ -269,15 +269,16 @@ describe('what a daily run is allowed to do to the browser', () => {
     source: '插件启动的 Edge（C:\\profile\\edge）',
   }
   /**
-   * The three answers a test gives instead of the machine's: whether a discovered endpoint still
-   * answers, whether the browser is running, and whether one of this plugin's own is up. All
-   * ordinary here — up, not running, none of ours — and a test that needs another answer says so
-   * itself.
+   * The answers a test gives instead of the machine's: whether a discovered endpoint still answers,
+   * whether the reader's browser shows a window, whether one of this plugin's own is up, and what
+   * starting the reader's browser would produce. All ordinary here — up, no window, none of ours,
+   * no port — and a test that needs another answer says so itself.
    */
-  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser'> = {
+  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser' | 'launchDaily'> = {
     endpointAlive: async () => true,
     browserRunning: async () => false,
     ownBrowser: async () => null,
+    launchDaily: async () => null,
   }
 
   /** What discovery sees the second time: the browser this call started, at its own endpoint. */
@@ -304,16 +305,21 @@ describe('what a daily run is allowed to do to the browser', () => {
     expect(launches).toBe(0)
   })
 
-  it('opens the browser for the reader when it is not running, and connects to that one', async () => {
-    // The reader left 「你正在用的浏览器」 selected and closed the window: they asked for a task
-    // that works either way, and a closed browser is the one case where opening one is the answer.
-    // What opens is the plugin's own profile, never a second copy of theirs.
+  it('falls back to the plugin’s own copy when opening theirs brings no port', async () => {
+    // The reader left 「你正在用的浏览器」 selected and closed everything. The ruling of 2026-10-03
+    // opens *theirs* first — but that launch answered null (no 「允许远程调试」switch, or no port
+    // ever appeared), so the plugin's own copy is what a task gets: never a second copy of theirs.
     const lookups: DiscoverOptions[] = []
     const launches: Array<{ kind: BrowserKind; options: LaunchOptions }> = []
+    let dailyLaunches = 0
     const ensured = await ensureBrowser(
       { connection: 'daily', preferredKind: 'edge' },
       {
         ...injected,
+        launchDaily: async () => {
+          dailyLaunches += 1
+          return null
+        },
         discover: async (options) => {
           lookups.push({ ...options })
           if (!options.cdpUrl) throw dailyFailure('edge', 'not-running')
@@ -325,12 +331,70 @@ describe('what a daily run is allowed to do to the browser', () => {
         },
       },
     )
-    // Looked once, started, then looked again *at the launched endpoint*: the run must drive the
-    // browser this call started rather than whatever a later search would find.
+    // Their browser was asked for first; only then did the plugin start its own — and the second
+    // look is *at that launch's endpoint*, so the run drives what this call started.
+    expect(dailyLaunches).toBe(1)
     expect(lookups.map((options) => options.cdpUrl)).toEqual([undefined, started.endpoint])
     expect(launches).toEqual([{ kind: 'edge', options: { exeOverride: undefined, timeoutMs: undefined } }])
     expect(ensured.launched).toBe(started)
     expect(ensured.endpoint.httpUrl).toBe(started.endpoint)
+  })
+
+  it('opens the reader’s own browser when nothing is running, and drives that one', async () => {
+    // The ruling of 2026-10-03, in one test: nothing of theirs on screen and nothing of ours
+    // running means the plugin opens *theirs* — no debug flag, that profile's own switch deciding
+    // whether a port appears — and the run drives it. The plugin's own copy is not consulted: it is
+    // not what they asked to use, and opening two browsers for one task is not helping.
+    const his: BrowserEndpoint = {
+      httpUrl: 'http://127.0.0.1:9222',
+      wsUrl: 'ws://127.0.0.1:9222/devtools/browser/ccc',
+      browser: 'Edg/154.0.4258.53',
+      source: '你正在用的 Edge（C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data）',
+    }
+    const opened: LaunchedBrowser = {
+      kind: 'edge',
+      label: 'Edge',
+      exe: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      endpoint: 'http://127.0.0.1:9222',
+      profileDir: 'C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data',
+      source: '你正在用的 Edge（C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data 里的 DevToolsActivePort）',
+    }
+    const lookups: DiscoverOptions[] = []
+    let dailyLaunches = 0
+    let ownAsked = 0
+    let launches = 0
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        launchDaily: async () => {
+          dailyLaunches += 1
+          return opened
+        },
+        discover: async (options) => {
+          lookups.push({ ...options })
+          if (lookups.length === 1) throw dailyFailure('edge', 'not-running')
+          return his
+        },
+        ownBrowser: async () => {
+          ownAsked += 1
+          return null
+        },
+        launch: async () => {
+          launches += 1
+          throw new Error('他们那份已经开了，不该再启动别的')
+        },
+      },
+    )
+    expect(dailyLaunches).toBe(1)
+    expect(ensured.launched).toBe(opened)
+    expect(ensured.endpoint).toBe(his)
+    // The second look carries no pin: their browser is found by search, the way any discovery
+    // finds it, so the endpoint the run drives is the one their own port file describes.
+    expect(lookups).toHaveLength(2)
+    expect(lookups[1]!.cdpUrl).toBeUndefined()
+    expect(ownAsked).toBe(0)
+    expect(launches).toBe(0)
   })
 
   it('does not open a second window while the reader’s browser is up, and says what to do instead', async () => {
@@ -353,8 +417,9 @@ describe('what a daily run is allowed to do to the browser', () => {
         },
       ),
     )
-    // Both halves of the answer are named, because they lead to different browsers: closing every
-    // window opens one with the plugin's own profile, the debug-port shortcut keeps their logins.
+    // Both halves are named because they lead to different outcomes: closing every window hands
+    // the next run to the launcher (theirs when the switch is on, the plugin's copy when it is
+    // not), while the inspect page fixes this browser as it stands and keeps their logins.
     expect(message).toContain('两条办法')
     expect(message).toContain('关掉')
     expect(message).toContain('调试端口')

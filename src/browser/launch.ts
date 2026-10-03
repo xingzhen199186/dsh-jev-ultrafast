@@ -25,13 +25,16 @@ import { promisify } from 'node:util'
 import {
   BROWSER_LABELS,
   DailyBrowserError,
+  dailyProfileDir,
   discoverBrowser,
   pluginProfileDir,
   readActivePort,
+  remoteDebuggingEnabled,
   type BrowserEndpoint,
   type BrowserKind,
   type DiscoverOptions,
 } from './discover'
+import { inspectPageUrl } from '../protocol'
 
 // The browser union and the names it is called by live in ./discover, next to the two routes
 // that have to name a browser in a sentence; they are re-exported here because this is where
@@ -235,30 +238,92 @@ export async function launchBrowser(
   return { kind, label, exe, endpoint, profileDir, source: `插件启动的 ${label}（${profileDir}）` }
 }
 
+/**
+ * The reader's own browser, started the way they would start it themselves.
+ *
+ * The ruling of 2026-10-03 removed the rule that this plugin must never start the everyday
+ * profile: a task that finds no browser open now opens *theirs* first — their logins, their
+ * windows, the browser they know — and only falls back to the plugin's own copy when theirs
+ * cannot be driven. Two properties keep that safe. No argument is passed at all: Chrome/Edge
+ * 136+ refuse a debug flag on the default profile, so the port has to come from the profile's
+ * own 「允许远程调试」switch, which is checked first here — without the switch the browser would
+ * open with nothing to connect to, and starting one is left to the fallback instead. And
+ * nothing is written to the profile: the browser manages its own exactly as it does under a
+ * double-click.
+ *
+ * Null is the answer "no debug port appeared" — switch off, executable missing, or a browser
+ * slower than the deadline — which the caller reads as *start the plugin's own instead*. A
+ * failure that is really a question for the reader never lands here: discovery is the one that
+ * words a box, and the caller re-runs it for that sentence.
+ */
+export async function launchDailyBrowser(
+  kind: BrowserKind,
+  options: LaunchOptions = {},
+): Promise<LaunchedBrowser | null> {
+  const label = BROWSER_LABELS[kind]
+  const profileDir = dailyProfileDir(kind)
+  if ((await remoteDebuggingEnabled(profileDir)) !== true) return null
+  const exe = findBrowserExecutable(kind, options.exeOverride?.trim())
+  if (exe === null) return null
+  spawn(exe, [], { detached: true, stdio: 'ignore' }).unref()
+  const deadline = Date.now() + (options.timeoutMs ?? 30_000)
+  const record = (endpoint: string): LaunchedBrowser => ({
+    kind,
+    label,
+    exe,
+    endpoint,
+    profileDir,
+    source: `你正在用的 ${label}（${profileDir} 里的 DevToolsActivePort）`,
+  })
+  for (;;) {
+    try {
+      const found = await discoverBrowser({ connection: 'daily', preferredKind: kind })
+      return record(found.httpUrl)
+    } catch (error) {
+      // The switch is off in the profile this browser just started with: no port will ever come
+      // from it, so stop rather than wait out the deadline — the fallback can have it now.
+      if (error instanceof DailyBrowserError && error.problem === 'switch-off') return null
+      // The box is up inside the window that now exists. Hand back what the port file says so the
+      // connection waits on the click — waiting there is its own behaviour, and the note already
+      // tells the reader to click 「允许」.
+      if (error instanceof DailyBrowserError && error.problem === 'not-authorized') {
+        const active = await readActivePort(profileDir)
+        return active === null ? null : record(`http://127.0.0.1:${active.port}`)
+      }
+      if (Date.now() >= deadline) return null
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
+}
+
 /** What Windows calls each browser's process, for a machine where the executable was not found. */
 const WINDOWS_IMAGE: Record<BrowserKind, string> = { chrome: 'chrome.exe', edge: 'msedge.exe' }
 
 const runShell = promisify(execFile)
 
 /**
- * Whether the chosen browser is showing a window on this machine.
+ * Whether a window that is not this plugin's own is showing on this machine.
  *
  * A window, not a process: closing Edge leaves a dozen of its processes alive in the background,
  * so asking "is msedge.exe running" answers yes on a machine where the reader closed everything —
  * and that wrong yes is the whole reason the daily route refused to start a browser of its own.
- * Windows is asked through PowerShell's process list, which reports a main-window handle: a
+ * And a window of *ours* does not count either: the plugin's own browser is ours to drive, never
+ * a reason to refuse or to open anything, so each windowed process's command line — the only
+ * place `--user-data-dir` shows — is asked which profile it belongs to. Windows is asked through
+ * PowerShell, which reports a main-window handle per process and the command line per PID: a
  * windowless process carries 0, including the hidden windows that `tasklist /V` reports as titles
  * (`OleMainThreadWndName`), so the check cannot be satisfied by a browser running in the tray.
  *
  * Windows only: this launcher is aimed at the machine the reader is sitting at. Everywhere else —
  * and on any failure of the command itself, including a machine where PowerShell is not on `PATH`
- * — the answer is "not showing". That is the answer that opens a window rather than refusing to:
- * a wrong "no" costs one window with the plugin's own profile, while a wrong "yes" would leave the
- * reader with a sentence and no browser at all.
+ * — the answer is "no window". That is the answer that opens a browser rather than refusing to:
+ * a wrong "no" costs one window, while a wrong "yes" would leave the reader with a sentence and
+ * no browser at all.
  *
  * The name asked about is the executable's own (`msedge.exe`), or the name Windows gives that
  * browser when the executable could not be found anywhere. PowerShell names processes without the
- * extension, so the query drops it; a quote in the name is doubled so it stays inside the literal.
+ * extension, so the query drops it; a quote in either the name or the profile path is doubled so
+ * it stays inside its literal.
  */
 export async function browserRunning(
   kind: BrowserKind,
@@ -268,13 +333,17 @@ export async function browserRunning(
   if (platform !== 'win32') return false
   const image = exe === null ? WINDOWS_IMAGE[kind] : basename(exe)
   const name = image.replace(/\.exe$/i, '').replace(/'/g, "''")
+  const own = pluginProfileDir(kind).replace(/'/g, "''")
   try {
     const { stdout } = await runShell(
       'powershell.exe',
       [
         '-NoProfile',
         '-Command',
-        `@(Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count`,
+        `@(Get-Process -Name '${name}' -ErrorAction SilentlyContinue | ` +
+          `Where-Object { $_.MainWindowHandle -ne 0 } | ` +
+          `Where-Object { $c = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $_.Id) -ErrorAction SilentlyContinue).CommandLine; ` +
+          `$null -ne $c -and ($c -notlike '*${own}*') }).Count`,
       ],
       { timeout: 5_000, windowsHide: true },
     )
@@ -300,19 +369,21 @@ function answeredInTheBrowser(error: unknown): boolean {
 }
 
 /**
- * The sentence for a browser that is up without a debugging port: the only case where the daily
- * route refuses to start a second window.
+ * The sentence for a browser that is up without a working debugging port: the only case where the
+ * daily route refuses to open anything.
  *
- * Both halves of the answer happen outside this page, and they lead to different browsers — the
- * first to one with the plugin's own profile, the second to the reader's own with its logins — so
- * both are named rather than one being chosen for them.
+ * Both halves happen outside this page and lead to different outcomes — closing the windows hands
+ * the next run to the launcher (the reader's own when its switch is on, the plugin's copy when it
+ * is not), while the inspect page fixes the browser as it stands — so both are named rather than
+ * one being chosen for them.
  */
 function dailyRunningMessage(kind: BrowserKind): string {
   const label = BROWSER_LABELS[kind]
+  const page = inspectPageUrl(kind)
   return (
-    `${label} 正开着，但它没有开调试端口（或者那个端口已经不是它现在用的了），插件连不上它。两条办法：把 ${label} 的窗口全部关掉，再跑一次` +
-    `——插件会替你打开一个（用它自己那份数据目录，和你日常那个分开）；` +
-    `或者用它自带的、带调试端口的那个快捷方式打开 ${label}，插件会去连它。`
+    `${label} 正开着，但它没有开着调试端口（或者它记着的那个已经失效了），插件连不上它。两条办法：把 ${label} 的窗口全部关掉，再跑一次` +
+    `——插件会替你打开一个能用的；` +
+    `或者在 ${label} 里打开 ${page}，勾上「允许远程调试」，插件就能直接连上它。`
   )
 }
 
@@ -353,6 +424,8 @@ export interface EnsureDeps {
   browserRunning: (kind: BrowserKind, exe: string | null) => Promise<boolean>
   /** The browser this plugin started earlier, still up in its own profile — or null. */
   ownBrowser: (kind: BrowserKind) => Promise<LaunchedBrowser | null>
+  /** The reader's own browser started for this run, or null when no debug port appeared. */
+  launchDaily: (kind: BrowserKind, options: LaunchOptions) => Promise<LaunchedBrowser | null>
 }
 
 const ENSURE_DEPS: EnsureDeps = {
@@ -361,6 +434,7 @@ const ENSURE_DEPS: EnsureDeps = {
   endpointAlive,
   browserRunning,
   ownBrowser: runningOwnBrowser,
+  launchDaily: launchDailyBrowser,
 }
 
 /**
@@ -372,12 +446,14 @@ const ENSURE_DEPS: EnsureDeps = {
  * back through the rest of this list. A pinned endpoint (`cdpUrl`) or a named profile directory
  * (`userDataDir`) is an instruction, not a hint: when one of those is set and unreachable, the
  * failure is reported as it is, because starting a different browser would be answering a question
- * nobody asked. On the 「你正在用的浏览器」 route a browser that is *not running* is started — the
- * reader left that setting on, and a closed browser is the thing they asked the plugin to open —
- * while one that *is* running is never replaced by a second window: its windows are the reader's,
- * and the failure says what to do there instead (see `dailyRunningMessage`), except when the
- * running one is this plugin's own, which already carries a debugging port and is connected to
- * rather than refused over (`runningOwnBrowser`). Everything else
+ * nobody asked. On the 「你正在用的浏览器」 route a browser that is *not running* is opened the way
+ * the reader opens it themselves — the ruling of 2026-10-03: no debug flag, the profile's own
+ * 「允许远程调试」switch asked first, and the plugin's own copy only as the fallback for when that
+ * port never comes (`launchDailyBrowser`) — while a window of theirs that discovery could not
+ * speak to is never opened over: starting another would not hand it a port, so the failure says
+ * what to do there instead (see `dailyRunningMessage`), except when a browser of this plugin's
+ * own can serve, which already carries a debugging port and is connected to rather than refused
+ * over (`runningOwnBrowser`; `browserRunning` does not count our own windows). Everything else
  * starts the browser the settings page names: the same executable lookup, the same profile
  * directory, the same port-file trick, and the same idempotence — a second task finds the browser
  * the first one started instead of opening a second window.
@@ -403,15 +479,38 @@ export async function ensureBrowser(
       // there means it holds no debugging port, or is waiting on a 「允许远程调试？」 box — and that
       // second failure has its own answer, inside that window, which is the sentence discovery wrote.
       if (answeredInTheBrowser(error)) throw error
-      // A browser of this plugin's own is not the reader's window: it already carries a debugging
-      // port, so the run connects to it and the note names it — the refusal below is for the
-      // reader's window, which has no port to connect to.
+      const exe = findBrowserExecutable(kind, options.exeOverride)
+      // A window of theirs that discovery could not speak to is never opened over: another window
+      // would not hand it a port, so the failure says what to do instead. A browser of our own may
+      // still serve — it is not the reader's window, and `browserRunning` does not count it.
+      if (await deps.browserRunning(kind, exe)) {
+        const own = await deps.ownBrowser(kind)
+        if (own !== null) {
+          return { endpoint: await deps.discover({ ...options, cdpUrl: own.endpoint }), launched: own }
+        }
+        throw new Error(dailyRunningMessage(kind))
+      }
+      // Nothing of theirs is on screen: open theirs first — the ruling of 2026-10-03 removed the
+      // rule that this plugin must never start the everyday profile. The endpoint is not asked
+      // whether it answers: the launch waited for the port itself, and a pending 「允许远程调试？」
+      // is the connection's own wait, not a dead address.
+      const daily = await deps.launchDaily(kind, {
+        exeOverride: options.exeOverride,
+        timeoutMs: options.timeoutMs,
+      })
+      if (daily !== null) {
+        try {
+          return { endpoint: await deps.discover(options), launched: daily }
+        } catch (found) {
+          // Only the box sentence is passed through — it is the reader's to act on. Anything else
+          // is a browser that went away between the launch and this look; the fallback can have it.
+          if (answeredInTheBrowser(found)) throw found
+        }
+      }
+      // The plugin's own, already running: connect to it rather than open a second one of anything.
       const own = await deps.ownBrowser(kind)
       if (own !== null) {
         return { endpoint: await deps.discover({ ...options, cdpUrl: own.endpoint }), launched: own }
-      }
-      if (await deps.browserRunning(kind, findBrowserExecutable(kind, options.exeOverride))) {
-        throw new Error(dailyRunningMessage(kind))
       }
     }
   }

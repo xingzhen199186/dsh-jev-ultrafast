@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { BrowserConnection, EnsuredBrowser, LaunchedBrowser } from './browser/launch'
 import { ensureBrowser } from './browser/launch'
+import { dailyProfileDir } from './browser/discover'
 import type { Config as ConfigShape } from './config'
 import { resolveKey } from './credentials'
 import { resolveDecisionRoute } from './decision/providers'
@@ -210,13 +211,21 @@ export async function prepareRun(
 /**
  * What to say when a task had to start a browser itself, and nothing when it did not.
  *
- * A window that appeared on the reader's desktop is not something to leave unsaid, and the
- * two things they have to know about it are which profile it carries — this plugin's own
- * directory, named by the launcher's own wording rather than by a second copy of it here that
- * could drift — and that a site needing a login needs it once, by hand.
+ * A window that appeared on the reader's desktop is not something to leave unsaid, and the one
+ * thing they have to know depends on which profile it carries: this plugin's own directory needs
+ * the login warning (named by the launcher's own wording rather than by a second copy of it here
+ * that could drift), while the reader's everyday profile — opened for them since the ruling of
+ * 2026-10-03 — has its logins already and needs only the one click only they can make: the
+ * 「允许远程调试？」 box.
  */
 export function launchNote(launched: LaunchedBrowser | null): string {
   if (launched === null) return ''
+  if (launched.profileDir === dailyProfileDir(launched.kind)) {
+    return (
+      `本来没有可连的浏览器，已按设置打开 ${launched.label} 并连上：${launched.source}。` +
+      '登录状态就是你日常那些；如果它弹出「允许远程调试？」，在框上点「允许」，插件会一直等着。'
+    )
+  }
   return (
     `本来没有可连的浏览器，已按设置启动 ${launched.label} 并连上：${launched.source}。` +
     '这一份数据目录与你日常那个分开，需要登录的站点第一次要你亲自登录一次。'
