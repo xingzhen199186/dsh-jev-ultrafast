@@ -274,9 +274,9 @@
 
 **测试绿 ≠ 能力有。** 这一层是纯函数与字符级的：注入脚本的检查是文本级的（没有反引号、正则没被吃掉、能 `new Function` 解析），假 DOM 测试里 `getBoundingClientRect` / `checkVisibility` / `getComputedStyle` 全是桩。**"发现元素"这件事的判据，离线测不了。**
 
-### 5.3 全部设置项（20 项，逐条）
+### 5.3 全部设置项（22 项，逐条）
 
-设置页分五块。键名都是平铺的（没有 `a.b` 两段名），而且每个字段都是热的：运行期间改了值，**下一次任务即生效，不必重启**。
+设置页分块展示。键名都是平铺的（没有 `a.b` 两段名），而且每个字段都是热的：运行期间改了值，**下一次任务即生效，不必重启**。
 
 **浏览器**（3 项）：`browserConnection`（`daily`｜`plugin`，默认 `daily`）= 连接方式，用你正在用的浏览器，还是插件自己另起一个；`browserKind`（`edge`｜`chrome`，默认 `edge`）= 起哪个；`cdpUrl`（默认空）= 调试端口地址，留空自动查找。
 
@@ -286,11 +286,13 @@
 
 **任务**（2 项）：`maxSteps`（60）= 动作上限（决策上限是它的两倍）；`screenshots`（`false`）= 每一步都截图。原先挂在这里的三个开关（`guessClickableElements`、`dismissCoveredTarget`、`preferRelevantTab`）与「排除死路元素」一起，于 2026-10-02 按读者要求挪走：三个默认开的挪进「高级设置」，`excludeDeadEndElements` 直接删掉（判定与记录保留，配置项不再存在）。
 
+**中控**（3 项）：`controlEnabled`、`controlPin`、`controlCallCap` —— 任务清单那套「先勾选条目再动手」的开关与上限。
+
 **高级设置**（10 项）：`browserPath`（默认空）、`userDataDir`（默认空）、`decisionKeyRef`（默认空）、`decisionEndpoint`（默认空）、`textKeyRef`（默认空）、`textBaseUrl`（默认空）、`textReasoning`（`none`｜`auto`，默认 `none`），加上从「任务」挪来的 `guessClickableElements`（`true`）、`dismissCoveredTarget`（`true`）、`preferRelevantTab`（`true`）。
 
-加起来 3 + 2 + 2 + 2 + 10 = **19 项**。
+加起来 3 + 2 + 2 + 2 + 3 + 10 = **22 项**（2026-10-03 按 `src/config.ts` 的 schema 重数：键名去重后 22 个，与设置页 `FIELDS` 一一对应）。
 
-> 今天新增的四个是 `guessClickableElements`、`dismissCoveredTarget`、`preferRelevantTab`（默认全开）和 `excludeDeadEndElements`（默认关）。**四个里没有一个做过真机对照**；`excludeDeadEndElements` 只在 `s9ax` 一轮里被打开过。
+> 2026-10-01 新增的四个是 `guessClickableElements`、`dismissCoveredTarget`、`preferRelevantTab`（默认全开）和 `excludeDeadEndElements`（默认关）。**四个里没有一个做过真机对照**；`excludeDeadEndElements` 只在 `s9ax` 一轮里被打开过，并于 2026-10-02 从设置页与配置项里删除（判定与记录保留）。
 
 ### 5.4 留痕里有什么、没有什么
 

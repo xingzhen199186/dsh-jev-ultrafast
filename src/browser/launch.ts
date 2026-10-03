@@ -17,12 +17,14 @@
  * browser at all, rather than a reader pressing the button. The deciding is still this
  * file's — a model that asked for a task never gets to name an executable or a port.
  */
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { promisify } from 'node:util'
 import {
   BROWSER_LABELS,
+  DailyBrowserError,
   discoverBrowser,
   pluginProfileDir,
   readActivePort,
@@ -219,6 +221,83 @@ export async function launchBrowser(
   return { kind, label, exe, endpoint, profileDir, source: `插件启动的 ${label}（${profileDir}）` }
 }
 
+/** What Windows calls each browser's process, for a machine where the executable was not found. */
+const WINDOWS_IMAGE: Record<BrowserKind, string> = { chrome: 'chrome.exe', edge: 'msedge.exe' }
+
+const runTasklist = promisify(execFile)
+
+/**
+ * Whether the chosen browser is already running on this machine.
+ *
+ * Windows only: `tasklist` is Windows' own process list, and this launcher is aimed at the machine
+ * the reader is sitting at. Everywhere else — and on any failure of the command itself, including a
+ * machine where it is not on `PATH` — the answer is "not running". That is the answer that opens a
+ * window rather than refusing to: a wrong "no" costs one window with the plugin's own profile,
+ * while a wrong "yes" would leave the reader with a sentence and no browser at all.
+ *
+ * The name asked about is the executable's own (`msedge.exe`), or the name Windows gives that
+ * browser when the executable could not be found anywhere.
+ */
+export async function browserRunning(
+  kind: BrowserKind,
+  exe: string | null,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  if (platform !== 'win32') return false
+  const image = exe === null ? WINDOWS_IMAGE[kind] : basename(exe)
+  try {
+    const { stdout } = await runTasklist('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], {
+      timeout: 5_000,
+      windowsHide: true,
+    })
+    return stdout.toLowerCase().includes(image.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether the chosen browser is up but cannot be reached for a reason that is fixed *inside* it.
+ *
+ * One of the daily route's failures is not about a missing port: the browser is up with its port
+ * open and is waiting on a 「允许远程调试？」 box the reader has not clicked yet. Replacing that
+ * answer with "close every window" would send them to the wrong place, so it is kept as it is.
+ * `disconnected` is here for the same reason, though a discovery never produces it — only a
+ * connection that was being held does.
+ */
+function answeredInTheBrowser(error: unknown): boolean {
+  return (
+    error instanceof DailyBrowserError && (error.problem === 'not-authorized' || error.problem === 'disconnected')
+  )
+}
+
+/**
+ * The sentence for a browser that is up without a debugging port: the only case where the daily
+ * route refuses to start a second window.
+ *
+ * Both halves of the answer happen outside this page, and they lead to different browsers — the
+ * first to one with the plugin's own profile, the second to the reader's own with its logins — so
+ * both are named rather than one being chosen for them.
+ */
+function dailyRunningMessage(kind: BrowserKind): string {
+  const label = BROWSER_LABELS[kind]
+  return (
+    `${label} 正开着，但它没有开调试端口（或者那个端口已经不是它现在用的了），插件连不上它。两条办法：把 ${label} 的窗口全部关掉，再跑一次` +
+    `——插件会替你打开一个（用它自己那份数据目录，和你日常那个分开）；` +
+    `或者用它自带的、带调试端口的那个快捷方式打开 ${label}，插件会去连它。`
+  )
+}
+
+/** The sentence for an address that was found and no longer answers, on a route that may not replace it. */
+function staleEndpointMessage(endpoint: BrowserEndpoint): string {
+  const where = endpoint.httpUrl || endpoint.wsUrl
+  return (
+    `找到的调试地址 ${where}（${endpoint.source}）已经没有回应了——多半是那个浏览器已经关掉，或者它换了一个新的调试地址。` +
+    '「调试端口」和「数据目录」是你明确填的，插件就按它去找，不会替你换成别的浏览器：把填的那些清空，' +
+    '或者改成这个浏览器现在真正在用的地址，再跑一次。'
+  )
+}
+
 export interface EnsureOptions extends DiscoverOptions {
   /** The 「浏览器程序」 setting, for a portable install that is not where we look. */
   exeOverride?: string
@@ -233,48 +312,129 @@ export interface EnsuredBrowser {
   launched: LaunchedBrowser | null
 }
 
-/** Injectable for tests: nothing in this file should ever really start a browser under vitest. */
+/**
+ * Injectable for tests: nothing in this file should ever really start a browser, ask a real socket
+ * or run `tasklist` under vitest.
+ */
 export interface EnsureDeps {
   discover: (options: DiscoverOptions) => Promise<BrowserEndpoint>
   launch: (kind: BrowserKind, options: LaunchOptions) => Promise<LaunchedBrowser>
+  /** Whether an endpoint that was discovered still answers. */
+  endpointAlive: (endpoint: BrowserEndpoint) => Promise<boolean>
+  /** Whether the chosen browser is already running on this machine. */
+  browserRunning: (kind: BrowserKind, exe: string | null) => Promise<boolean>
 }
 
-const ENSURE_DEPS: EnsureDeps = { discover: discoverBrowser, launch: launchBrowser }
+const ENSURE_DEPS: EnsureDeps = {
+  discover: discoverBrowser,
+  launch: launchBrowser,
+  endpointAlive,
+  browserRunning,
+}
 
 /**
  * The browser a task will drive: the one already there, or one started because there was none.
  *
- * Three things it deliberately does *not* do, all of them to keep a task from driving a browser
- * the reader did not choose. On the 「你正在用的浏览器」 route nothing is ever started: that
- * window is the reader's own, so a failure there is reported as it is rather than answered with
- * a second browser. A pinned endpoint (`cdpUrl`) or a named profile directory (`userDataDir`) is
- * an instruction, not a hint: when one of those is set and unreachable, the failure is reported
- * as it is, because starting a different browser would be answering a question nobody asked. And
- * when there is nothing pinned and nothing running, the browser that starts is the one the
- * settings page already says — same executable lookup, same profile directory, same port-file
- * trick, and the same idempotence: a second task finds the browser the first one started instead
- * of opening a second window.
+ * Four things it decides, in this order. An address that was found by discovery is asked once more
+ * whether it still answers, because a recorded address outlives the browser that wrote it and a
+ * step that starts there dies on its first move — a dead one counts as no browser at all and goes
+ * back through the rest of this list. A pinned endpoint (`cdpUrl`) or a named profile directory
+ * (`userDataDir`) is an instruction, not a hint: when one of those is set and unreachable, the
+ * failure is reported as it is, because starting a different browser would be answering a question
+ * nobody asked. On the 「你正在用的浏览器」 route a browser that is *not running* is started — the
+ * reader left that setting on, and a closed browser is the thing they asked the plugin to open —
+ * while one that *is* running is never replaced by a second window: its windows are the reader's,
+ * and the failure says what to do there instead (see `dailyRunningMessage`). Everything else
+ * starts the browser the settings page names: the same executable lookup, the same profile
+ * directory, the same port-file trick, and the same idempotence — a second task finds the browser
+ * the first one started instead of opening a second window.
  */
 export async function ensureBrowser(
   options: EnsureOptions = {},
   deps: EnsureDeps = ENSURE_DEPS,
 ): Promise<EnsuredBrowser> {
   try {
-    return { endpoint: await deps.discover(options), launched: null }
+    const endpoint = await deps.discover(options)
+    if (await deps.endpointAlive(endpoint)) return { endpoint, launched: null }
+    // A recorded address outlives the browser that wrote it. One that no longer answers is passed
+    // on as "nothing was found" — never as an endpoint a step would die on at its first move.
+    throw new Error(staleEndpointMessage(endpoint))
   } catch (error) {
-    // The reader's own browser is not this plugin's to start: 「连接方式」 chose the window they
-    // are already working in, and the reason it could not be reached is the answer they need.
-    if (options.connection === 'daily') throw error
+    // A setting the reader typed is an instruction, not a hint, and this comes before the daily
+    // route for the same reason: a pinned address or profile directory is not ours to replace.
     if (options.cdpUrl?.trim() || options.userDataDir?.trim()) throw error
-    const launched = await deps.launch(options.preferredKind ?? 'edge', {
-      exeOverride: options.exeOverride,
-      timeoutMs: options.timeoutMs,
-    })
-    // Discovery again, against the endpoint that was just written to the profile
-    // directory: this returns the same shape (socket URL, version, provenance) the
-    // found-browser path returns, so the caller cannot tell the two apart by accident.
-    return { endpoint: await deps.discover({ ...options, cdpUrl: launched.endpoint }), launched }
+
+    if (options.connection === 'daily') {
+      const kind = options.preferredKind ?? 'edge'
+      // The reader's own browser is not this plugin's to replace while it is up. Discovery failing
+      // there means it holds no debugging port, or is waiting on a 「允许远程调试？」 box — and that
+      // second failure has its own answer, inside that window, which is the sentence discovery wrote.
+      if (answeredInTheBrowser(error)) throw error
+      if (await deps.browserRunning(kind, findBrowserExecutable(kind, options.exeOverride))) {
+        throw new Error(dailyRunningMessage(kind))
+      }
+    }
   }
+
+  const launched = await deps.launch(options.preferredKind ?? 'edge', {
+    exeOverride: options.exeOverride,
+    timeoutMs: options.timeoutMs,
+  })
+  // Discovery again, against the endpoint that was just written to the profile
+  // directory: this returns the same shape (socket URL, version, provenance) the
+  // found-browser path returns, so the caller cannot tell the two apart by accident.
+  // It is not asked whether it answers: the launcher waited for that endpoint itself,
+  // and there is no second browser left to fall back to.
+  return { endpoint: await deps.discover({ ...options, cdpUrl: launched.endpoint }), launched }
+}
+
+/**
+ * Whether a discovered endpoint still answers, asked of its HTTP door.
+ *
+ * A recorded address outlives the browser that wrote it: the port file next to a profile keeps
+ * naming a socket that was closed hours ago, and the port it names may by then belong to something
+ * that is not a browser at all. A step that starts from such an address dies on its first move, so
+ * an endpoint counts as alive only when it answers *as DevTools* — either `/json/version` with the
+ * browser's own name, or `/json/list` with a target list. A service that merely holds the port and
+ * says 404 to both is dead here, which is the point: a needless second window is a smaller loss
+ * than a task that cannot take its first step.
+ *
+ * Exported for its own test: this is the question that decides whether the reported failure — a
+ * remembered address that no longer works — reaches a step or the launcher instead.
+ */
+export async function endpointAlive(endpoint: BrowserEndpoint): Promise<boolean> {
+  const httpUrl = httpBaseOf(endpoint)
+  if (httpUrl === null) return true
+  if ((await readVersion(httpUrl)) !== null) return true
+  return await answersDevTools(httpUrl)
+}
+
+/** Does this base answer the other DevTools question — a target list rather than a version? */
+async function answersDevTools(httpUrl: string, timeoutMs = 1_500): Promise<boolean> {
+  try {
+    const response = await fetch(`${httpUrl}/json/list`, { signal: AbortSignal.timeout(timeoutMs) })
+    if (!response.ok) return false
+    return Array.isArray((await response.json()) as unknown)
+  } catch {
+    return false
+  }
+}
+
+/** The HTTP door behind an endpoint: its own base, or the one its socket address names. */
+function httpBaseOf(endpoint: BrowserEndpoint): string | null {
+  const httpUrl = endpoint.httpUrl.trim()
+  if (httpUrl.length > 0) return httpUrl
+  const socket = endpoint.wsUrl.trim()
+  const scheme = socket.startsWith('wss://') ? 'https://' : socket.startsWith('ws://') ? 'http://' : null
+  if (scheme === null) return null
+  const host = socket.slice(socket.indexOf('//') + 2).split('/')[0] ?? ''
+  return host.length > 0 ? `${scheme}${host}` : null
+}
+
+/** The loopback port an HTTP base names, or null for anything that is not one. */
+function loopbackPort(httpUrl: string): number | null {
+  const match = /^https?:\/\/(?:127\.0\.0\.1|localhost):(\d+)/.exec(httpUrl)
+  return match === null ? null : Number.parseInt(match[1] ?? '', 10)
 }
 
 /** Is a live endpoint recorded in this profile directory? Reads the file, then asks it. */

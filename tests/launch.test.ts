@@ -23,10 +23,12 @@ import {
   BROWSER_KINDS,
   BROWSER_LABELS,
   browserExecutableCandidates,
+  browserRunning,
   ensureBrowser,
   findBrowserExecutable,
   keepSessionCookies,
   type BrowserKind,
+  type EnsureDeps,
   type LaunchedBrowser,
   type LaunchOptions,
 } from '../src/browser/launch'
@@ -95,6 +97,13 @@ describe('browser launcher', () => {
     expect(findBrowserExecutable('chrome', portable, () => false)).toBeNull()
     // Whitespace is a box that looks filled and is not.
     expect(findBrowserExecutable('chrome', '   ', (path) => path.endsWith('chrome.exe'))).toContain('chrome.exe')
+  })
+
+  it('never asks the operating system for a process list it does not know', async () => {
+    // The answer that opens a window rather than refusing to. Nothing is spawned here either: the
+    // platform comes first, which is the whole point of a platform this plugin has no list for.
+    expect(await browserRunning('edge', 'C:\\msedge.exe', 'darwin')).toBe(false)
+    expect(await browserRunning('chrome', null, 'linux')).toBe(false)
   })
 
   it('tries the chosen browser before the other one, and reads both from the same place', () => {
@@ -194,6 +203,15 @@ describe('keeping the logins across a restart', () => {
  */
 describe('the browser a task finds or starts', () => {
   const unreachable = new Error('没有找到可用的浏览器调试端口。设置页里的「启动并连接」可以由插件自己启动一个 Chrome 或 Edge；')
+  /**
+   * The two answers a test gives instead of the machine's: whether an endpoint that was discovered
+   * still answers, and whether the browser is already running. A real one would open a socket, and
+   * the second would list this machine's processes — neither belongs in a test.
+   */
+  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning'> = {
+    endpointAlive: async () => true,
+    browserRunning: async () => false,
+  }
   const found: BrowserEndpoint = {
     httpUrl: 'http://127.0.0.1:9222',
     wsUrl: 'ws://127.0.0.1:9222/devtools/browser/aaa',
@@ -220,6 +238,7 @@ describe('the browser a task finds or starts', () => {
     const ensured = await ensureBrowser(
       { preferredKind: 'edge' },
       {
+        ...injected,
         discover: async () => found,
         launch: async () => {
           launches += 1
@@ -237,6 +256,7 @@ describe('the browser a task finds or starts', () => {
     const ensured = await ensureBrowser(
       { preferredKind: 'edge', exeOverride: 'D:\\portable\\msedge.exe' },
       {
+        ...injected,
         discover: async (options) => {
           lookups.push({ ...options })
           if (!options.cdpUrl) throw unreachable
@@ -261,6 +281,7 @@ describe('the browser a task finds or starts', () => {
     await ensureBrowser(
       {},
       {
+        ...injected,
         discover: async (options) => {
           if (!options.cdpUrl) throw unreachable
           return ended(options.cdpUrl)
@@ -279,6 +300,7 @@ describe('the browser a task finds or starts', () => {
     // would drive a browser they did not choose, which is worse than saying it is not there.
     let launches = 0
     const refuse = {
+      ...injected,
       discover: async () => {
         throw unreachable
       },
@@ -290,10 +312,32 @@ describe('the browser a task finds or starts', () => {
     await expect(ensureBrowser({ cdpUrl: 'http://127.0.0.1:9222' }, refuse)).rejects.toBe(unreachable)
     await expect(ensureBrowser({ userDataDir: 'C:\\chrome-cdp' }, refuse)).rejects.toBe(unreachable)
     expect(launches).toBe(0)
+    // The same instruction, this time found and already dead: a pinned address is not replaced
+    // either, and what the reader gets is a sentence naming the address that stopped answering.
+    await expect(
+      ensureBrowser(
+        { cdpUrl: 'ws://127.0.0.1:9222/devtools/browser/旧的那个' },
+        {
+          ...injected,
+          endpointAlive: async () => false,
+          discover: async () => ({
+            ...found,
+            httpUrl: '',
+            wsUrl: 'ws://127.0.0.1:9222/devtools/browser/旧的那个',
+          }),
+          launch: async () => {
+            launches += 1
+            return started
+          },
+        },
+      ),
+    ).rejects.toThrow(/已经没有回应/)
+    expect(launches).toBe(0)
     // Whitespace is a box that looks filled and is not, so it pins nothing.
     await ensureBrowser(
       { cdpUrl: '   ' },
       {
+        ...injected,
         discover: async (options) => {
           if (options.cdpUrl !== started.endpoint) throw unreachable
           return ended(options.cdpUrl)
@@ -313,6 +357,7 @@ describe('the browser a task finds or starts', () => {
       ensureBrowser(
         { preferredKind: 'edge' },
         {
+          ...injected,
           discover: async () => {
             throw unreachable
           },

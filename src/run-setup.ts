@@ -158,7 +158,8 @@ export async function prepareRun(
   // settings page names — the same act as its 「启动并连接」 button, reached from a task
   // instead of a press. The endpoint it settled on is handed to the loop, so the run
   // drives exactly the browser that was found or started here. On the 「你正在用的浏览器」
-  // route nothing is started at all: an unreachable browser there is reported, not replaced.
+  // route that window is never replaced: one that is merely closed is opened for the reader, and
+  // one that is already up is reported rather than answered with a second window.
   const ensured = await ensureBrowser({
     cdpUrl: settings.cdpUrl || undefined,
     userDataDir: settings.userDataDir || undefined,
@@ -210,14 +211,15 @@ export async function prepareRun(
  * What to say when a task had to start a browser itself, and nothing when it did not.
  *
  * A window that appeared on the reader's desktop is not something to leave unsaid, and the
- * one thing they have to know about it is that it is not their everyday browser: it carries
- * the plugin's own profile directory, so a site that needs a login needs it once, by hand.
+ * two things they have to know about it are which profile it carries — this plugin's own
+ * directory, named by the launcher's own wording rather than by a second copy of it here that
+ * could drift — and that a site needing a login needs it once, by hand.
  */
 export function launchNote(launched: LaunchedBrowser | null): string {
   if (launched === null) return ''
   return (
-    `本来没有可连的浏览器，已按设置启动 ${launched.label} 并连上` +
-    `（它用的是插件自己那份数据目录，与你日常那个分开；需要登录的站点第一次要你亲自登录一次）`
+    `本来没有可连的浏览器，已按设置启动 ${launched.label} 并连上：${launched.source}。` +
+    '这一份数据目录与你日常那个分开，需要登录的站点第一次要你亲自登录一次。'
   )
 }
 

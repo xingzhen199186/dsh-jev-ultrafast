@@ -3,8 +3,9 @@
  *
  * Nothing here opens a window. What is worth testing is the pair of files the browser writes
  * about itself, what each of the four failures says, and — the reason this route exists at all
- * — that it never starts anything. All of it runs on temporary directories and a local server
- * standing in for a browser's HTTP door, so a passing run leaves this machine exactly as it was.
+ * — that a browser which is already up is never answered with a second one. All of it runs on
+ * temporary directories and a local server standing in for a browser's HTTP door, so a passing
+ * run leaves this machine exactly as it was.
  */
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
@@ -14,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DailyBrowserError,
+  dailyFailure,
   dailyProfileDir,
   discoverBrowser,
   discoverDailyBrowser,
@@ -22,8 +24,15 @@ import {
   remoteDebuggingEnabled,
   wsUrlFromActivePort,
   type BrowserEndpoint,
+  type DiscoverOptions,
 } from '../src/browser/discover'
-import { ensureBrowser } from '../src/browser/launch'
+import {
+  ensureBrowser,
+  type BrowserKind,
+  type EnsureDeps,
+  type LaunchedBrowser,
+  type LaunchOptions,
+} from '../src/browser/launch'
 
 /** A profile directory holding the two files this route reads, and nothing else. */
 function profile(files: { port?: string; enabled?: boolean } = {}): string {
@@ -69,6 +78,16 @@ async function refusal(promise: Promise<unknown>): Promise<DailyBrowserError> {
     throw error
   }
   throw new Error('这一次本该连不上，却连上了')
+}
+
+/** The sentence a call produced, for tests about what the reader is told rather than about a class. */
+async function messageOf(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  throw new Error('这一次本该拒绝，却没有拒绝')
 }
 
 describe('the port file a browser writes next to its own profile', () => {
@@ -241,12 +260,37 @@ describe('what a daily run is allowed to do to the browser', () => {
     browser: 'Edge/154.0.4258.37',
     source: '你正在用的 Edge（C:\\Users\\me\\AppData\\Local\\Microsoft\\Edge\\User Data）',
   }
+  const started: LaunchedBrowser = {
+    kind: 'edge',
+    label: 'Edge',
+    exe: 'C:\\msedge.exe',
+    endpoint: 'http://127.0.0.1:63412',
+    profileDir: 'C:\\profile\\edge',
+    source: '插件启动的 Edge（C:\\profile\\edge）',
+  }
+  /**
+   * The two answers a test gives instead of the machine's: whether a discovered endpoint still
+   * answers, and whether the browser is running. Both ordinary here — up, and not running — and a
+   * test that needs the other answer says so itself.
+   */
+  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning'> = {
+    endpointAlive: async () => true,
+    browserRunning: async () => false,
+  }
 
-  it('connects to the one that answers, and still starts nothing', async () => {
+  /** What discovery sees the second time: the browser this call started, at its own endpoint. */
+  const atEndpoint = (httpUrl: string): BrowserEndpoint => ({
+    ...found,
+    httpUrl,
+    wsUrl: `${httpUrl.replace('http', 'ws')}/devtools/browser/bbb`,
+  })
+
+  it('connects to the one that answers, and starts nothing', async () => {
     let launches = 0
     const ensured = await ensureBrowser(
       { connection: 'daily', preferredKind: 'edge' },
       {
+        ...injected,
         discover: async () => found,
         launch: async () => {
           launches += 1
@@ -258,25 +302,116 @@ describe('what a daily run is allowed to do to the browser', () => {
     expect(launches).toBe(0)
   })
 
-  it('reports why it could not connect instead of starting a browser of its own', async () => {
-    // The whole point of the route: the window is the reader's own. A second browser would be
-    // answering a question nobody asked, and would not be where their logins are.
+  it('opens the browser for the reader when it is not running, and connects to that one', async () => {
+    // The reader left 「你正在用的浏览器」 selected and closed the window: they asked for a task
+    // that works either way, and a closed browser is the one case where opening one is the answer.
+    // What opens is the plugin's own profile, never a second copy of theirs.
+    const lookups: DiscoverOptions[] = []
+    const launches: Array<{ kind: BrowserKind; options: LaunchOptions }> = []
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        discover: async (options) => {
+          lookups.push({ ...options })
+          if (!options.cdpUrl) throw dailyFailure('edge', 'not-running')
+          return atEndpoint(options.cdpUrl)
+        },
+        launch: async (kind, options) => {
+          launches.push({ kind, options })
+          return started
+        },
+      },
+    )
+    // Looked once, started, then looked again *at the launched endpoint*: the run must drive the
+    // browser this call started rather than whatever a later search would find.
+    expect(lookups.map((options) => options.cdpUrl)).toEqual([undefined, started.endpoint])
+    expect(launches).toEqual([{ kind: 'edge', options: { exeOverride: undefined, timeoutMs: undefined } }])
+    expect(ensured.launched).toBe(started)
+    expect(ensured.endpoint.httpUrl).toBe(started.endpoint)
+  })
+
+  it('does not open a second window while the reader’s browser is up, and says what to do instead', async () => {
+    // The window is the reader's own. A second one would not be where their logins are, so the
+    // answer is a sentence with the two things they can do, not a browser they did not ask for.
     let launches = 0
-    const refused = new DailyBrowserError('switch-off', '你正在用的 Edge 还没打开远程调试。')
+    const message = await messageOf(
+      ensureBrowser(
+        { connection: 'daily', preferredKind: 'edge' },
+        {
+          ...injected,
+          browserRunning: async () => true,
+          discover: async () => {
+            throw dailyFailure('edge', 'switch-off')
+          },
+          launch: async () => {
+            launches += 1
+            throw new Error('浏览器已经开着，这条路不该再开一个')
+          },
+        },
+      ),
+    )
+    // Both halves of the answer are named, because they lead to different browsers: closing every
+    // window opens one with the plugin's own profile, the debug-port shortcut keeps their logins.
+    expect(message).toContain('两条办法')
+    expect(message).toContain('关掉')
+    expect(message).toContain('调试端口')
+    expect(launches).toBe(0)
+  })
+
+  it('keeps discovery’s own sentence when the browser is up and waiting on a click', async () => {
+    // The one failure that is not about a missing port: the browser is up with its port open and
+    // is waiting on a 「允许远程调试？」 box. Telling the reader to close every window would send
+    // them to the wrong place, so the sentence about the box is the one they get.
+    const refused = dailyFailure('edge', 'not-authorized')
     await expect(
       ensureBrowser(
         { connection: 'daily', preferredKind: 'edge' },
         {
+          ...injected,
+          browserRunning: async () => true,
           discover: async () => {
             throw refused
           },
           launch: async () => {
-            launches += 1
-            throw new Error('这条路不该启动任何浏览器')
+            throw new Error('浏览器已经开着，这条路不该再开一个')
           },
         },
       ),
     ).rejects.toBe(refused)
-    expect(launches).toBe(0)
+  })
+
+  it('treats a recorded address that stopped answering as no browser at all, and opens one', async () => {
+    // The failure this release fixes: a remembered address (`ws://…/devtools/browser/<旧 uuid>`)
+    // outlives the browser that wrote it, and a step that starts there dies on its first move.
+    const stale: BrowserEndpoint = {
+      wsUrl: 'ws://127.0.0.1:9222/devtools/browser/旧的那个',
+      httpUrl: 'http://127.0.0.1:9222',
+      browser: '未知浏览器',
+      source: '配置里的 cdpUrl（ws://127.0.0.1:9222/devtools/browser/旧的那个）',
+    }
+    const lookups: DiscoverOptions[] = []
+    let alive = 0
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        browserRunning: async () => false,
+        endpointAlive: async (endpoint) => {
+          alive += 1
+          return endpoint.wsUrl !== stale.wsUrl
+        },
+        discover: async (options) => {
+          lookups.push({ ...options })
+          return options.cdpUrl ? atEndpoint(options.cdpUrl) : stale
+        },
+        launch: async () => started,
+      },
+    )
+    // The recorded address was asked about once, before the launch rather than after it.
+    expect(alive).toBe(1)
+    expect(lookups.map((options) => options.cdpUrl)).toEqual([undefined, started.endpoint])
+    expect(ensured.launched).toBe(started)
+    expect(ensured.endpoint.httpUrl).toBe(started.endpoint)
   })
 })

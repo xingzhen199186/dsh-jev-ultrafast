@@ -230,12 +230,13 @@ async function handle(
         send(res, 405, { error: '这个接口只接受 POST。' })
         return
       }
-      // The reader's own browser is not this plugin's to start or close. Refusing here is what
-      // keeps the page's button from becoming a press that quietly does nothing.
+      // The reader's own browser is not what this button is for: it starts and connects the
+      // plugin's own one, so a press here is answered with what to change rather than by opening
+      // a window that the 「连接方式」 setting says not to use.
       if (config.browserConnection.get() === 'daily') {
         send(res, 409, {
           error:
-            '现在的「连接方式」是「你正在用的浏览器」：插件不启动、也不关闭任何浏览器——那一个是你自己的。' +
+            '现在的「连接方式」是「你正在用的浏览器」：这个按钮启动和连接的是插件自己那个浏览器，不是你在用的那个。' +
             '要让插件自己起一个，先把「连接方式」改成「插件自己的浏览器」，再按这个按钮。',
         })
         return
