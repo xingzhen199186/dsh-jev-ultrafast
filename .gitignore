@@ -4,6 +4,10 @@ node_modules/
 # Build output (produced by `pnpm build` / the `prepare` script)
 lib/
 
+# Which build a tarball holds: written by scripts/build-info.mjs at build time, so it
+# describes the build rather than the source. It ships inside the package (see "files").
+build-info.json
+
 # Packaged tarballs
 *.tgz
 

@@ -32,6 +32,7 @@
   },
   "files": [
     "lib",
+    "build-info.json",
     "cordis.patch.yml",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
@@ -43,10 +44,10 @@
   ],
   "scripts": {
     "build": "tsdown",
-    "postbuild": "node scripts/check-client-id.mjs",
+    "postbuild": "node scripts/check-client-id.mjs && node scripts/build-info.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepare": "tsdown"
+    "prepare": "tsdown && node scripts/build-info.mjs"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
