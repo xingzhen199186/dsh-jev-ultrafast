@@ -157,6 +157,23 @@ export interface AnswerContext {
 }
 
 /**
+ * The model read the page and said the goal's result was not on it: `{"text": null}`, the answer
+ * `FINAL_ANSWER` offers for a page with nothing to report.
+ *
+ * Neither a sentence nor a failure. The question was answered, and the answer is about the page —
+ * so it travels as its own kind of error rather than as a `TextResult`, which this door only ever
+ * uses for words that were written, and a caller holding a `TextResult` is holding words. The
+ * distinction is the whole point of the class: `loop.ts` carries it to the reader as the model's
+ * own judgement, where the plain `Error` below is a model that never handed a sentence over at all.
+ */
+export class NoResultOnPage extends Error {
+  constructor() {
+    super('文本模型说最后这一页没有目标的结果')
+    this.name = 'NoResultOnPage'
+  }
+}
+
+/**
  * Ask, once, for the result in the model's own words: the one thing an operation table cannot carry.
  *
  * Same door and same one-key JSON shape as the field value above, with the question changed — that
@@ -169,6 +186,12 @@ export interface AnswerContext {
  * The length is the one rule it does not share with the field door. A 2000-character field value is
  * a model that has lost the thread; a list read off a page is not, and the goal may have asked for
  * exactly that. The question asks for a few sentences and the answer is taken as it comes.
+ *
+ * Three things can leave here, and the caller can tell them apart: the sentence (`TextResult`), the
+ * model's own "this page shows no result for the goal" (`NoResultOnPage`), and everything else —
+ * not JSON, the wrong key, the wrong type, a call that never came back — as a plain `Error`. Only
+ * the literal `null` is the middle one: an empty string, a missing key and a second key are all a
+ * model that did not answer the question, and are read as such.
  */
 export async function answerText(source: TextHelperSource, context: AnswerContext): Promise<TextResult> {
   const started = Date.now()
@@ -182,7 +205,9 @@ export async function answerText(source: TextHelperSource, context: AnswerContex
   }
   const record = parsed as { text?: unknown } | null
   const value = record?.text
-  if (Object.keys(record ?? {}).length !== 1 || typeof value !== 'string' || !value.trim()) {
+  const keys = Object.keys(record ?? {})
+  if (keys.length === 1 && value === null) throw new NoResultOnPage()
+  if (keys.length !== 1 || typeof value !== 'string' || !value.trim()) {
     throw new Error('文本模型没有给出可用的结论')
   }
   return {

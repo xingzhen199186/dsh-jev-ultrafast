@@ -14,7 +14,7 @@ import { runTask, verdictText } from './loop'
 import type { FollowRecord, RunStatus, TaskResult } from './loop'
 import { registerPanel } from './panel'
 import { MAX_PAGE_TEXT } from './prompts'
-import { LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW } from './protocol'
+import { LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW, NO_RESULT, NO_RESULT_BODY_BELOW } from './protocol'
 import { browserNote, prepareRun } from './run-setup'
 
 export const name = 'dsh-jev-ultrafast'
@@ -48,6 +48,12 @@ interface TaskOutput {
    * plugin's (see `loop.ts`): the two are shown as two lines so a reader can tell them apart.
    */
   answer: string
+  /**
+   * Which of the two silences the empty `answer` above is, when it is one of them: the model's own
+   * "this page has no result for the goal" (`'none'`), or a sentence that never arrived (`'failed'`).
+   * Absent on a run that said something, and on one nobody asked. `loop.ts` is where it is decided.
+   */
+  answerMissing?: 'none' | 'failed'
   /** Something this run did beyond running the task: starting a browser, today. Empty usually. */
   note: string
   url: string
@@ -126,6 +132,7 @@ export function apply(ctx: Context, config: ConfigShape): void {
             unmet: { type: 'array', items: { type: 'string' }, required: true },
             verified: { type: 'boolean', required: true },
             answer: { type: 'string', required: true },
+            answerMissing: { type: 'string', enum: ['none', 'failed'] },
             note: { type: 'string', required: true },
             url: { type: 'string', required: true },
             title: { type: 'string', required: true },
@@ -152,12 +159,17 @@ export function apply(ctx: Context, config: ConfigShape): void {
             `结果：${verdictText(value.status, value.reason, value.unmet, value.verified)}`,
           ]
           // What the model said it found, kept apart from the judgement above by its own lead-in and
-          // its own line — and, when it had nothing to hand over, replaced by the sentence that says
-          // so, with the final page's text below it either way (the caller can read the answer off
-          // that text itself, and a run that came back without one must not look like a run that
-          // found nothing to report).
+          // its own line — and, when it had nothing to hand over, replaced by the sentence that fits
+          // what happened, with the final page's text below it either way (the caller can read the
+          // answer off that text itself, and a run that came back without one must not look like a
+          // run that found nothing to report). The model saying the page carries no result for the
+          // goal and the model saying nothing at all are two different facts, so each has its words.
           if (value.answer) summary.push(`它自己说：${value.answer}`)
-          else summary.push(value.text ? NO_ANSWER_BODY_BELOW : NO_ANSWER)
+          else {
+            const [said, withBody] =
+              value.answerMissing === 'none' ? [NO_RESULT, NO_RESULT_BODY_BELOW] : [NO_ANSWER, NO_ANSWER_BODY_BELOW]
+            summary.push(value.text ? withBody : said)
+          }
           summary.push(`执行 ${value.steps} 步、${value.decisions} 次决策，用时 ${(value.elapsedMs / 1000).toFixed(1)} 秒`)
           if (value.verification) summary.push(value.verification)
           if (value.omittedActions > 0) {
@@ -325,6 +337,9 @@ export function toOutput(result: TaskResult, note = ''): TaskOutput {
     unmet: result.unmet,
     verified: result.verified,
     answer: result.answer,
+    // Written only when there is an empty answer to explain; the schema above declares the key, so
+    // the value that reaches the caller can carry it without being refused as an unknown field.
+    ...(result.answerMissing ? { answerMissing: result.answerMissing } : {}),
     note,
     url: result.page?.url ?? '',
     title: result.page?.title ?? '',

@@ -214,20 +214,32 @@ export const LOGIN_HINT =
  *
  * A run asks its own model once, at the moment it announces a finish, for the one thing an
  * operation table cannot carry: the result in words (`prompts.ts` `FINAL_ANSWER`). That call is
- * allowed to fail, and it is equally allowed to come back `{"text": null}` — the honest "this page
- * shows no result for the goal". Both used to leave every report quietly missing its 「它自己说：」
- * line, and the absence read as "there was nothing to say" when in truth nothing had been said. So
- * each channel says the one thing that is always true, and the two that print the page's own text
- * right below it point the reader at it.
+ * allowed to fail, and this is the failure — a timeout, a route that never came back, an answer
+ * that is not the one-key object the question asked for. Neither the report nor the record ever
+ * had a sentence, so the sentence says exactly that much and no more.
  *
- * The sentence stays this vague on purpose. Which of the two happened is not knowledge the run
- * keeps: `loop.ts` reads every refusal as "there is nothing to say" deliberately, so that an
- * optional call at the end can never fail a run that would otherwise have succeeded.
+ * The other silence is not a failure and does not use these words: see `NO_RESULT` below.
  */
 export const NO_ANSWER = '它没能把看到的读出来'
 
 /** The same, for the two channels that print the page's own text right below it. */
 export const NO_ANSWER_BODY_BELOW = `${NO_ANSWER}——下面是它最后停住那一页的正文，你自己看看`
+
+/**
+ * What every channel says when the run's own model read the page and the goal's result was not on it.
+ *
+ * The question offers `{"text": null}` as the compliant answer for a page with nothing to report,
+ * and a model that takes it has answered: it is making a judgement about the page, not failing to
+ * read it. So this sentence carries the judgement in the model's name — the page has no result for
+ * the goal — where the failure above is a sentence nobody ever got.
+ *
+ * Which of the two happened is the one thing `loop.ts` keeps for the report (`TaskResult.answerMissing`).
+ * This line has no page text of its own to explain, so it stays one short sentence.
+ */
+export const NO_RESULT = '它说最后这一页没有这个目标的结果'
+
+/** The same, for the two channels that print the page's own text right below it. */
+export const NO_RESULT_BODY_BELOW = `${NO_RESULT}——下面是它最后停住那一页的正文，你自己看看`
 
 /** Chinese wording for a store source id; an unknown id is shown as it came. */
 export function sourceLabel(source: string): string {

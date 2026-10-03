@@ -349,6 +349,29 @@ describe('what the reader is told afterwards', () => {
     expect(text).toContain('没能读到页面（起点：https://example.test）')
   })
 
+  it('says the model judged this page to have no result, which is not the same as failing to read it', () => {
+    // The other silence, and the one that used to be told in the failure's words: the model read
+    // the page and said the goal's result is not on it. 「它没能把看到的读出来」 would report a
+    // failure that never happened, so the judgement is carried in the model's own name — and the
+    // page's own words still follow it, because they are what the reader can check it against.
+    const text = summaryText(result({ answerMissing: 'none' }), 'https://example.test')
+
+    expect(text).toContain('它说最后这一页没有这个目标的结果——下面是它最后停住那一页的正文，你自己看看')
+    expect(text).not.toContain('它没能把看到的读出来')
+    expect(text).not.toContain('它自己说')
+    expect(text).toContain('最后停在：价格页 — https://example.test/price')
+    expect(text).toContain('页面上读到的内容（节选）：\n价格 12 元')
+    expect(text.startsWith('目标：找到价格并说明是多少\n结果：完成\n它说最后这一页没有这个目标的结果——')).toBe(true)
+  })
+
+  it('promises no page text for that judgement too when there is no page to point at', () => {
+    const text = summaryText(result({ answerMissing: 'none', page: null }), 'https://example.test')
+
+    expect(text).toContain('它说最后这一页没有这个目标的结果\n')
+    expect(text).not.toContain('下面是它最后停住那一页的正文')
+    expect(text).not.toContain('它没能把看到的读出来')
+  })
+
   it('quotes the page back, trimmed, and says when there is more of it', () => {
     const long = '甲'.repeat(900) + '乙'
     const text = summaryText(result({ page: { url: 'https://example.test/p', title: '长页', text: long } }), 'https://example.test')

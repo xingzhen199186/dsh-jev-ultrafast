@@ -207,6 +207,35 @@ describe('the inspector page', () => {
     expect(run.trace[0].line).toContain('；它自己说：列表里只有两家酒店，都在第一页。')
   })
 
+  it('reads the model s own "no result on this page" off the record, in the run s own line', async () => {
+    // The other silence, said from the record's own field: `answer_missing` is written only when the
+    // absence is the model's judgement about the page, so the line can carry that judgement instead
+    // of reporting a model that never handed a sentence over.
+    const dir = join(ARTIFACTS, 'run-1700000000002-none')
+    created.push(dir)
+    mkdirSync(join(dir, 'frames'), { recursive: true })
+    writeFileSync(
+      join(dir, 'trace.jsonl'),
+      JSON.stringify({
+        at: 1700000002500,
+        kind: 'run',
+        status: 'done',
+        reason: '',
+        answer_missing: 'none',
+        steps: 4,
+        decisions: 5,
+        elapsed_ms: 12000,
+      }) + '\n',
+    )
+
+    const run = JSON.parse((await ask('/run?run=run-1700000000002-none')).body)
+
+    expect(run.trace[0].line).toContain('本次运行结束：done')
+    expect(run.trace[0].line).toContain('；它说最后这一页没有这个目标的结果')
+    expect(run.trace[0].line).not.toContain('它没能把看到的读出来')
+    expect(run.trace[0].line).not.toContain('它自己说')
+  })
+
   it('says the job was not done in its closing line when the finish was let through', () => {
     // The inspector's closing line is the third copy of the judgement — the tool's answer and the
     // slash command's summary are the other two — so it has to say the same thing by the same words:
@@ -274,6 +303,28 @@ describe('the inspector page', () => {
     } as unknown as TaskResult)
 
     expect(line).toContain('；它没能把看到的读出来')
+    expect(line).not.toContain('它自己说')
+  })
+
+  it('says the model judged this page to have no result in its closing line', () => {
+    // The third copy of the distinction, and the one with no page text under it: the model was asked,
+    // read the page, and said the goal's result is not on it. Saying 「它没能把看到的读出来」 here
+    // would be reporting a failure that did not happen.
+    const line = closingLine({
+      status: 'done',
+      reason: '',
+      unmet: [],
+      steps: 8,
+      decisions: 12,
+      elapsedMs: 60219,
+      verification: { checked: false, passed: true, items: [], note: '' },
+      pageNote: '',
+      answer: '',
+      answerMissing: 'none',
+    } as unknown as TaskResult)
+
+    expect(line).toContain('；它说最后这一页没有这个目标的结果')
+    expect(line).not.toContain('它没能把看到的读出来')
     expect(line).not.toContain('它自己说')
   })
 

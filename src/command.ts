@@ -27,7 +27,14 @@ import { deadEndNote } from './dead-ends'
 import type { captureLlm } from './dsh-model'
 import type { LoopEvent, TaskResult } from './loop'
 import { runTask, verdictText } from './loop'
-import { INSPECTOR_PATH, LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW } from './protocol'
+import {
+  INSPECTOR_PATH,
+  LOGIN_HINT,
+  NO_ANSWER,
+  NO_ANSWER_BODY_BELOW,
+  NO_RESULT,
+  NO_RESULT_BODY_BELOW,
+} from './protocol'
 import { namedSite, resolveStart } from './resolve-start'
 import { unfinishedDeaths } from './run-history'
 import { prepareRun } from './run-setup'
@@ -113,12 +120,18 @@ export function summaryText(result: TaskResult, url: string): string {
   // plugin's verdict and which is what the model said it saw, and an empty 「它自己说：」 would read
   // as the model having said nothing when in fact nobody asked it anything.
   //
-  // Handing over nothing is not the same as having nothing to say, though. The line below used to
-  // be dropped whole, which left the reader with exactly the silence the sentence is there to
-  // break: a run that came back without a conclusion now says so, and — where there is one — points
-  // at the page's own words underneath.
+  // Handing over nothing is not the same as having nothing to say, though, and there are two ways
+  // to hand over nothing. The line below used to be dropped whole, which left the reader with
+  // exactly the silence the sentence is there to break; and the two ways then read as one sentence,
+  // which told a reader whose page simply had no result that the model had failed to read it. Now
+  // each silence says its own thing, and — where there is one — points at the page's own words
+  // underneath.
   if (result.answer) lines.push(`它自己说：${result.answer}`)
-  else lines.push(excerpt ? NO_ANSWER_BODY_BELOW : NO_ANSWER)
+  else {
+    const [said, withBody] =
+      result.answerMissing === 'none' ? [NO_RESULT, NO_RESULT_BODY_BELOW] : [NO_ANSWER, NO_ANSWER_BODY_BELOW]
+    lines.push(excerpt ? withBody : said)
+  }
   lines.push(`执行 ${result.steps} 步、${result.decisions} 次决策，用时 ${(result.elapsedMs / 1000).toFixed(1)} 秒`)
   if (result.verification.checked) lines.push(result.verification.note)
   if (result.page) {

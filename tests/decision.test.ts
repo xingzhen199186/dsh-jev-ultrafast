@@ -2,7 +2,15 @@ import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SnapshotAction } from '../src/browser/session'
 import { actionSpace, trimActionSpace } from '../src/decision/action-space'
-import { askText, answerText, fieldContext, fieldText, type DshChunk, type TextHelperSource } from '../src/decision/text-helper'
+import {
+  NoResultOnPage,
+  askText,
+  answerText,
+  fieldContext,
+  fieldText,
+  type DshChunk,
+  type TextHelperSource,
+} from '../src/decision/text-helper'
 import {
   type CorrectedChoice,
   type DecisionContext,
@@ -1016,6 +1024,12 @@ describe('the DSH door of the text helper', () => {
  * only way a run can say what it saw. Its rules are the field door's, with one deliberate exception —
  * no length cap, because a list read off a page is a real answer — and its failures are the silent
  * ones the loop swallows (see `loop.test.ts`).
+ *
+ * Two answers leave here without a word being written, and they are not the same: a model that never
+ * managed the one-key object the question asks for, and a model that took the question's own
+ * `{"text": null}` — "this page shows no result for the goal" — which is a judgement about the page
+ * rather than a failure. The first is an `Error`, the second is `NoResultOnPage`, and that is how the
+ * report gets to say which happened.
  */
 describe('the answer the run is asked for at the end', () => {
   afterEach(() => {
@@ -1056,11 +1070,28 @@ describe('the answer the run is asked for at the end', () => {
     ['prose instead of JSON', '北京国际饭店，4.8 分'],
     ['an empty sentence', '{"text":""}'],
     ['whitespace only', '{"text":"   "}'],
-    ['a null sentence', '{"text":null}'],
+    ['a missing key', '{"result":"北京国际饭店"}'],
+    ['a null beside another key', '{"text":null,"steps":"点了两下"}'],
     ['extra keys', '{"text":"北京国际饭店","steps":"点了两下"}'],
-  ])('answers nothing when the model returns %s', async (_name, content) => {
+  ])('refuses to answer when the model returns %s', async (_name, content) => {
+    // Every one of these is the failure, not the other silence: the exact message is what says so,
+    // because `NoResultOnPage` never carries it. Only the literal `null` under the one key `text` is
+    // the model's compliant "no result on this page"; a missing key, an empty string and a second
+    // key are all a model that did not answer the question, and stay failures.
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ choices: [{ message: { content } }] })))
     await expect(answerText(source, context)).rejects.toThrow(/没有给出可用的结论/)
+  })
+
+  it('carries the model s own "no result on this page" as a judgement of its own, not a failure', async () => {
+    // The question offers this answer by name (`FINAL_ANSWER`: 页面没有这个目标的结果就返回 null), so a
+    // model that takes it has answered. It leaves as its own kind of error, and everything the report
+    // needs to say "the page has no result for the goal" travels with it.
+    vi.stubGlobal(
+      'fetch',
+      async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"text":null}' } }] })),
+    )
+
+    await expect(answerText(source, context)).rejects.toBeInstanceOf(NoResultOnPage)
   })
 
   it('takes a long answer, because a list read off a page is an answer', async () => {

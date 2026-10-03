@@ -8,7 +8,7 @@ import { COVER_ESCAPE_LABEL, TargetCovered } from '../src/browser/act'
 import type { Config as ConfigShape } from '../src/config'
 import type { ControlModel } from '../src/control/control-model'
 import { actionSpace, elementIndexOf, type ActionSpace } from '../src/decision/action-space'
-import type { AnswerContext, FieldContext, TextResult } from '../src/decision/text-helper'
+import { NoResultOnPage, type AnswerContext, type FieldContext, type TextResult } from '../src/decision/text-helper'
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
@@ -2532,6 +2532,9 @@ describe('retries that buy no step', () => {
       // gets the model's own words and the plugin's verdict without either standing in for the other.
       expect(result.reason).toBe('模型判断页面上已没有可以推进目标的操作')
       expect(result.answer).toBe('列表里只有两家酒店，都在第一页。')
+      // A sentence arrived, so there is no silence to explain and nothing for the report to pick
+      // between: the field that names the two silences is not here at all.
+      expect(result.answerMissing).toBeUndefined()
       expect(h.seen.answers).toHaveLength(1)
 
       const records = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
@@ -2551,21 +2554,32 @@ describe('retries that buy no step', () => {
   it('ends the run exactly as before when its own question fails or has nothing to say', async () => {
     // The most important thing about this call: it cannot change a run. Every way it can go wrong —
     // a refusal, a transport failure, an empty sentence, the model's own `{"text": null}` — reads as
-    // "there is nothing to say", and the record then carries exactly the fields it carried before
-    // this question existed. `answerText` turns all but the first two into a throw of its own
-    // (`decision.test.ts`), so what the loop has to survive is a throw and an empty string.
-    const cases: Array<[string, () => Promise<TextResult>]> = [
+    // "there is nothing to say", and the judgement, the reason, the steps and the record are exactly
+    // what they would have been had nobody asked. What the run now keeps is which of the two silences
+    // it was (`answerMissing`), because the report tells the reader what happened: the model saying
+    // this page carries no result for the goal is not the model failing to read it.
+    const cases: Array<[string, () => Promise<TextResult>, 'none' | 'failed']> = [
       [
         'the question fails',
         async () => {
           throw new Error('文本模型没有给出可用的结论')
         },
+        'failed',
       ],
-      ['the model says nothing', async () => ({ text: '', model: 'fake-answer', latencyMs: 2, usage: {} })],
-      ['only whitespace came back', async () => ({ text: '   ', model: 'fake-answer', latencyMs: 2, usage: {} })],
+      [
+        // The seam's own copy of what `answerText` throws for `{"text": null}`: the call comes back
+        // with the model's judgement rather than with a sentence, and the run carries it as `none`.
+        'the model says the page has no result for the goal',
+        async () => {
+          throw new NoResultOnPage()
+        },
+        'none',
+      ],
+      ['the model says nothing', async () => ({ text: '', model: 'fake-answer', latencyMs: 2, usage: {} }), 'failed'],
+      ['only whitespace came back', async () => ({ text: '   ', model: 'fake-answer', latencyMs: 2, usage: {} }), 'failed'],
     ]
 
-    for (const [name, answer] of cases) {
+    for (const [name, answer, missing] of cases) {
       const h = harness({ pages: [pageState('f0')], choices: ['DONE'], answer })
       const result = await run(h.deps, { record: true })
 
@@ -2573,6 +2587,7 @@ describe('retries that buy no step', () => {
         expect(result.status, name).toBe('done')
         expect(result.reason, name).toBe('')
         expect(result.answer, name).toBe('')
+        expect(result.answerMissing, name).toBe(missing)
         // It was still asked: the run cannot know in advance that the answer will be empty.
         expect(h.seen.answers, name).toHaveLength(1)
         expect(h.seen.answerTraced, name).toEqual([false])
@@ -2583,12 +2598,15 @@ describe('retries that buy no step', () => {
           .split('\n')
           .map((line) => JSON.parse(line) as Record<string, unknown>)
         // Field for field what a run of today writes, with no `answer` key at all rather than an
-        // empty one — and no extra line for the call itself, which is loud only when it says something.
+        // empty one — and no extra line for the call itself, which is loud only when it says
+        // something. The one addition is the model's own judgement, which the record carries under
+        // its own key so a reader of the raw trace can tell it from a sentence nobody got.
         expect(records.find((record) => record.kind === 'run'), name).toEqual({
           at: expect.any(Number),
           kind: 'run',
           status: 'done',
           reason: '',
+          ...(missing === 'none' ? { answer_missing: 'none' } : {}),
           steps: 0,
           decisions: 1,
           elapsed_ms: expect.any(Number),
@@ -2612,6 +2630,9 @@ describe('retries that buy no step', () => {
 
     expect(result.status).toBe('blocked')
     expect(result.answer).toBe('')
+    // Nobody was asked, so there is no model's judgement and no failed sentence to name: the
+    // silence belongs to the run's own ending, not to a question about the page.
+    expect(result.answerMissing).toBeUndefined()
     expect(h.seen.answers).toEqual([])
   })
 

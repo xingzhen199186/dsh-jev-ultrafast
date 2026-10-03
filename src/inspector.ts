@@ -26,7 +26,7 @@ import type { captureLlm } from './dsh-model'
 import { readJson, send, sendBytes } from './http'
 import { inspectorPage } from './inspector-page'
 import { runTask, verdictText, type LoopEvent, type TaskResult } from './loop'
-import { NO_ANSWER } from './protocol'
+import { NO_ANSWER, NO_RESULT } from './protocol'
 import { prepareRun } from './run-setup'
 import { hasLastWord } from './run-history'
 
@@ -47,8 +47,10 @@ type LineKind = 'observed' | 'decided' | 'executed' | 'followed' | 'finished' | 
  * whatever else the run left to say about itself.
  *
  * A run that came back without a sentence of its own gets the same words the other two channels
- * use for that (`protocol.ts` `NO_ANSWER`). This line has no page text under it — the inspector
- * shows the run's steps and its raw trace instead — so it says only that nothing was handed over.
+ * use for that, whichever of the two silences it was: the model saying the page carries no result
+ * for the goal (`protocol.ts` `NO_RESULT`), or no sentence arriving at all (`NO_ANSWER`). This line
+ * has no page text under it — the inspector shows the run's steps and its raw trace instead — so
+ * each says only what happened, in one short sentence.
  *
  * Exported so the judgement half — the part that has to agree with the tool's answer and the slash
  * command's summary — can be held to account without standing up a browser, and read from one place
@@ -59,7 +61,7 @@ export function closingLine(result: TaskResult): string {
     result.decisions
   } 次决策、${(result.elapsedMs / 1000).toFixed(1)} 秒${result.verification.note ? `；${result.verification.note}` : ''}${
     result.pageNote ? `；${result.pageNote}` : ''
-  }${result.answer ? `；它自己说：${result.answer}` : `；${NO_ANSWER}`}`
+  }${result.answer ? `；它自己说：${result.answer}` : `；${result.answerMissing === 'none' ? NO_RESULT : NO_ANSWER}`}`
 }
 
 interface StepLine {
@@ -507,9 +509,13 @@ function describeRecord(record: Record<string, unknown>): string {
     // The run's own model said something about the page it stopped on: kept apart from the reason
     // above it, which is this plugin's judgement about how the run ended rather than the model's.
     // A run whose answer never arrived says that too — the record itself carries no `answer` field
-    // in that case, and a line that simply stopped after the numbers told the reader nothing.
+    // in that case, and a line that simply stopped after the numbers told the reader nothing. When
+    // the absence is the model's own "no result on this page", the record says which one it was, and
+    // the line below says the model's judgement instead of reporting a model that never spoke.
     const said =
-      typeof record.answer === 'string' && record.answer ? `；它自己说：${record.answer}` : `；${NO_ANSWER}`
+      typeof record.answer === 'string' && record.answer
+        ? `；它自己说：${record.answer}`
+        : `；${record.answer_missing === 'none' ? NO_RESULT : NO_ANSWER}`
     return `${prefix}本次运行结束：${String(record.status)}，${String(record.steps)} 步、${String(
       record.decisions,
     )} 次决策，共 ${seconds} 秒${record.reason ? `（${String(record.reason)}）` : ''}${said}`

@@ -33,7 +33,7 @@ import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-
 import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
 import { nextDeadEnds, MIN_OPEN_ELEMENTS, type DeadEndRecord } from './dead-ends'
 import type { AnswerContext, FieldContext, TextHelperSource, TextResult } from './decision/text-helper'
-import { answerText, fieldContext, fieldText } from './decision/text-helper'
+import { answerText, fieldContext, fieldText, NoResultOnPage } from './decision/text-helper'
 import type { Decision, DecisionContext, DecisionSource, HistoryEntry } from './decision/typesafe'
 import { InvalidDecision, choose, requestChars, textLeftOut } from './decision/typesafe'
 import { CONFIDENCE_FLOOR, MAX_ELEMENTS, MAX_REQUEST_CHARS, MAX_STEPS } from './prompts'
@@ -334,6 +334,15 @@ const MAX_STALE_RETRIES = 6
  */
 const MAX_CONTROL_REFUSALS = 3
 
+/**
+ * Which of the two silences an empty `TaskResult.answer` is.
+ *
+ * The two are not the same thing to be told: `'none'` is the model saying the page it was shown has
+ * no result for the goal, and `'failed'` is a sentence that never arrived. Every channel that prints
+ * the answer picks its sentence from this rather than explaining the absence on its own.
+ */
+export type AnswerMissing = 'none' | 'failed'
+
 export interface TaskResult {
   goal: string
   status: RunStatus
@@ -388,10 +397,23 @@ export interface TaskResult {
    * What the run's own answer model said the page came back with, in its own words, asked once at
    * the moment the run announced it was finished and used for nothing else. Empty when there was
    * nothing to report or nobody to ask — the run not finishing by announcing it, a failure of the
-   * call, an empty answer and a literal `{"text": null}` all arrive here as the same thing: no
-   * sentence, which is what the report shows (see `./decision/text-helper.ts`).
+   * call, an empty answer and the model's own `{"text": null}` all arrive here as the same thing:
+   * no sentence (see `./decision/text-helper.ts`).
    */
   answer: string
+  /**
+   * Which of the two silences the empty `answer` above is, whenever it is one of them.
+   *
+   * `'none'` is the model's own judgement, handed over the one way the question offers it: the page
+   * it was shown has no result for the goal. `'failed'` is a sentence that never arrived — the call
+   * threw, or what came back was not the one-key object the question asked for. The report tells
+   * the reader which, because "this page shows no result" and "nobody could say" are different
+   * things to be told, and only the first is about the page.
+   *
+   * Absent when there is nothing to explain: a run that announced no finish was never asked, and a
+   * run that never saw a page had nobody to ask about, so neither has a model to report on.
+   */
+  answerMissing?: AnswerMissing
   /** The independent check of the run's own claim, always present and never assumed. */
   verification: Verification
   /**
@@ -631,18 +653,23 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   let rangeRescuedNoted = false
   let reason = ''
   // What the run's own model said the page came back with, asked once, at the end, and used for
-  // nothing but the report and the record. The bare empty string is every failure and every
-  // "nothing to report" at once, which is why nothing downstream has to tell them apart.
+  // nothing but the report and the record; and, when there is no such sentence, which of the two
+  // silences it is — the model's own "no result on this page", or no sentence at all. Nothing
+  // downstream acts on either: they are what the reader is told, and only the report reads them.
   let answer = ''
+  let answerMissing: AnswerMissing | undefined
   /**
    * Ask the run's own answer, once, and let whatever comes back stand.
    *
    * This is the only place a run speaks instead of acting, and it is asked at exactly one moment:
    * the model has just announced that it is finished, so the page in hand is the page it was
    * talking about. Nothing here can change the run — the sentence is not an input to any decision,
-   * status, reason or brake — and a refusal, a timeout, an empty answer and a literal
+   * status, reason or brake — and a refusal, a timeout, an empty answer and the model's own
    * `{"text": null}` all leave the run exactly as it would have been had nobody asked. That is what
    * makes it safe to ask at the end of every run rather than only of the runs that went well.
+   *
+   * What the run does keep is which of them happened (`answerMissing`), because the two silences
+   * mean different things to a reader and only the report has to say the difference.
    */
   const readAnswer = async (): Promise<void> => {
     if (page === null) return
@@ -656,8 +683,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         { goal: options.goal, page: { title: page.title, text: page.text } },
       )
       answer = said.text.trim()
-    } catch {
+      // A sentence that trims away to nothing is the same nothing a refusal is. The door above
+      // throws rather than hand one over, but the seam is a seam, and a blank that came back as a
+      // successful answer is still not something to put in front of a reader.
+      if (!answer) answerMissing = 'failed'
+    } catch (error) {
       answer = ''
+      // The one refusal that is not a failure: the model was shown the page and said the goal's
+      // result is not on it. Everything else — a timeout, a malformed answer, a route that never
+      // came back — is a sentence that never arrived.
+      answerMissing = error instanceof NoResultOnPage ? 'none' : 'failed'
     }
   }
   // A generated value, reused only when the field it was asked for is the same field on the same
@@ -1647,6 +1682,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // run whose answer came back empty carries the field not at all, so a reader comparing two
       // records sees the difference in what happened rather than in a key that is always there.
       ...(answer ? { answer } : {}),
+      // The one empty answer that still has something in it: the model's own judgement that the page
+      // carries no result for the goal. Written because `answer`'s absence alone reads as a sentence
+      // nobody managed to get, which is the other silence and not this one. A failed answer adds
+      // nothing here — "no sentence" is already what the record says without it.
+      ...(answerMissing === 'none' ? { answer_missing: 'none' } : {}),
       steps: history.length,
       decisions: decisionCalls,
       elapsed_ms: elapsedMs(),
@@ -1700,6 +1740,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     deadEnds: deadEndsJudged,
     deadEndsExcluded: excludeDeadEnds,
     answer,
+    // Only when there is an empty answer to explain; a run that said something has no silence to
+    // name. The two silences are told apart here and nowhere else in the run.
+    ...(answerMissing ? { answerMissing } : {}),
     verification,
     // Read off the page the run actually stopped on, so the sentence is about what the
     // reader is looking at rather than about a page seen three steps ago.

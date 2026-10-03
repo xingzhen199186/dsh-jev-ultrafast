@@ -271,6 +271,29 @@ describe('what the tool tells a reader about a finished run', () => {
     expect(text).not.toContain('它自己说')
   })
 
+  it('says the model found no result on the page, which is a judgement and not a silence', () => {
+    // The other way to come back without a sentence. The tool's reader is a model, and the two are
+    // different facts to it: one says the page has nothing for the goal, the other says nobody could
+    // say — so the judgement is carried in the model's name rather than in the failure's words.
+    const blocks = blocksOf({
+      answerMissing: 'none',
+      page: { url: 'https://example.test/f', title: '榜单页', text: '第一页的酒店：甲乙' },
+    })
+
+    expect(blocks[0]!.text).toContain('它说最后这一页没有这个目标的结果——下面是它最后停住那一页的正文，你自己看看')
+    expect(blocks[0]!.text).not.toContain('它没能把看到的读出来')
+    expect(blocks[0]!.text).not.toContain('它自己说')
+    // The page still follows as the evidence under the judgement, exactly as it does for the other
+    // silence: the reader is told what the model concluded and what it concluded it from.
+    expect(blocks[1]!.text).toBe('最终页面（榜单页 — https://example.test/f）的可见正文：\n第一页的酒店：甲乙')
+
+    // And with no page at all there is nothing to point at, so the sentence stands alone.
+    const bare = summary({ answerMissing: 'none' })
+    expect(bare).toContain('它说最后这一页没有这个目标的结果\n')
+    expect(bare).not.toContain('下面是它最后停住那一页的正文')
+    expect(bare).not.toContain('它没能把看到的读出来')
+  })
+
   it('says the job was not done when the run was let through with a checklist unmet', () => {
     // The tool's answer is the copy a model turn reads, and it has to say what the slash command's
     // summary says: not a finish, and every condition that was still not holding named after it.
