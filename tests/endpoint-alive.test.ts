@@ -101,4 +101,37 @@ describe('endpointAlive', () => {
     const endpoint = { ...endpointAt(base), wsUrl: 'ws://127.0.0.1:9222/devtools/browser/abc' }
     expect(await endpointAlive(endpoint)).toBe(false)
   })
+
+  it('a handshake this machine neither accepts nor refuses: alive — the box is holding it', async () => {
+    // Measured 2026-10-03, window open: the default-profile browser takes the handshake and says
+    // nothing for as long as you wait, because it is holding it for the 「允许远程调试？」 box.
+    // Calling that dead is what turned "wait for the reader's click" into a refusal — the grant
+    // binds to the connection it was clicked for, and a probe that gives up makes every click
+    // land on a socket that is already gone. The connection step holds; this probe may not kill it.
+    const base = await listen(() => ({ status: 404, body: 'Not Found' }))
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        addEventListener(): void {
+          // Holds: neither open, nor error, nor close — exactly what the browser does.
+        }
+        close(): void {}
+      },
+    )
+    const endpoint = { ...endpointAt(base), wsUrl: 'ws://127.0.0.1:9222/devtools/browser/holding' }
+    expect(await endpointAlive(endpoint)).toBe(true)
+  }, 5_000)
+
+  it('the same silence from somewhere else: dead — a black hole is not a browser', async () => {
+    const base = await listen(() => ({ status: 404, body: 'Not Found' }))
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        addEventListener(): void {}
+        close(): void {}
+      },
+    )
+    const endpoint = { ...endpointAt(base), wsUrl: 'ws://10.98.76.54:9222/devtools/browser/holding' }
+    expect(await endpointAlive(endpoint)).toBe(false)
+  }, 5_000)
 })

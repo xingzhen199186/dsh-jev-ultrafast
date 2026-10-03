@@ -567,9 +567,18 @@ async function answersDevTools(httpUrl: string, timeoutMs = 1_500): Promise<bool
  * Edge 147+ answers 404 to every `/json/*` path on the default profile (`discoverDailyBrowser`
  * leans on the port file's second line there), so HTTP silence is the normal state of a perfectly
  * usable daily browser. Measured on 2026-10-03: the default-profile Edge refused both HTTP
- * questions while accepting a WebSocket at the address its own file recorded. The handshake is
- * also the one way a squatter that only holds the port still fails, so nothing dead becomes alive
- * here — only browsers that can be driven count.
+ * questions while accepting a WebSocket at the address its own file recorded.
+ *
+ * The third answer is silence, and what silence means depends on where it comes from. On this
+ * machine, a handshake that is neither accepted nor refused is the browser *holding* it for its
+ * 「允许远程调试？」 box — measured on 2026-10-03, window open, eight seconds without a word — and
+ * that is a live browser waiting for the one click only the reader can make: the connection step
+ * then holds the same question open until they do (its timeout is 0), which is the behaviour the
+ * note promises. A grant binds to the connection it was clicked for, so an answer that arrives
+ * after this probe's socket is gone counts for nothing — which is why the probe must not be the
+ * one that gives up on a browser. Somewhere else, silence is a black hole, and a black hole is
+ * not a browser: dead there. A squatter that actually speaks — an HTTP server saying 404 to the
+ * upgrade — still fails fast, so nothing dead becomes alive on a port.
  */
 async function answersWebSocket(wsUrl: string, timeoutMs = 1_500): Promise<boolean> {
   const url = wsUrl.trim()
@@ -595,7 +604,7 @@ async function answersWebSocket(wsUrl: string, timeoutMs = 1_500): Promise<boole
       } catch {
         // Already gone; the answer below is what counts.
       }
-      settle(false)
+      settle(/^wss?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(url))
     }, timeoutMs)
     socket.addEventListener(
       'open',
