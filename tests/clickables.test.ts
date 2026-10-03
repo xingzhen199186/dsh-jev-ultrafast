@@ -272,7 +272,7 @@ describe('elements a page made clickable with its own script', () => {
 
     expect(space.elements.map((element) => element.label)).toEqual([
       '搜索',
-      '目的地',
+      '输入框',
       '登录',
       '立即预订',
       '酒店 A',
@@ -296,6 +296,51 @@ describe('elements a page made clickable with its own script', () => {
     // text, and the table does not offer what it has not seen.
     expect(guesses.every((action) => action.kind === 'click')).toBe(true)
     expect(space.targets.TYPE_TEXT?.['5']).toBeUndefined()
+  })
+
+  it('names a field by what it is when the page gave it only an advertisement', () => {
+    // The measured failure: bilibili's search box, whose placeholder was the promoted query
+    // 「罗小黑战记二」. Named by it, the table offered 「Open 罗小黑战记二」, the model read that as a
+    // page to open, chose it ten times over any real target, and the run stopped. The identity
+    // word stands in for the advertisement — and a field the page really did name keeps that name.
+    const state = page({
+      tag: 'body',
+      box: { x: 0, y: 0, w: 1120, h: 780 },
+      children: [
+        {
+          tag: 'input',
+          control: true,
+          attrs: { type: 'text', placeholder: '罗小黑战记二' },
+          value: '',
+          readOnly: false,
+          box: { x: 10, y: 10, w: 200, h: 30 },
+        },
+        {
+          tag: 'input',
+          control: true,
+          attrs: { type: 'search', placeholder: '罗小黑战记二' },
+          value: '',
+          readOnly: false,
+          box: { x: 220, y: 10, w: 200, h: 30 },
+        },
+        {
+          tag: 'input',
+          control: true,
+          attrs: { type: 'text', placeholder: '罗小黑战记二', 'aria-label': '站内搜索' },
+          value: '',
+          readOnly: false,
+          box: { x: 430, y: 10, w: 200, h: 30 },
+        },
+      ],
+    })
+    const fields = offered(state).filter((action) => action.kind === 'fill').map((action) => action.label)
+    expect(fields).toEqual(['输入框', '搜索框', '站内搜索'])
+    // The click and the keys ride the same name, so no action form of the advertisement survives.
+    const opens = offered(state)
+      .filter((action) => action.kind === 'click')
+      .map((action) => action.label)
+    expect(opens).toEqual(['Open 输入框', 'Open 搜索框', 'Open 站内搜索'])
+    expect(offered(state).some((action) => action.label.includes('罗小黑战记二'))).toBe(false)
   })
 
   it('leaves out everything the four filters exist to leave out', () => {
@@ -456,9 +501,9 @@ describe('elements a page made clickable with its own script', () => {
     ])
     expect(off.actions.map((action) => action.label).slice(0, 4)).toEqual([
       '搜索',
-      '目的地',
-      'Open 目的地',
-      '目的地 → enter',
+      '输入框',
+      'Open 输入框',
+      '输入框 → enter',
     ])
     // The whole reading, pinned: the table, the text and the nested counts as characters. This is
     // the script as it was before the deep scan existed, which is what the switch promises to come
@@ -467,7 +512,7 @@ describe('elements a page made clickable with its own script', () => {
     const reading = createHash('sha256')
       .update(JSON.stringify({ actions: off.actions, text: off.text, nested: off.nested, omitted_actions: off.omitted_actions }))
       .digest('hex')
-    expect(reading).toBe('d6cad2982291d1f174b9fc93fbd3381e7517e6edc63f53f029c53cf2d7a2e9df')
+    expect(reading).toBe('a709f2415cceb5e14392f54b864238c168f862a1e5f5b44b9e36949228751fc2')
   })
 
   it('holds the element and request caps with both halves in one table', () => {

@@ -311,7 +311,7 @@ describe('the choices a popup offers', () => {
     const space = actionSpace(popupState().actions)
 
     expect(space.elements.map((element) => element.label)).toEqual([
-      '目的地/酒店名称',
+      '输入框',
       '生命科学园地铁站 北京, 中国',
       '中关村生命科学园 北京, 中国',
       '被链接包住的候选',

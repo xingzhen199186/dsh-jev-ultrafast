@@ -37,7 +37,7 @@ const SNAPSHOT_BODY = String.raw`(() => {
   const safe = e => !['password','file','hidden'].includes(e.type);
   const visible = e => !e.closest('[aria-hidden="true"],[inert]') &&
     e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
-  const name = (e,seen=new Set()) => {
+  const name = (e,seen=new Set(),bare=false) => {
     if (!e || seen.has(e)) return '';
     seen.add(e);
     const referenced=(e.getAttribute('aria-labelledby')||'').split(/\s+/)
@@ -47,7 +47,11 @@ const SNAPSHOT_BODY = String.raw`(() => {
       (['button','submit','reset'].includes(e.type) ? e.value : '') || e.getAttribute('alt') ||
       (e.tagName==='INPUT' ? '' : [...e.childNodes].map(n=>n.nodeType===3 ? n.textContent :
         n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
-      e.getAttribute('title') || e.getAttribute('placeholder') || '';
+      // The bare reading — asked for at the top level only — stops before these two: a tooltip and a
+      // placeholder are what the page advertises, not what the element is, and the identity
+      // rules for fields ask exactly that difference. A <label> reached through aria-labelledby
+      // still answers fully, because it is reached as a child of this walk.
+      (bare ? '' : e.getAttribute('title') || e.getAttribute('placeholder') || '');
   };
   const roles=['button','link','checkbox','radio','switch','tab','menuitem','menuitemradio',
     'option','gridcell','combobox','textbox','searchbox','spinbutton'];
@@ -109,7 +113,13 @@ const SNAPSHOT_BODY = String.raw`(() => {
     if (rname==='gridcell' && e.querySelector('button,[role="button"]')) continue;
     if (rname==='option' && !role(e) && e.querySelector('a[href],button,[role="button"]')) continue;
     offered.add(e);
-    const base={node:identity(e),role:rname,label:own||rname,
+    // A field is named by what it is, not by what the page advertises inside it: a placeholder is
+    // content the page swaps at will — bilibili's search box carried 「罗小黑战记二」, the model read
+    // 「Open 罗小黑战记二」 as a page to open and chose it until the run stopped. The identity word
+    // stands in only when the field has no name of its own: no label, no aria, nothing but the ad.
+    const identity_word={searchbox:'搜索框',textbox:'输入框'}[rname],
+      label=identity_word && !name(e,new Set(),true).trim() ? identity_word : (own||rname);
+    const base={node:identity(e),role:rname,label,
       rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
     for (const key of ['checked','selected','expanded']) {
       const value=e.getAttribute('aria-'+key);
