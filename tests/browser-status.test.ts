@@ -176,13 +176,17 @@ describe('what this machine says about a browser, with nothing connected', () =>
 
   it('plugin: the port file is left over from a browser that has since closed', async () => {
     const port = await closedPort()
-    const status = await localBrowserStatus(
-      { connection: 'plugin', preferredKind: 'edge', userDataDir: profile({ port: `${port}\n/devtools/browser/gone` }) },
-      NO_PORTS,
-    )
-    expect(status.state).toBe('not-running')
-    expect(status.endpoint).toBe(`http://127.0.0.1:${port}`)
-    expect(status.message).toContain('没有人监听')
+    // The plugin's own profile directories are candidates here too — and this machine's copy may
+    // be running for real, which is a different browser than the one this test is about.
+    await withEmptyHome(async () => {
+      const status = await localBrowserStatus(
+        { connection: 'plugin', preferredKind: 'edge', userDataDir: profile({ port: `${port}\n/devtools/browser/gone` }) },
+        NO_PORTS,
+      )
+      expect(status.state).toBe('not-running')
+      expect(status.endpoint).toBe(`http://127.0.0.1:${port}`)
+      expect(status.message).toContain('没有人监听')
+    })
   })
 
   it('says a hand-written address is a hand-written address rather than checking it', async () => {
