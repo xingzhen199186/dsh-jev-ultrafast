@@ -4,12 +4,14 @@
  * This file exists because of a measured failure: a port file next to a profile kept naming a
  * socket whose browser was long gone, the port itself had been picked up by something that was not
  * a browser (it answered 404 to every DevTools path), and the run died on its first move instead of
- * starting a browser of its own. So the two cases below are the whole point — a port that only says
- * 404 is dead, and a browser that answers any DevTools question is alive.
+ * starting a browser of its own. So the cases below are the whole point — a port that only says
+ * 404 is dead, a browser that answers any DevTools question is alive, and a default-profile
+ * browser whose HTTP doors are all shut (Edge 147+ does this) still counts when its socket door
+ * opens, because that is the door a step enters by.
  */
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { endpointAlive } from '../src/browser/launch'
 import type { BrowserEndpoint } from '../src/browser/discover'
 
@@ -34,6 +36,7 @@ async function listen(answer: (path: string) => { status: number; body: string }
 }
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await Promise.all(
     servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
   )
@@ -63,5 +66,39 @@ describe('endpointAlive', () => {
     const server = servers.pop()
     await new Promise<void>((resolve) => server?.close(() => resolve()))
     expect(await endpointAlive(endpointAt(base))).toBe(false)
+  })
+
+  it('all HTTP doors shut, socket door open: alive', async () => {
+    // The default-profile browser measured on 2026-10-03: `/json/version` and `/json/list` both
+    // answer 404, the port file's second line names the room, and the handshake there succeeds.
+    const base = await listen(() => ({ status: 404, body: 'Not Found' }))
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        addEventListener(type: string, listener: () => void): void {
+          if (type === 'open') queueMicrotask(listener)
+        }
+        close(): void {}
+      },
+    )
+    const endpoint = { ...endpointAt(base), wsUrl: 'ws://127.0.0.1:9222/devtools/browser/abc' }
+    expect(await endpointAlive(endpoint)).toBe(true)
+  })
+
+  it('all doors shut — HTTP 404 and a handshake that fails: dead', async () => {
+    // A squatter that holds the port but is not a browser: it refuses the handshake just as it
+    // refused the HTTP questions, so it still cannot hand a step a first move to die on.
+    const base = await listen(() => ({ status: 404, body: 'Not Found' }))
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        addEventListener(type: string, listener: () => void): void {
+          if (type === 'error') queueMicrotask(listener)
+        }
+        close(): void {}
+      },
+    )
+    const endpoint = { ...endpointAt(base), wsUrl: 'ws://127.0.0.1:9222/devtools/browser/abc' }
+    expect(await endpointAlive(endpoint)).toBe(false)
   })
 })

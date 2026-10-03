@@ -429,15 +429,16 @@ export async function ensureBrowser(
 }
 
 /**
- * Whether a discovered endpoint still answers, asked of its HTTP door.
+ * Whether a discovered endpoint still answers, asked of the doors it has.
  *
  * A recorded address outlives the browser that wrote it: the port file next to a profile keeps
  * naming a socket that was closed hours ago, and the port it names may by then belong to something
  * that is not a browser at all. A step that starts from such an address dies on its first move, so
  * an endpoint counts as alive only when it answers *as DevTools* — either `/json/version` with the
- * browser's own name, or `/json/list` with a target list. A service that merely holds the port and
- * says 404 to both is dead here, which is the point: a needless second window is a smaller loss
- * than a task that cannot take its first step.
+ * browser's own name, or `/json/list` with a target list, or — when both of those HTTP doors are
+ * shut — by opening the socket door itself, which is the one a step enters by. A service that
+ * merely holds the port and refuses all three is dead here, which is the point: a needless second
+ * window is a smaller loss than a task that cannot take its first step.
  *
  * Exported for its own test: this is the question that decides whether the reported failure — a
  * remembered address that no longer works — reaches a step or the launcher instead.
@@ -446,7 +447,8 @@ export async function endpointAlive(endpoint: BrowserEndpoint): Promise<boolean>
   const httpUrl = httpBaseOf(endpoint)
   if (httpUrl === null) return true
   if ((await readVersion(httpUrl)) !== null) return true
-  return await answersDevTools(httpUrl)
+  if (await answersDevTools(httpUrl)) return true
+  return await answersWebSocket(endpoint.wsUrl)
 }
 
 /** Does this base answer the other DevTools question — a target list rather than a version? */
@@ -458,6 +460,74 @@ async function answersDevTools(httpUrl: string, timeoutMs = 1_500): Promise<bool
   } catch {
     return false
   }
+}
+
+/**
+ * Does the debug socket itself accept a handshake — the door a step walks through first?
+ *
+ * Edge 147+ answers 404 to every `/json/*` path on the default profile (`discoverDailyBrowser`
+ * leans on the port file's second line there), so HTTP silence is the normal state of a perfectly
+ * usable daily browser. Measured on 2026-10-03: the default-profile Edge refused both HTTP
+ * questions while accepting a WebSocket at the address its own file recorded. The handshake is
+ * also the one way a squatter that only holds the port still fails, so nothing dead becomes alive
+ * here — only browsers that can be driven count.
+ */
+async function answersWebSocket(wsUrl: string, timeoutMs = 1_500): Promise<boolean> {
+  const url = wsUrl.trim()
+  // A door needs both halves: a host, and the room number (`/devtools/browser/<uuid>`) inside it.
+  if (!/^wss?:\/\/[^/]+\/\S/.test(url)) return false
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    const settle = (answer: boolean): void => {
+      if (settled) return
+      settled = true
+      resolve(answer)
+    }
+    let socket: WebSocket
+    try {
+      socket = new WebSocket(url)
+    } catch {
+      settle(false)
+      return
+    }
+    const timer = setTimeout(() => {
+      try {
+        socket.close()
+      } catch {
+        // Already gone; the answer below is what counts.
+      }
+      settle(false)
+    }, timeoutMs)
+    socket.addEventListener(
+      'open',
+      () => {
+        clearTimeout(timer)
+        try {
+          socket.close()
+        } catch {
+          // Closing a socket that just opened cannot fail the answer.
+        }
+        settle(true)
+      },
+      { once: true },
+    )
+    socket.addEventListener(
+      'error',
+      () => {
+        clearTimeout(timer)
+        settle(false)
+      },
+      { once: true },
+    )
+    socket.addEventListener(
+      'close',
+      () => {
+        clearTimeout(timer)
+        settle(false)
+      },
+      { once: true },
+    )
+  })
 }
 
 /** The HTTP door behind an endpoint: its own base, or the one its socket address names. */
