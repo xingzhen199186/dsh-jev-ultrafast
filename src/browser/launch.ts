@@ -224,19 +224,27 @@ export async function launchBrowser(
 /** What Windows calls each browser's process, for a machine where the executable was not found. */
 const WINDOWS_IMAGE: Record<BrowserKind, string> = { chrome: 'chrome.exe', edge: 'msedge.exe' }
 
-const runTasklist = promisify(execFile)
+const runShell = promisify(execFile)
 
 /**
- * Whether the chosen browser is already running on this machine.
+ * Whether the chosen browser is showing a window on this machine.
  *
- * Windows only: `tasklist` is Windows' own process list, and this launcher is aimed at the machine
- * the reader is sitting at. Everywhere else — and on any failure of the command itself, including a
- * machine where it is not on `PATH` — the answer is "not running". That is the answer that opens a
- * window rather than refusing to: a wrong "no" costs one window with the plugin's own profile,
- * while a wrong "yes" would leave the reader with a sentence and no browser at all.
+ * A window, not a process: closing Edge leaves a dozen of its processes alive in the background,
+ * so asking "is msedge.exe running" answers yes on a machine where the reader closed everything —
+ * and that wrong yes is the whole reason the daily route refused to start a browser of its own.
+ * Windows is asked through PowerShell's process list, which reports a main-window handle: a
+ * windowless process carries 0, including the hidden windows that `tasklist /V` reports as titles
+ * (`OleMainThreadWndName`), so the check cannot be satisfied by a browser running in the tray.
+ *
+ * Windows only: this launcher is aimed at the machine the reader is sitting at. Everywhere else —
+ * and on any failure of the command itself, including a machine where PowerShell is not on `PATH`
+ * — the answer is "not showing". That is the answer that opens a window rather than refusing to:
+ * a wrong "no" costs one window with the plugin's own profile, while a wrong "yes" would leave the
+ * reader with a sentence and no browser at all.
  *
  * The name asked about is the executable's own (`msedge.exe`), or the name Windows gives that
- * browser when the executable could not be found anywhere.
+ * browser when the executable could not be found anywhere. PowerShell names processes without the
+ * extension, so the query drops it; a quote in the name is doubled so it stays inside the literal.
  */
 export async function browserRunning(
   kind: BrowserKind,
@@ -245,12 +253,18 @@ export async function browserRunning(
 ): Promise<boolean> {
   if (platform !== 'win32') return false
   const image = exe === null ? WINDOWS_IMAGE[kind] : basename(exe)
+  const name = image.replace(/\.exe$/i, '').replace(/'/g, "''")
   try {
-    const { stdout } = await runTasklist('tasklist', ['/FI', `IMAGENAME eq ${image}`, '/FO', 'CSV', '/NH'], {
-      timeout: 5_000,
-      windowsHide: true,
-    })
-    return stdout.toLowerCase().includes(image.toLowerCase())
+    const { stdout } = await runShell(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        `@(Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count`,
+      ],
+      { timeout: 5_000, windowsHide: true },
+    )
+    return Number.parseInt(stdout.trim(), 10) > 0
   } catch {
     return false
   }
@@ -314,7 +328,7 @@ export interface EnsuredBrowser {
 
 /**
  * Injectable for tests: nothing in this file should ever really start a browser, ask a real socket
- * or run `tasklist` under vitest.
+ * or shell out to PowerShell under vitest.
  */
 export interface EnsureDeps {
   discover: (options: DiscoverOptions) => Promise<BrowserEndpoint>
