@@ -269,13 +269,15 @@ describe('what a daily run is allowed to do to the browser', () => {
     source: '插件启动的 Edge（C:\\profile\\edge）',
   }
   /**
-   * The two answers a test gives instead of the machine's: whether a discovered endpoint still
-   * answers, and whether the browser is running. Both ordinary here — up, and not running — and a
-   * test that needs the other answer says so itself.
+   * The three answers a test gives instead of the machine's: whether a discovered endpoint still
+   * answers, whether the browser is running, and whether one of this plugin's own is up. All
+   * ordinary here — up, not running, none of ours — and a test that needs another answer says so
+   * itself.
    */
-  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning'> = {
+  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser'> = {
     endpointAlive: async () => true,
     browserRunning: async () => false,
+    ownBrowser: async () => null,
   }
 
   /** What discovery sees the second time: the browser this call started, at its own endpoint. */
@@ -356,6 +358,40 @@ describe('what a daily run is allowed to do to the browser', () => {
     expect(message).toContain('两条办法')
     expect(message).toContain('关掉')
     expect(message).toContain('调试端口')
+    expect(launches).toBe(0)
+  })
+
+  it('drives the browser it started earlier instead of refusing over the window', async () => {
+    // The refusal protects the reader's window, not ours: a browser this plugin started earlier
+    // is still up with its own debugging port, so the run connects to it and opens nothing.
+    let launches = 0
+    const lookups: DiscoverOptions[] = []
+    const own: LaunchedBrowser = {
+      ...started,
+      source: 'Edge：上一次启动的那个（C:\\profile\\edge 里的 DevToolsActivePort）',
+    }
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        browserRunning: async () => true,
+        ownBrowser: async () => own,
+        discover: async (options) => {
+          lookups.push({ ...options })
+          if (!options.cdpUrl) throw dailyFailure('edge', 'switch-off')
+          return atEndpoint(options.cdpUrl)
+        },
+        launch: async () => {
+          launches += 1
+          throw new Error('浏览器还开着，这条路不该再开一个')
+        },
+      },
+    )
+    // Looked once, found nothing among the reader's browsers, then looked again *at our own
+    // endpoint*: the run must drive that browser rather than whatever a later search would find.
+    expect(lookups.map((options) => options.cdpUrl)).toEqual([undefined, own.endpoint])
+    expect(ensured.launched).toBe(own)
+    expect(ensured.endpoint.httpUrl).toBe(own.endpoint)
     expect(launches).toBe(0)
   })
 

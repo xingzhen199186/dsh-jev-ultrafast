@@ -145,6 +145,29 @@ export interface LaunchedBrowser {
 }
 
 /**
+ * The browser this plugin started earlier, still up in its own profile directory — or null.
+ *
+ * Both doors ask this question: the launcher asks it to avoid starting a second copy over the
+ * same profile, and the daily route asks it before refusing over a window, because a browser
+ * of ours is not the reader's window — it already carries a debugging port, and driving it
+ * opens nothing.
+ */
+async function runningOwnBrowser(kind: BrowserKind): Promise<LaunchedBrowser | null> {
+  const label = BROWSER_LABELS[kind]
+  const profileDir = pluginProfileDir(kind)
+  const endpoint = await liveEndpoint(profileDir)
+  if (endpoint === null) return null
+  return {
+    kind,
+    label,
+    exe: '（之前启动的那个还开着）',
+    endpoint,
+    profileDir,
+    source: `${label}：上一次启动的那个（${profileDir} 里的 DevToolsActivePort）`,
+  }
+}
+
+/**
  * Start the chosen browser with a debugging port, or return the one started earlier.
  *
  * Pressing the button twice is meant to be harmless: the second press finds the endpoint
@@ -160,17 +183,8 @@ export async function launchBrowser(
   // also where a run looks for a browser that is already running.
   const profileDir = pluginProfileDir(kind)
 
-  const running = await liveEndpoint(profileDir)
-  if (running !== null) {
-    return {
-      kind,
-      label,
-      exe: '（之前启动的那个还开着）',
-      endpoint: running,
-      profileDir,
-      source: `${label}：上一次启动的那个（${profileDir} 里的 DevToolsActivePort）`,
-    }
-  }
+  const running = await runningOwnBrowser(kind)
+  if (running !== null) return running
 
   const override = options.exeOverride?.trim()
   const exe = findBrowserExecutable(kind, override)
@@ -337,6 +351,8 @@ export interface EnsureDeps {
   endpointAlive: (endpoint: BrowserEndpoint) => Promise<boolean>
   /** Whether the chosen browser is already running on this machine. */
   browserRunning: (kind: BrowserKind, exe: string | null) => Promise<boolean>
+  /** The browser this plugin started earlier, still up in its own profile — or null. */
+  ownBrowser: (kind: BrowserKind) => Promise<LaunchedBrowser | null>
 }
 
 const ENSURE_DEPS: EnsureDeps = {
@@ -344,6 +360,7 @@ const ENSURE_DEPS: EnsureDeps = {
   launch: launchBrowser,
   endpointAlive,
   browserRunning,
+  ownBrowser: runningOwnBrowser,
 }
 
 /**
@@ -358,7 +375,9 @@ const ENSURE_DEPS: EnsureDeps = {
  * nobody asked. On the 「你正在用的浏览器」 route a browser that is *not running* is started — the
  * reader left that setting on, and a closed browser is the thing they asked the plugin to open —
  * while one that *is* running is never replaced by a second window: its windows are the reader's,
- * and the failure says what to do there instead (see `dailyRunningMessage`). Everything else
+ * and the failure says what to do there instead (see `dailyRunningMessage`), except when the
+ * running one is this plugin's own, which already carries a debugging port and is connected to
+ * rather than refused over (`runningOwnBrowser`). Everything else
  * starts the browser the settings page names: the same executable lookup, the same profile
  * directory, the same port-file trick, and the same idempotence — a second task finds the browser
  * the first one started instead of opening a second window.
@@ -384,6 +403,13 @@ export async function ensureBrowser(
       // there means it holds no debugging port, or is waiting on a 「允许远程调试？」 box — and that
       // second failure has its own answer, inside that window, which is the sentence discovery wrote.
       if (answeredInTheBrowser(error)) throw error
+      // A browser of this plugin's own is not the reader's window: it already carries a debugging
+      // port, so the run connects to it and the note names it — the refusal below is for the
+      // reader's window, which has no port to connect to.
+      const own = await deps.ownBrowser(kind)
+      if (own !== null) {
+        return { endpoint: await deps.discover({ ...options, cdpUrl: own.endpoint }), launched: own }
+      }
       if (await deps.browserRunning(kind, findBrowserExecutable(kind, options.exeOverride))) {
         throw new Error(dailyRunningMessage(kind))
       }
