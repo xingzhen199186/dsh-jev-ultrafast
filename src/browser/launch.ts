@@ -599,23 +599,28 @@ async function answersWebSocket(wsUrl: string, timeoutMs = 1_500): Promise<boole
       return
     }
     const timer = setTimeout(() => {
+      // The verdict is settled *before* the socket is touched, in every path below: closing a
+      // socket that is still connecting can dispatch its close/error synchronously (measured
+      // 2026-10-03 — the real handshake lands right on this timeout line, and a close-first
+      // ordering let that event write "dead" one run in three), so whichever side speaks first
+      // owns the answer. Only after the verdict is down is the socket closed.
+      settle(/^wss?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(url))
       try {
         socket.close()
       } catch {
-        // Already gone; the answer below is what counts.
+        // Already gone; the verdict above is what counts.
       }
-      settle(/^wss?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\//.test(url))
     }, timeoutMs)
     socket.addEventListener(
       'open',
       () => {
         clearTimeout(timer)
+        settle(true)
         try {
           socket.close()
         } catch {
-          // Closing a socket that just opened cannot fail the answer.
+          // Closing a socket the verdict already covers cannot reopen the question.
         }
-        settle(true)
       },
       { once: true },
     )

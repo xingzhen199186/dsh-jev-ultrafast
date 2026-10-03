@@ -134,4 +134,26 @@ describe('endpointAlive', () => {
     const endpoint = { ...endpointAt(base), wsUrl: 'ws://10.98.76.54:9222/devtools/browser/holding' }
     expect(await endpointAlive(endpoint)).toBe(false)
   }, 5_000)
+
+  it('a socket whose close fires synchronously cannot flip a verdict given before it', async () => {
+    // The race measured 2026-10-03: the real handshake lands right on the timeout line, and closing
+    // a still-connecting socket dispatched its close event synchronously — that listener answered
+    // "dead" before the timeout callback had spoken, one run in three. The verdict has to be down
+    // before the socket is touched, which is what this stub enforces: close() answers instantly.
+    const base = await listen(() => ({ status: 404, body: 'Not Found' }))
+    vi.stubGlobal(
+      'WebSocket',
+      class {
+        #handlers: Record<string, () => void> = {}
+        addEventListener(type: string, listener: () => void): void {
+          this.#handlers[type] = listener
+        }
+        close(): void {
+          this.#handlers.close?.()
+        }
+      },
+    )
+    const endpoint = { ...endpointAt(base), wsUrl: 'ws://127.0.0.1:9222/devtools/browser/sync-close' }
+    expect(await endpointAlive(endpoint)).toBe(true)
+  }, 5_000)
 })
