@@ -238,6 +238,17 @@ export const HELPER_MAX_TOKENS = 393_216
 const FALLBACK_MAX_TOKENS = 8192
 
 /**
+ * How long one question to the text model may take.
+ *
+ * 25 seconds killed a working call on 2026-10-04: mimo-v2.6-flash was still reasoning (154
+ * characters of it) when the deadline fired at 25 012 ms, and the abort surfaced to the reader as
+ * "the answer never came" — a deadline, not a dead route. A big question (a page's text plus a
+ * JSON demand) on a reasoning model takes tens of seconds, so the line sits at 60: room for that
+ * answer, while a route that is genuinely gone still fails inside a minute.
+ */
+const TEXT_TIMEOUT_MS = 60_000
+
+/**
  * The limit a refusal names, when it names one.
  *
  * Anthropic answers "max_tokens: 393216 > 8192, which is the maximum allowed"; OpenAI answers
@@ -332,7 +343,7 @@ async function post(
         method: 'POST',
         headers: { authorization: `Bearer ${source.apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify(body),
-        signal: requestSignal(source.timeoutMs ?? 25_000, source.signal),
+        signal: requestSignal(source.timeoutMs ?? TEXT_TIMEOUT_MS, source.signal),
       })
     } catch {
       source.trace?.write({ at: Date.now(), kind: 'text', door: 'preset', model: source.model, error: '连接文本模型失败' })
@@ -415,7 +426,7 @@ async function streamViaDsh(
       // (UNSUPPORTED_REASONING_EFFORT) — which reports a working route as broken, and did.
       // The preset door can honour `none` because it speaks each vendor's own shape; this one
       // leaves reasoning to DSH and the model behind it.
-      signal: requestSignal(source.timeoutMs ?? 25_000, source.signal),
+      signal: requestSignal(source.timeoutMs ?? TEXT_TIMEOUT_MS, source.signal),
     })) {
       if (chunk.type === 'text-delta') text += chunk.text ?? ''
       else if (chunk.type === 'reasoning-delta') reasoningChars += (chunk.text ?? '').length
