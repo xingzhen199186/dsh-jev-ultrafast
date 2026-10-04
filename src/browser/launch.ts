@@ -251,10 +251,10 @@ export async function launchBrowser(
  * nothing is written to the profile: the browser manages its own exactly as it does under a
  * double-click.
  *
- * Null is the answer "no debug port appeared" — switch off, executable missing, or a browser
- * slower than the deadline — which the caller reads as *start the plugin's own instead*. A
- * failure that is really a question for the reader never lands here: discovery is the one that
- * words a box, and the caller re-runs it for that sentence.
+ * Null is the answer "no debug port appeared" or "no window to hold the box" — switch off,
+ * executable missing, or a browser slower than the deadline — which the caller reads as *start the
+ * plugin's own instead*. A failure that is really a question for the reader never lands here:
+ * discovery is the one that words a box, and the caller re-runs it for that sentence.
  */
 export async function launchDailyBrowser(
   kind: BrowserKind,
@@ -275,24 +275,35 @@ export async function launchDailyBrowser(
     profileDir,
     source: `你正在用的 ${label}（${profileDir} 里的 DevToolsActivePort）`,
   })
+  let found: BrowserEndpoint | null = null
   for (;;) {
-    try {
-      const found = await discoverBrowser({ connection: 'daily', preferredKind: kind })
-      return record(found.httpUrl)
-    } catch (error) {
-      // The switch is off in the profile this browser just started with: no port will ever come
-      // from it, so stop rather than wait out the deadline — the fallback can have it now.
-      if (error instanceof DailyBrowserError && error.problem === 'switch-off') return null
-      // The box is up inside the window that now exists. Hand back what the port file says so the
-      // connection waits on the click — waiting there is its own behaviour, and the note already
-      // tells the reader to click 「允许」.
-      if (error instanceof DailyBrowserError && error.problem === 'not-authorized') {
-        const active = await readActivePort(profileDir)
-        return active === null ? null : record(`http://127.0.0.1:${active.port}`)
+    if (found === null) {
+      try {
+        found = await discoverBrowser({ connection: 'daily', preferredKind: kind })
+      } catch (error) {
+        // The switch is off in the profile this browser just started with: no port will ever come
+        // from it, so stop rather than wait out the deadline — the fallback can have it now.
+        if (error instanceof DailyBrowserError && error.problem === 'switch-off') return null
+        // The box is up inside the window that now exists. Hand back what the port file says so the
+        // connection waits on the click — waiting there is its own behaviour, and the note already
+        // tells the reader to click 「允许」.
+        if (error instanceof DailyBrowserError && error.problem === 'not-authorized') {
+          const active = await readActivePort(profileDir)
+          return active === null ? null : record(`http://127.0.0.1:${active.port}`)
+        }
+        if (Date.now() >= deadline) return null
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        continue
       }
-      if (Date.now() >= deadline) return null
-      await new Promise((resolve) => setTimeout(resolve, 250))
     }
+    // The 「允许远程调试？」 box lives in a window, and a handshake made before that window exists
+    // is refused outright — measured 2026-10-04: rejected in 7 ms — instead of being held for the
+    // click. So the port answering is not enough: their window has to be up before the endpoint is
+    // handed over. If it never comes up, the answer is null and the fallback opens a browser that
+    // asks nobody for anything.
+    if (await browserRunning(kind, exe)) return record(found.httpUrl)
+    if (Date.now() >= deadline) return null
+    await new Promise((resolve) => setTimeout(resolve, 250))
   }
 }
 
