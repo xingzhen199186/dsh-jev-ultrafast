@@ -39,12 +39,10 @@ describe('the model box remembers what each supplier was given', () => {
     // back to A — A's own model is what the box has to show, not B's.
     const toB = modelBoxOnMove({ memory: {}, leaving: 'A', model: 'a-model', arriving: 'B', saved })
     expect(toB.memory).toEqual({ A: 'a-model' })
-    expect(toB.known).toBe(false)
     expect(toB.model).toBeUndefined()
 
     const toA = modelBoxOnMove({ memory: toB.memory, leaving: 'B', model: 'b-model', arriving: 'A', saved })
     expect(toA.memory).toEqual({ A: 'a-model', B: 'b-model' })
-    expect(toA.known).toBe(true)
     expect(toA.model).toBe('a-model')
   })
 

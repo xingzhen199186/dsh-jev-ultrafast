@@ -476,12 +476,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
       saved: savedModelOf(pair),
     })
     setDoorModels(moved.memory)
-    setDraft((current) => {
-      const after: Record<string, unknown> = { ...current, [key]: chosen }
-      if (moved.known) after[pair.model] = moved.model ?? ''
-      else delete after[pair.model]
-      return after
-    })
+    setDraft((current) => ({ ...current, [key]: chosen, [pair.model]: moved.model ?? '' }))
   }
 
   const textDoor = filled('textProvider')

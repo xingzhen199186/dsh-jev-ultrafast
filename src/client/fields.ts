@@ -416,7 +416,9 @@ export function modelPairOf(key: string): ModelPair | undefined {
  * The move is two halves of one act: the model being left is remembered under the supplier being
  * left, and the model being chosen is restored from its own memory. When that supplier has never
  * been given one, the saved value stands for it only if it already belongs to that supplier;
- * otherwise the answer is "unknown", which the box draws as the supplier's own default.
+ * otherwise the answer is "no model", which the box draws as the supplier's own default — and
+ * which the caller writes down as an empty value, because leaving the previous supplier's model in
+ * the configuration while the page says "empty" is how a run comes to use a model nobody chose.
  */
 export function modelBoxOnMove(input: {
   memory: Readonly<Record<string, string>>
@@ -424,17 +426,17 @@ export function modelBoxOnMove(input: {
   model: string | undefined
   arriving: string
   saved: { door: string; model: string | undefined }
-}): { memory: Record<string, string>; model: string | undefined; known: boolean } {
+}): { memory: Record<string, string>; model: string | undefined } {
   const memory =
     input.leaving === '' || input.model === undefined
       ? { ...input.memory }
       : { ...input.memory, [input.leaving]: input.model }
   const remembered = memory[input.arriving]
-  if (remembered !== undefined) return { memory, model: remembered, known: true }
+  if (remembered !== undefined) return { memory, model: remembered }
   if (input.arriving !== '' && input.arriving === input.saved.door) {
-    return { memory, model: input.saved.model, known: true }
+    return { memory, model: input.saved.model }
   }
-  return { memory, model: undefined, known: false }
+  return { memory, model: undefined }
 }
 
 /**
