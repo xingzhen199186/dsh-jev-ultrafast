@@ -154,7 +154,7 @@ describe('element table cap', () => {
 
   it('cuts a guessed entry before a native one of the same standing, even when the guessed one reads closer to the goal', () => {
     // Two halves of one page: forty-four controls the page declared, and six rows the deep scan
-    // guessed at — six, which is the pool's own cap (`browser/snapshot.ts`). A guessed row is made of
+    // guessed at (a hand-sized set of the pool's twelve — `browser/snapshot.ts`). A guessed row is made of
     // the page's words, so it can beat a native control on the goal's own words alone, and a slot a
     // guess takes is a slot a declared control loses. What decides first is the standing the run has
     // for keeping an entry at all (the element it just acted on, a name of its own, an operation it

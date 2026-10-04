@@ -188,12 +188,16 @@ const SNAPSHOT_BODY = String.raw`(() => {
   // guessed entry before a native one of the same standing: with the slots short, a slot a guess
   // does not take is a slot the page's own controls keep.
   if (__JEV_DEEP_SCAN__) {
-    // Six, where it was twelve. The pool is what grows a request, and the request is already at its
-    // own ceiling: on the 携程 home page (2026-10) the seven entries the pool produced beside the
-    // native table were worth 4 real targets and 3 rows that repeated the page's navigation and
-    // account text, while the widest request of that run came within 100 characters of the 20,000
-    // the service is given. Halving the pool halves the worst case that ceiling has to absorb.
-    const GUESS_LIMIT=6, REACT_UP=3;
+    // Twelve again, where six stood in between. Six was cut from twelve after the 携程 home page
+    // (2026-10) pushed a request within 100 characters of the 20,000 the service is given — a real
+    // ceiling then, and the request side still measures and trims itself one entry at a time (the
+    // caps test in clickables.test.ts pins that). What a smaller pool costs was measured on
+    // 2026-10-04 on bilibili's popular page: the 排行榜 sidebar the task was asking for is a
+    // listener-bound div rather than a link, so the pool is the only door it has — and in document
+    // order it sits at guess #11, where a pool of six could never reach it. The run saw no target
+    // at all, chose a search box it could see, and clicked it three times. Twelve reaches #11; a
+    // larger pool needs a measurement of its own to justify it.
+    const GUESS_LIMIT=12, REACT_UP=3;
     const events=['click','mousedown','mouseup','pointerdown','pointerup','DOMActivate'];
     const inline=['onclick','onmousedown','onmouseup','onpointerdown','onpointerup'];
     const listeners=typeof getEventListeners==='function' ? getEventListeners : null;

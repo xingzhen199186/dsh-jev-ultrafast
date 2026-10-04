@@ -428,12 +428,13 @@ describe('elements a page made clickable with its own script', () => {
     )
     const guesses = offered(state).filter((action) => action.guess !== undefined)
 
-    // Six, where the pool used to allow twelve: twenty candidates are on the page and the six it takes
-    // are the first six it walks into, which is the tail of the table and nothing more (2026-10: the
-    // 携程 home page's seven pooled entries cost a request already within 100 characters of its limit).
-    expect(guesses).toHaveLength(6)
+    // Twelve again: twenty candidates are on the page and the pool takes the first twelve it walks
+    // into. Six starved a late-page target on 2026-10-04 — bilibili's 排行榜 sidebar sat at guess
+    // #11, unreachable — while the request's own ceiling stays guarded by the loop's measured fit,
+    // which the caps test below pins.
+    expect(guesses).toHaveLength(12)
     expect(guesses.map((action) => action.label)).toEqual(
-      Array.from({ length: 6 }, (_unused, index) => `可选 ${index + 1}`),
+      Array.from({ length: 12 }, (_unused, index) => `可选 ${index + 1}`),
     )
   })
 
@@ -539,9 +540,9 @@ describe('elements a page made clickable with its own script', () => {
       { consoleApi: true },
     )
     const space = actionSpace(state.actions)
-    // Fifty-five declarations and the pool's full six guessed rows, not the fifteen the page offers: the
+    // Fifty-five declarations and the pool's full twelve guessed rows, not the fifteen the page offers: the
     // pool is capped inside the snapshot (`browser/snapshot.ts`), before anything else sees the table.
-    expect(space.elements).toHaveLength(61)
+    expect(space.elements).toHaveLength(67)
 
     // What the loop does, in the same order and with the same arithmetic: the cap first, then the
     // request body measured and the table cut again a few entries at a time until it fits.
