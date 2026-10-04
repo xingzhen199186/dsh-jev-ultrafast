@@ -22,12 +22,13 @@
  *  - three consecutive steps that left the page unchanged stop the run, and a run of steps on
  *    one and the same target that only ever brings back page states the run has already shown
  *    stops it as well, saying which action it was stuck on instead of burning the budget;
- *  - a step that acted on an element and did not move the screen makes that element a dead end. The
- *    judgement is the plugin's own, and where the run should go instead is not part of it: see
- *    `./dead-ends.ts`. Whether that dead end is then taken out of every copy of the candidate table
- *    before the next request is built is the `excludeDeadEndElements` option's business — off, and
- *    since 2026-10-02 no longer reachable from the settings page, so a run judges the dead ends,
- *    reports them, and takes nothing away.
+ *  - a run that keeps two different screens arriving in turn stops too, naming the two of them:
+ *    neither rule above can see a step that really does change the screen but only ever swaps
+ *    between the same pair (`pingPongPages` carries the measurement it was written from);
+ *  - a step that acted on an element and did not move the screen makes that element a dead end, and
+ *    that element then comes out of every copy of the candidate table before the next request is
+ *    built. The judgement is the plugin's own, and where the run should go instead is not part of
+ *    it: see `./dead-ends.ts`.
  */
 import type { ActionSpace, ElementEntry, TrimmedSpace } from './decision/action-space'
 import { actionElementKey, actionSpace, elementIndicesForKeys, trimActionSpace, withoutElements } from './decision/action-space'
@@ -162,14 +163,6 @@ export interface TaskOptions {
     model: ControlModel
     cap: number
   }
-  /**
-   * Whether an element the run judged a dead end is taken out of the candidates. Off, and no longer a
-   * setting anybody can turn on: the judgement is made and reported either way, and the removal it
-   * feeds only ever cost a run the element that mattered — the settings page dropped the switch on
-   * 2026-10-02, so only a caller that asks for it directly gets the exclusion. See `./dead-ends.ts`
-   * for why the removal waits for a stronger test than the one that produces the judgement.
-   */
-  excludeDeadEndElements?: boolean
   /**
    * Whether an element a page made clickable with its own script — a plain `div` or `span` with a
    * click listener, which is how React and Vue render most of a page — is offered as a candidate
@@ -387,11 +380,11 @@ export interface TaskResult {
   follows: FollowRecord[]
   /**
    * The elements this run judged to be dead ends, in the order it judged them, each with the step that
-   * produced the judgement. Recorded whether or not they were taken out of the candidates, so a run can
-   * be reviewed for a judgement that set aside the one element that mattered.
+   * produced the judgement. Recorded as well as acted on, because the judgement is the thing a reader
+   * has to be able to check afterwards.
    */
   deadEnds: DeadEndRecord[]
-  /** Whether those elements were taken out of the candidates, or only written down. */
+  /** Whether those elements were taken out of the candidates. True since the ruling of 2026-10-04. */
   deadEndsExcluded: boolean
   /**
    * What the run's own answer model said the page came back with, in its own words, asked once at
@@ -559,6 +552,73 @@ function repeatedActionState(page: PageState): string {
 }
 
 /**
+ * How many times two screens may come back in turn before the run stops.
+ *
+ * Four round trips — the first screen landed on five times — and the number is set by the rule this one
+ * sits beside rather than by taste. The repeated-action rule deliberately lets five repeats of one action
+ * be a slow run and stops on the sixth, and the test that pins that down ("stops on the sixth repeat in
+ * the window and not on the fifth") is itself a run alternating two screens while it does so. A window of
+ * three round trips would stop that run before the rule it belongs to ever got its say, so this one is a
+ * round trip wider than the smallest window that would have caught the loop it was written from: on
+ * 2026-10-04 the bilibili task went 番剧 → 番剧排行榜 → 番剧 → … eight times over between its steps 7 and
+ * 21 (留痕 run-1791128895514-22oy), and neither rule around this one could see it — the target alternates,
+ * so no action repeats, and every step really does change the address, so nothing stands still.
+ *
+ * The price is paid knowingly: a task that legitimately bounces between the same two screens more than
+ * four times — a list and one detail page, over and over — is stopped here as well, which is why the
+ * sentence names both screens and leaves that judgement with the reader.
+ */
+const MAX_PING_PONG_ROUNDS = 4
+
+/** One screen the run landed on, as the ping-pong rule reads it: an identity, and the name to say. */
+export interface PageVisit {
+  /** The screen's identity, the very string the repeated-action rule tells screens apart by. */
+  state: string
+  /** What to call that screen in a sentence. */
+  name: string
+}
+
+/**
+ * The two screens a run is going back and forth between, or `null` when it is not doing that.
+ *
+ * The window is the tail of the run's own landings — `rounds` round trips, so `rounds * 2 + 1` of them —
+ * and every one of those landings has to alternate strictly between the same two different screens.
+ * Anything else is not this rule's business: one screen standing still belongs to the three-quiet-steps
+ * rule, and one action done over and over belongs to the rule above. What neither of them can see is two
+ * *different* screens, each of them really changing, arriving in turn for the whole window.
+ */
+export function pingPongPages(
+  visits: readonly PageVisit[],
+  rounds = MAX_PING_PONG_ROUNDS,
+): { readonly first: string; readonly second: string } | null {
+  const span = rounds * 2 + 1
+  if (visits.length < span) return null
+  const window = visits.slice(-span)
+  const first = window[0]!
+  const second = window[1]!
+  if (first.state === second.state) return null
+  for (const [at, visit] of window.entries()) {
+    if (visit.state !== (at % 2 === 0 ? first.state : second.state)) return null
+  }
+  return { first: first.name, second: second.name }
+}
+
+/**
+ * What to call one screen in a sentence about it.
+ *
+ * A page's own title is what a reader recognises, but sites decorate it: bilibili answers
+ * `番剧排行榜_番剧排行榜-哔哩哔哩…` for the ranking and `番剧 - 哔哩哔哩 (゜-゜)つロ 干杯~-bilibili` for
+ * the channel. The title is therefore cut at its first separator, and an empty result falls back to the
+ * address, which is at least something the reader can recognise.
+ */
+export function pageNameOf(page: { title?: unknown; url?: unknown }): string {
+  const title = typeof page.title === 'string' ? page.title.trim() : ''
+  const cut = title.split(/\s*[-_|]\s*/)[0]?.trim() ?? ''
+  if (cut !== '') return cut
+  return typeof page.url === 'string' ? page.url : ''
+}
+
+/**
  * What makes a paid field value still the right answer for the field in front of the run.
  *
  * The same field on the same page, and nothing else: the address it stands on, the element's own
@@ -593,10 +653,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const maxSteps = options.maxSteps ?? MAX_STEPS
   const maxDecisions = maxSteps * 2
   const screenshots = options.screenshots === true
-  // Whether a dead end the run judges is taken out of the candidate table or only written down. Off
-  // unless it is asked for: the judgement behind it is weaker than the removal it feeds (see
-  // `./dead-ends.ts`), so the removal waits behind a switch while the judgement is always made.
-  const excludeDeadEnds = options.excludeDeadEndElements === true
+  // A dead end the run judges always comes out of the candidate table, with no switch left to turn it
+  // off: the reader's ruling of 2026-10-04 put the removal back after a measured run showed what the
+  // judgement alone is worth (see `./dead-ends.ts`).
   // Whether a step that opened new windows is told to the browser as something to choose among by
   // relevance, or whether the browser keeps making that choice on its own. On unless it is refused,
   // because the choice it replaces was "the last page the browser lists" — the bug it is here for.
@@ -720,6 +779,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // keeps producing something new apart from one that is going round in circles.
   const seenStates = new Set<string>()
   const recentSteps: Array<{ replayed: boolean; target: string | null; targetKey: string | null }> = []
+  // The screens the run landed on, in order and only as many as the ping-pong rule reads: two different
+  // screens arriving in turn is the one loop neither the repeated-action rule nor the quiet-steps rule
+  // can see (see `pingPongPages`).
+  const recentPages: PageVisit[] = []
   // The elements this run has found to be dead ends: a step acted on one and the screen did not move
   // for it. Read once per request, by `nextDeadEnds`, and emptied by a screen that really changed.
   // The judgement is the plugin's own rather than a sentence to the model — see `./dead-ends.ts` for
@@ -948,16 +1011,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // and its own honest reading says the screen did not move for it, so that element is a dead end,
       // and a step that really moved the screen empties the set (see `./dead-ends.ts`). Recomputed from
       // the step that really preceded this request rather than remembered apart from it, so the two
-      // cannot drift. The judgement is made whether or not it is acted on: with the setting off, the set
-      // is what the run reports instead of what it takes away.
+      // cannot drift. The set is what the run reports, and it is what comes out of the candidates below.
       const lastStep = history[history.length - 1]
       const judged = nextDeadEnds(deadEnds, lastStep ? { ...lastStep, element_key: lastElementKey } : lastStep, full.elements.length)
       for (const element of judged) {
         if (deadEnds.has(element)) continue
         const currentIndex = elementIndicesForKeys(full, new Set([element])).values().next().value ?? element
         // Written down as it is judged, with the step it came from, because that is the only thing that
-        // lets a reader check the judgement later — and with the setting off it is the only trace it
-        // leaves at all.
+        // lets a reader check the judgement later.
         deadEndsJudged.push({
           step: lastStep?.step ?? 0,
           element: currentIndex,
@@ -974,9 +1035,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // never said — they are simply not offered — and they are not counted as left out either: the
       // table still carries every element the page had, so the count below is the cap's own arithmetic
       // and `sentElements + omittedElements` is still the table's own element count — the table the
-      // cut was handed, which is the page's own plus the cover's row where a cover added one. With the
-      // removal off, nothing is taken away at all and the request is the page's own table.
-      const offered = excludeDeadEnds ? withoutElements(full, elementIndicesForKeys(full, deadEnds)) : full
+      // cut was handed, which is the page's own plus the cover's row where a cover added one.
+      const offered = withoutElements(full, elementIndicesForKeys(full, deadEnds))
       const recent = history.map((entry) => entry.target)
       // ---- and the one thing that is done about a range that has been lost ----
       // The candidates are cut to the controls that could put it back, and only on the step after the
@@ -1579,6 +1639,21 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         break
       }
 
+      // ---- or is it going back and forth between two screens? ----
+      // A run that really changes the screen on every step, but only ever alternates between the same
+      // two, is invisible to both rules around this one: the action is not repeated, and nothing stands
+      // still. See `pingPongPages` for the measurement and for the price of this stop.
+      recentPages.push({ state: seen, name: pageNameOf(page) })
+      if (recentPages.length > MAX_PING_PONG_ROUNDS * 2 + 1) recentPages.shift()
+      const pingPong = pingPongPages(recentPages)
+      if (pingPong !== null) {
+        status = 'blocked'
+        reason =
+          `它在两个页面之间来回换（${pingPong.first} / ${pingPong.second}），` +
+          '始终没能读到你问的东西，先停下'
+        break
+      }
+
       const tail = history.slice(-3)
       if (tail.length === 3 && tail.every((entry) => entry.page_changed === false && entry.kind !== 'wait')) {
         status = 'blocked'
@@ -1695,9 +1770,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // Likewise: what the service said on the steps it was not sure about, and whether the two
       // answers it gave agreed.
       ...(reasks.length > 0 ? { reasks } : {}),
-      // And the dead ends the run judged for itself: which elements, at which step, and whether they
-      // were taken out of the candidates or only written down.
-      ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: excludeDeadEnds } : {}),
+      // And the dead ends the run judged for itself: which elements, at which step. They were taken out
+      // of the candidates that followed, which is what the `true` says.
+      ...(deadEndsJudged.length > 0 ? { dead_ends: deadEndsJudged, dead_ends_excluded: true } : {}),
       // Likewise, the steps that acted on an element the page did not declare but the deep scan
       // offered as a guess (`browser/snapshot.ts`), so the record answers on its own which of the
       // table's entries were our own inference — what the 携程 diagnosis of 2026-10 had to work out
@@ -1738,7 +1813,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
     textCut,
     follows,
     deadEnds: deadEndsJudged,
-    deadEndsExcluded: excludeDeadEnds,
+    deadEndsExcluded: true,
     answer,
     // Only when there is an empty answer to explain; a run that said something has no silence to
     // name. The two silences are told apart here and nowhere else in the run.

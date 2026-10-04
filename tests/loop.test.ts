@@ -12,7 +12,7 @@ import { NoResultOnPage, type AnswerContext, type FieldContext, type TextResult 
 import type { Decision, DecisionContext } from '../src/decision/typesafe'
 import { InvalidDecision, buildQuestionnaire, requestChars } from '../src/decision/typesafe'
 import { Config } from '../src/index'
-import { type LoopEvent, type TaskDeps, runTask, verdictText } from '../src/loop'
+import { type LoopEvent, type TaskDeps, pageNameOf, pingPongPages, runTask, verdictText } from '../src/loop'
 import { MAX_ELEMENTS } from '../src/prompts'
 import { readSettings } from '../src/run-setup'
 
@@ -240,8 +240,6 @@ function run(
     expect?: string[]
     record?: boolean
     screenshots?: boolean
-    /** Whether a judged dead end is taken out of the candidates. Off, as the settings page ships it. */
-    excludeDeadEndElements?: boolean
     /** Whether a script-made clickable is offered as a candidate. On, as the settings page ships it. */
     guessClickableElements?: boolean
     /** Whether a cover is answered as a candidate rather than only as a sentence. On, as it ships. */
@@ -659,11 +657,12 @@ describe('run loop', () => {
     expect(result.reason).toBe('连续 3 步当前页面没有任何变化，已停止')
   })
 
-  it('keeps a dead end in the table while the removal is off, and writes the judgement down anyway', async () => {
-    // The default, and the reason it is the default: the step showed nothing, but that is a weaker
-    // thing to know than "this element can never matter". So the run judges it, reports it, and takes
-    // nothing away — every request is the page's own table down to the byte, exactly as it was before
-    // the removal existed. The same page under the switch is the test below.
+  it('takes a judged dead end out of the candidates, and leaves its entry in the table', async () => {
+    // Unconditional since the reader's ruling of 2026-10-04. On the bilibili run of that day (留痕
+    // run-1791128895514-22oy) the judge had marked the search box a dead end, the fact went to the
+    // service, and the model clicked it once more — a fact in the state is not something this model acts
+    // on (see `./dead-ends.ts`). What comes out is the question, never the page's own description of
+    // itself, which the test below pins down to the body the service receives.
     const crowd = [
       ...actions,
       ...Array.from({ length: 5 }, (_unused, at) => button(`e${at + 3}`, at + 3, `Option ${at + 1}`)),
@@ -678,22 +677,23 @@ describe('run loop', () => {
       expect(result.status).toBe('blocked')
       expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
 
-      // The element is still offered, in the element list and in the question that asks about it.
+      // The element's entry stays — the page's own structure is what the model reads the screen from —
+      // and only the questions that offered it go without the number.
       const offered = h.seen.spaces[1]!
       expect(offered.elements.map((element) => element.index)).toEqual(['1', '2', '3', '4', '5', '6', '7'])
-      expect(offered.targets.CLICK!['1']).toBeDefined()
-      // Snapshot-style: the request the run built is the one the page's own table builds from the very
-      // same context. Nothing was removed, and no criterion was rewritten to say something was.
-      const body = (space: ActionSpace, context: DecisionContext): string =>
-        JSON.stringify(buildQuestionnaire(space, context, decision.model).request)
-      expect(body(offered, h.seen.contexts[1]!)).toBe(body(actionSpace(crowd), h.seen.contexts[1]!))
-      expect(body(offered, h.seen.contexts[1]!)).toContain('"index":"1"')
+      expect(offered.targets.CLICK!['1']).toBeUndefined()
+      // Snapshot-style, against the body the service really receives: the entry is described the way the
+      // page's own table describes it, so nothing about the page was rewritten — the number survives
+      // where it describes the screen, and is named nowhere as a choice.
+      const { request } = buildQuestionnaire(offered, h.seen.contexts[1]!, decision.model)
+      expect(JSON.stringify(request)).toContain('"index":"1"')
+      expect(JSON.stringify(request.questions)).not.toMatch(/"1(:[^"]*)?"\s*:/)
       // And nothing pretends the page was a selection: nothing was left out.
       expect(h.seen.contexts[1]!.omittedElements).toBeUndefined()
       expect(result.omittedElements).toBe(0)
 
-      // The judgement itself is still made, and reported in the run's own result...
-      expect(result.deadEndsExcluded).toBe(false)
+      // The judgement is reported in the run's own result, and says the removal happened...
+      expect(result.deadEndsExcluded).toBe(true)
       expect(result.deadEnds).toEqual([{ step: 1, element: '1', target: '1', label: 'Search' }])
       // ...and written into the trace the run leaves behind, which is where it can be reviewed later.
       const trace = readFileSync(join(result.recordDir, 'trace.jsonl'), 'utf8')
@@ -704,14 +704,14 @@ describe('run loop', () => {
         kind: 'run',
         status: 'blocked',
         dead_ends: [{ step: 1, element: '1', target: '1', label: 'Search' }],
-        dead_ends_excluded: false,
+        dead_ends_excluded: true,
       })
     } finally {
       rmSync(result.recordDir, { recursive: true, force: true })
     }
   })
 
-  it('takes a dead end out of the next request when the removal is on', async () => {
+  it('takes a dead end out of the next request, and says nothing about it to the model', async () => {
     // The same carousel, on a page with enough elements to leave the floor room: the click moved
     // nothing a reader would call the screen — the controls and the address stood still while the
     // page rewrote its own text — so the element the step acted on comes out of the questions the
@@ -727,7 +727,7 @@ describe('run loop', () => {
       pageState(`t${index + 1}`, { text: `广告轮播第 ${index + 1} 帧`, actions: crowd }),
     )
     const h = harness({ pages: [pageState('t0', { actions: crowd }), ...frames], choices: ['e1', 'e1', 'e1'] })
-    const result = await run(h.deps, { excludeDeadEndElements: true })
+    const result = await run(h.deps)
 
     expect(result.status).toBe('blocked')
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
@@ -768,7 +768,7 @@ describe('run loop', () => {
       choices: ['e2', 'e2', 'e2'],
       targets: { e2: '2' },
     })
-    const result = await run(h.deps, { excludeDeadEndElements: true })
+    const result = await run(h.deps)
 
     expect(result.history.map((entry) => entry.page_changed)).toEqual([false, false, false])
     // Set aside for a step, not forbidden: the element is still in the table the next request carries,
@@ -3143,7 +3143,10 @@ describe('retries that buy no step', () => {
         pageState('f1', { url: 'https://hotels.test/list?city=1', actions: list }),
         pageState('f2', { url: 'https://hotels.test/list?city=1', actions: list }),
       ]
-      const h = harness({ pages: pages(), choices: ['e5', 'e5', 'DONE'], targets: { e5: '5' } })
+      // Five ways back, and the second press is a different control on purpose: pressing one control twice
+      // while nothing moves judges it a dead end, and a dead end is out of the candidates by then, which
+      // would change what this test is about.
+      const h = harness({ pages: pages(), choices: ['e5', 'e2', 'DONE'], targets: { e5: '5' } })
       const result = await run(h.deps, { record: true, control: { model: control.model, cap: 12 } })
 
       expect(result.status).toBe('done')
@@ -3166,9 +3169,11 @@ describe('retries that buy no step', () => {
         '返回',
         '重置筛选',
       ])
-      // Five ways back is exactly the floor, so nothing had to be put back: one line, about the loss.
+      // The loss is one line. The floor's own sentence is the second: the press that changed nothing has
+      // been judged a dead end by this request, so the five ways back are four, and the floor has to put
+      // the most relevant element back (see `narrowToRange`).
       expect(lossLines(result.recordDir)).toHaveLength(1)
-      expect(rangeLines(result.recordDir)).toHaveLength(1)
+      expect(rangeLines(result.recordDir)).toHaveLength(2)
 
       rmSync(result.recordDir, { recursive: true, force: true })
     })
@@ -3477,5 +3482,87 @@ describe('retries that buy no step', () => {
       expect(result.steps).toBe(1)
       expect(h.seen.decisions).toBe(2)
     })
+  })
+})
+
+describe('the two-page ping-pong rule', () => {
+  const visit = (state: string, name = state): { state: string; name: string } => ({ state, name })
+
+  it('reads two screens coming back in turn, and waits out the window the rule beside it allows', () => {
+    // The run this was written from: 番剧 → 番剧排行榜 → 番剧 → … eight times over between steps 7 and
+    // 21 (留痕 run-1791128895514-22oy). The window is four round trips, one wider than the smallest that
+    // would have caught that loop, so a run the repeated-action rule is still allowed to keep going —
+    // five repeats of one action — is never stopped here first.
+    const seen = Array.from({ length: 9 }, (_unused, at) => visit(at % 2 === 0 ? 'A' : 'B'))
+    expect(pingPongPages(seen)).toEqual({ first: 'A', second: 'B' })
+    // One landing short of the window there is nothing to say yet.
+    expect(pingPongPages(seen.slice(0, 8))).toBeNull()
+    // And a window with a third screen inside it is not this rule's business either.
+    expect(
+      pingPongPages([
+        visit('C'),
+        visit('A'),
+        visit('B'),
+        visit('A'),
+        visit('B'),
+        visit('A'),
+        visit('B'),
+        visit('A'),
+        visit('B'),
+        visit('C'),
+      ]),
+    ).toBeNull()
+  })
+
+  it('says nothing about one screen standing still, or about a window with a third screen in it', () => {
+    // One screen standing still belongs to the quiet-steps rule and one repeated action to the rule
+    // before it; a third screen means the run is not going back and forth at all.
+    expect(pingPongPages(Array.from({ length: 9 }, () => visit('A')))).toBeNull()
+    expect(pingPongPages([visit('A'), visit('B'), visit('A'), visit('B'), visit('A'), visit('C'), visit('A'), visit('B'), visit('A')])).toBeNull()
+  })
+
+  it('names the two screens the way a reader recognises them', () => {
+    // bilibili decorates both titles; what is said is the part in front of the first separator, and an
+    // empty title falls back to the address rather than saying nothing.
+    expect(pageNameOf({ title: '番剧 - 哔哩哔哩 (゜-゜)つロ 干杯~-bilibili', url: 'https://www.bilibili.com/anime/' })).toBe('番剧')
+    expect(pageNameOf({ title: '番剧排行榜_番剧排行榜-哔哩哔哩', url: 'https://www.bilibili.com/v/popular/rank/bangumi' })).toBe(
+      '番剧排行榜',
+    )
+    expect(pageNameOf({ title: '   ', url: 'https://example.test/rank' })).toBe('https://example.test/rank')
+  })
+
+  it('stops a run that keeps two pages arriving in turn, and says which two', async () => {
+    // Neither rule around this one can see it: the target alternates too, so no action is repeated, and
+    // the address really does change on every step, so nothing stands still. Nine landings of two
+    // screens in turn is where it stops.
+    const channel = pageState('channel', { url: 'https://example.test/channel', title: '番剧 - 哔哩哔哩' })
+    const rank = pageState('rank', { url: 'https://example.test/rank/bangumi', title: '番剧排行榜_哔哩哔哩' })
+    const h = harness({
+      pages: [channel, rank, channel, rank, channel, rank, channel, rank, channel, rank],
+      choices: Array.from({ length: 10 }, (_unused, at) => (at % 2 === 0 ? 'e1' : 'e2')),
+      targets: { e1: '1', e2: '2' },
+    })
+    const result = await run(h.deps)
+
+    expect(result.status).toBe('blocked')
+    expect(result.steps).toBe(9)
+    // Named in the order the run met them, which is the order the window reads them in.
+    expect(result.reason).toBe('它在两个页面之间来回换（番剧排行榜 / 番剧），始终没能读到你问的东西，先停下')
+  })
+
+  it('leaves a run alone when its steps keep landing somewhere new', async () => {
+    // The counter-case, and the reason the window has to alternate strictly: a run that goes through
+    // page after page — a list and its details, say — is working, not stuck.
+    const h = harness({
+      pages: Array.from({ length: 8 }, (_unused, at) =>
+        pageState(`p${at}`, { url: `https://example.test/step-${at}`, title: `第 ${at} 页` }),
+      ),
+      choices: Array.from({ length: 8 }, () => 'e1'),
+    })
+    const result = await run(h.deps, { maxSteps: 6 })
+
+    expect(result.reason).not.toContain('来回换')
+    expect(result.status).not.toBe('done')
+    expect(result.steps).toBe(6)
   })
 })

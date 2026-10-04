@@ -240,7 +240,7 @@ describe('what the tool tells a reader about a finished run', () => {
       omittedElements: 0,
       textCut: 0,
       deadEnds: [],
-      deadEndsExcluded: false,
+      deadEndsExcluded: true,
       recordDir: '',
       page: null,
       ...overrides,

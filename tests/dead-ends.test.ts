@@ -101,22 +101,15 @@ describe('what a run says about the dead ends it judged', () => {
     { step: 3, element: '5', target: '5', label: '' },
   ]
 
-  it('says how many were judged, and that they were left in the table', () => {
-    expect(deadEndNote(judged, false)).toBe(
-      '本次识别到 2 个死路（未排除，仍照原样交给决策服务）：第 2 步的 [4]「Search」、第 3 步的 [5]',
-    )
-  })
-
-  it('says the same count when they were taken out', () => {
-    expect(deadEndNote(judged, true)).toBe(
+  it('says how many were judged, and that they came out of the candidates', () => {
+    expect(deadEndNote(judged)).toBe(
       '本次识别到 2 个死路（已排除，不再列为候选）：第 2 步的 [4]「Search」、第 3 步的 [5]',
     )
   })
 
   it('says nothing at all on a run that judged none', () => {
     // An ordinary run must not grow a sentence about a rule that never fired.
-    expect(deadEndNote([], false)).toBe('')
-    expect(deadEndNote([], true)).toBe('')
+    expect(deadEndNote([])).toBe('')
   })
 })
 

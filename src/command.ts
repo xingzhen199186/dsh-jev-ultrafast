@@ -146,9 +146,9 @@ export function summaryText(result: TaskResult, url: string): string {
     lines.push(`这次运行的原始往返留痕（开着截图时还有逐帧画面）在这个目录里：${result.recordDir}`)
     if (!result.screenshot) lines.push(`（这次没有逐帧画面：设置页的「每一步都截图」关着。）`)
   }
-  // The dead ends the run judged for itself, whether or not they were taken out of the candidates: with
-  // the removal off by default, this sentence is the only place a reader can see the judgement at all.
-  const deadEnds = deadEndNote(result.deadEnds, result.deadEndsExcluded)
+  // The dead ends the run judged for itself. The removal they feed is silent — the element is simply
+  // not offered any more — so this sentence is where a reader can see the judgement at all.
+  const deadEnds = deadEndNote(result.deadEnds)
   if (deadEnds) lines.push(deadEnds)
   if (result.history.length > 0) {
     lines.push(result.history.map((entry, index) => `${index + 1}. ${entry.action}`).join('\n'))

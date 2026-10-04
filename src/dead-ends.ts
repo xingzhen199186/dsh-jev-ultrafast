@@ -9,15 +9,21 @@
  * over from the page it landed on.
  *
  * Whether a dead end then comes out of the candidates is the caller's business rather than this
- * judgement's. `excludeDeadEndElements` is off — since 2026-10-02 the settings page does not offer it
- * at all — and while it is off the run judges and
- * writes the dead ends down without taking anything away (see `deadEndNote`, and `TaskResult.deadEnds`
- * in `./loop.ts`). It is off because the test behind the judgement — the address and the element table
- * both standing still — is much weaker than the removal it would feed: a step that showed nothing is
- * not proof that the element can never matter, and cutting the one candidate that did costs the run
- * more than leaving a dead end among the candidates for a few steps, which the stopping rules already
- * catch. That is also why the judgement is recorded either way: it is the thing a reader has to be able
- * to check before the removal is ever turned on.
+ * judgement's, and since the reader's ruling of 2026-10-04 it always does: the removal is
+ * unconditional, with no switch left to turn it off (the settings page's own
+ * `excludeDeadEndElements` field was deleted by the same ruling that restored the behaviour).
+ *
+ * The ruling came from a measured run rather than a change of taste. On 2026-10-04 the bilibili task
+ * (留痕 run-1791128895514-22oy) judged its step 15 element — the search box, again — a dead end, and
+ * because the removal was off at the time the judgement went into the request as a mere fact while the
+ * candidate stayed offered; the model picked it once more a few steps later. That is the 15-of-15
+ * offline result below, met live: what binds is taking the number out of the questions, not telling the
+ * model about it. The doubt that had kept the removal off — "a step that showed nothing is not proof
+ * that the element can never matter" — is not withdrawn; it is simply outweighed, because the element a
+ * wrong exclusion costs the run is one, and the steps a live dead end costs are the whole budget.
+ *
+ * The judgement is recorded either way, because the judgement — not the removal — is what a reader has
+ * to be able to check afterwards.
  *
  * This is the plugin's own decision rather than a sentence to the model because two sets of offline
  * experiments said so (2026-10). Telling the service in words not to repeat itself changed nothing —
@@ -97,9 +103,9 @@ export function nextDeadEnds(
 /**
  * One element the run judged a dead end, and the step that judged it.
  *
- * Kept in the run's own report whether or not the element was taken out of the candidates, because
- * the judgement — not the removal — is what a reader has to be able to check: with the setting off it
- * is the only trace the judgement leaves anywhere.
+ * Kept in the run's own report as well as acted on, because the judgement is what a reader has to be
+ * able to check: the removal is silent by design — the element is simply not offered — so this record
+ * is the only place the judgement itself can be read back.
  */
 export interface DeadEndRecord {
   /** The step whose action led nowhere — the step itself, not the request that followed it. */
@@ -113,17 +119,14 @@ export interface DeadEndRecord {
 }
 
 /**
- * One line about the dead ends this run judged: how many, whether they were taken out of the
- * candidates, and which step produced each one. Empty when the run judged none, so an ordinary run
- * grows no sentence about them.
+ * One line about the dead ends this run judged: how many, that they were taken out of the candidates,
+ * and which step produced each one. Empty when the run judged none, so an ordinary run grows no
+ * sentence about them.
  */
-export function deadEndNote(deadEnds: readonly DeadEndRecord[], excluded: boolean): string {
+export function deadEndNote(deadEnds: readonly DeadEndRecord[]): string {
   if (deadEnds.length === 0) return ''
   const where = deadEnds
     .map((record) => `第 ${record.step} 步的 [${record.element}]${record.label ? `「${record.label}」` : ''}`)
     .join('、')
-  return (
-    `本次识别到 ${deadEnds.length} 个死路` +
-    `（${excluded ? '已排除，不再列为候选' : '未排除，仍照原样交给决策服务'}）：${where}`
-  )
+  return `本次识别到 ${deadEnds.length} 个死路（已排除，不再列为候选）：${where}`
 }

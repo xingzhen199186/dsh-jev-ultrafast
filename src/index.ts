@@ -370,7 +370,7 @@ export function toOutput(result: TaskResult, note = ''): TaskOutput {
     sentElements: result.sentElements,
     omittedElements: result.omittedElements,
     textCut: result.textCut,
-    deadEnds: deadEndNote(result.deadEnds, result.deadEndsExcluded),
+    deadEnds: deadEndNote(result.deadEnds),
     screenshot: '',
     recordDir: result.recordDir,
   }
