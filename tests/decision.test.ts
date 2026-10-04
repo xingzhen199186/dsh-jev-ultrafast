@@ -1006,6 +1006,49 @@ describe('the DSH door of the text helper', () => {
     await expect(ask(chunks as DshChunk[])).rejects.toThrow(pattern)
   })
 
+  it('reads the ceiling out of the range the refusal quotes, not the value it refused', async () => {
+    // Measured 2026-10-04 on the mimo line behind DSH: the harness clamped our 393216 down to
+    // 257737 before sending, the vendor refused *that* while naming the real ceiling in a range.
+    // Taking the largest number in the sentence would retry with the refused value and fail
+    // identically — which is how the run died. The smallest surviving number is the ceiling.
+    const seen: Array<Record<string, unknown>> = []
+    let calls = 0
+    const source: TextHelperSource = {
+      baseUrl: '',
+      apiKey: '',
+      model: 'mimo-v2.6-flash',
+      reasoning: 'none',
+      dsh: {
+        provider: 'mimo',
+        stream: async function* (options) {
+          seen.push(options as unknown as Record<string, unknown>)
+          calls += 1
+          if (calls === 1) {
+            yield {
+              type: 'finish',
+              reason: {
+                kind: 'error',
+                failure: {
+                  code: 'INVALID_REQUEST/400',
+                  message:
+                    `{"error":{"type":"invalid_request_error",` +
+                    `"message":"'max_tokens' 257737 is out of supported range (0, 131072]"}}`,
+                },
+              },
+            }
+            return
+          }
+          yield { type: 'text-delta', text: '{"text":"Zürich"}' }
+        },
+      },
+    }
+    const answer = await askText(source, 'system', 'user')
+    expect(answer.content).toBe('{"text":"Zürich"}')
+    expect(calls).toBe(2)
+    expect(Number(seen[0]!.maxTokens)).toBe(393_216)
+    expect(Number(seen[1]!.maxTokens)).toBe(131_072)
+  })
+
   it('records what the stream said, so a failure can be read back later', async () => {
     const written: Array<Record<string, unknown>> = []
     const source = {

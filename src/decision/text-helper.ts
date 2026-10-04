@@ -241,9 +241,15 @@ const FALLBACK_MAX_TOKENS = 8192
  * The limit a refusal names, when it names one.
  *
  * Anthropic answers "max_tokens: 393216 > 8192, which is the maximum allowed"; OpenAI answers
- * "max_tokens is too large ... supports at most 16384 completion tokens". Both are plain numbers in
- * that sentence, and the one to ignore is our own refused number: the largest remaining number is
- * the route's own limit, which beats any number this code could pick instead.
+ * "max_tokens is too large ... supports at most 16384 completion tokens"; the mimo line behind DSH
+ * answers "'max_tokens' 257737 is out of supported range (0, 131072]" — and that last sentence is
+ * why the *smallest* surviving number is the one to take. It carries two numbers: the value the
+ * harness clamped our request to on the way out (257737, below the 393216 we asked for, so the
+ * refused-number filter keeps it), and the route's real ceiling (131072). The largest of the two
+ * would retry with the very number that was refused and fail the same way twice — measured
+ * 2026-10-04, that is exactly how a run died. Every number in such a sentence claims to be some
+ * limit; the smallest claim never exceeds any of them, and one that is too low only cuts the
+ * answer short, while one that is too high cannot succeed at all.
  *
  * The floor is there because this sentence is our own wrapper around the vendor's words and also
  * carries the HTTP status: a status code is not a limit, and reading `400` as one would ask the
@@ -253,7 +259,7 @@ function ceilingFromRefusal(said: string, requested: number): number {
   const numbers = (said.match(/\d{3,7}/g) ?? [])
     .map(Number)
     .filter((value) => value >= 1024 && value < requested)
-  return numbers.length > 0 ? Math.max(...numbers) : FALLBACK_MAX_TOKENS
+  return numbers.length > 0 ? Math.min(...numbers) : FALLBACK_MAX_TOKENS
 }
 
 /**
