@@ -238,15 +238,15 @@ export const HELPER_MAX_TOKENS = 393_216
 const FALLBACK_MAX_TOKENS = 8192
 
 /**
- * How long one question to the text model may take.
+ * How long one question to the text model may take: five minutes.
  *
- * 25 seconds killed a working call on 2026-10-04: mimo-v2.6-flash was still reasoning (154
- * characters of it) when the deadline fired at 25 012 ms, and the abort surfaced to the reader as
- * "the answer never came" — a deadline, not a dead route. A big question (a page's text plus a
- * JSON demand) on a reasoning model takes tens of seconds, so the line sits at 60: room for that
- * answer, while a route that is genuinely gone still fails inside a minute.
+ * The reader's ruling of 2026-10-04, set after watching the earlier limit fail twice: 25 seconds
+ * killed mimo-v2.6-flash mid-reasoning (measured — 154 characters of thinking at 25 012 ms) and
+ * reported a working route as a dead one. Five minutes gives a thinking model room for the big
+ * questions (a page's text plus a JSON demand), while a route that is genuinely gone still fails
+ * well before the reader would have stopped waiting himself.
  */
-const TEXT_TIMEOUT_MS = 60_000
+const TEXT_TIMEOUT_MS = 300_000
 
 /**
  * The limit a refusal names, when it names one.
