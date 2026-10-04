@@ -83,7 +83,7 @@ export const TEXT_PROVIDERS: readonly TextProviderSpec[] = [
     id: 'openrouter',
     label: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
-    models: ['deepseek/deepseek-chat', 'openai/gpt-5.6', 'anthropic/claude-sonnet-4.6'],
+    models: ['deepseek/deepseek-chat', 'openai/gpt-5.6-sol', 'anthropic/claude-sonnet-4.6'],
     keyRef: 'OPENROUTER_API_KEY',
     note: '一个 Key 通很多家模型，模型名前带厂商前缀（例如 deepseek/deepseek-chat）。',
   },
