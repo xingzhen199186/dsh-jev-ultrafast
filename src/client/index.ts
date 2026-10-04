@@ -61,11 +61,15 @@ import {
   fieldsOfBlock,
   leftoverKeyNames,
   leftoverKeysNotice,
+  modelBoxFor,
+  modelBoxOnMove,
+  modelPairOf,
   pendingChanges,
   saveOwnsKey,
   type FieldGroup,
   type FieldGroupId,
   type FieldSpec,
+  type ModelPair,
   type SectionId,
 } from './fields'
 
@@ -207,6 +211,14 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const [loadingModels, setLoadingModels] = useState(false)
   /** Bumped by the 获取模型列表 button, so asking again needs no other change. */
   const [modelFetch, setModelFetch] = useState(0)
+  /**
+   * The model each supplier was last given on this page.
+   *
+   * Not a configuration value: the configuration holds one supplier and one model at a time, and
+   * this is only what the two dropdowns have been shown so far, so switching back to a supplier
+   * that was already filled in shows its own model again (`modelBoxOnMove`).
+   */
+  const [doorModels, setDoorModels] = useState<Record<string, string>>({})
   /** The text block's own connectivity check, and what it answered. */
   const [textTesting, setTextTesting] = useState(false)
   const [textTest, setTextTest] = useState<TextTestReport>()
@@ -417,10 +429,59 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   )
 
   const values = snapshot?.value ?? {}
-  const value = (key: string): unknown => (key in draft ? draft[key] : values[key])
+  /** The saved half of one pair, as the configuration currently holds it. */
+  const savedModelOf = (pair: ModelPair): { door: string; model: string | undefined } => {
+    const model = values[pair.model]
+    return {
+      door: values[pair.door] === undefined || values[pair.door] === null ? '' : String(values[pair.door]),
+      model: model === undefined || model === null || String(model).trim() === '' ? undefined : String(model),
+    }
+  }
+  const value = (key: string): unknown => {
+    if (key in draft) return draft[key]
+    const pair = modelPairOf(key)
+    // A model box with nothing typed in this page answers for the supplier the dropdown is on.
+    if (pair === undefined) return values[key]
+    return modelBoxFor({ memory: doorModels, door: filled(pair.door), saved: savedModelOf(pair) })
+  }
   const filled = (key: string): string => {
     const raw = value(key)
     return raw === undefined || raw === null ? '' : String(raw).trim()
+  }
+
+  /**
+   * Write one field's edit; a supplier dropdown moves the model box with it.
+   *
+   * The move, and why it exists, is `modelBoxOnMove`'s: the model being left is remembered under
+   * the supplier being left, the one being chosen is restored from its own memory, and a supplier
+   * that has never been given one leaves the box empty (its own default then shows as the grey
+   * placeholder). What is decided here is only how that lands in the page's own draft: a known
+   * model is written so the 保存 button sees it as a change when it differs, and an unknown one is
+   * dropped so no stray empty value is left pretending to be an edit.
+   */
+  const write = (key: string, next: unknown): void => {
+    const pair = modelPairOf(key)
+    if (pair === undefined || key !== pair.door) {
+      // Every other field keeps whatever shape its control handed over: a number stays a number.
+      setDraft((current) => ({ ...current, [key]: next }))
+      return
+    }
+    const chosen = next === undefined || next === null ? '' : String(next)
+    const typed = filled(pair.model)
+    const moved = modelBoxOnMove({
+      memory: doorModels,
+      leaving: filled(pair.door),
+      model: typed === '' ? undefined : typed,
+      arriving: chosen,
+      saved: savedModelOf(pair),
+    })
+    setDoorModels(moved.memory)
+    setDraft((current) => {
+      const after: Record<string, unknown> = { ...current, [key]: chosen }
+      if (moved.known) after[pair.model] = moved.model ?? ''
+      else delete after[pair.model]
+      return after
+    })
   }
 
   const textDoor = filled('textProvider')
@@ -707,8 +768,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
         'aria-label': `${group.title} · ${field.label}`,
         style: S.input,
         value: String(value(field.key) ?? ''),
-        onChange: (event: { target: { value: string } }) =>
-          setDraft((current) => ({ ...current, [field.key]: event.target.value })),
+        onChange: (event: { target: { value: string } }) => write(field.key, event.target.value),
       },
       (() => {
         const options = doors(String(value(field.key) ?? ''))
@@ -747,7 +807,7 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
           : control(
               field,
               value(field.key),
-              (next) => setDraft((current) => ({ ...current, [field.key]: next })),
+              (next) => write(field.key, next),
               // Empty means "whatever the chosen door says", so the grey placeholder is
               // how an empty box still tells the truth. Reading the door from the draft
               // makes it follow the dropdown as it moves.

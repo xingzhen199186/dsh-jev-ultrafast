@@ -6,10 +6,14 @@ import {
   FIELDS,
   FIELD_GROUPS,
   KEY_BLOCKS,
+  MODEL_PAIRS,
   SELF_SAVING_BLOCKS,
   fieldsOfBlock,
   leftoverKeyNames,
   leftoverKeysNotice,
+  modelBoxFor,
+  modelBoxOnMove,
+  modelPairOf,
   pendingChanges,
   saveOwnsKey,
 } from '../src/client/fields'
@@ -27,6 +31,47 @@ const resolveConfig = (input: Record<string, unknown>): ConfigShape =>
  * edit — and nothing else in the build would notice, which is what these checks are
  * for. They also double as the guard that the page and the schema stay one shape.
  */
+describe('the model box remembers what each supplier was given', () => {
+  const saved = { door: 'A', model: 'a-saved' }
+
+  it('brings back the model of a supplier that was already filled in', () => {
+    // 2026-10-04, the reader's report: A gets a model, the dropdown moves to B, B gets one, and
+    // back to A — A's own model is what the box has to show, not B's.
+    const toB = modelBoxOnMove({ memory: {}, leaving: 'A', model: 'a-model', arriving: 'B', saved })
+    expect(toB.memory).toEqual({ A: 'a-model' })
+    expect(toB.known).toBe(false)
+    expect(toB.model).toBeUndefined()
+
+    const toA = modelBoxOnMove({ memory: toB.memory, leaving: 'B', model: 'b-model', arriving: 'A', saved })
+    expect(toA.memory).toEqual({ A: 'a-model', B: 'b-model' })
+    expect(toA.known).toBe(true)
+    expect(toA.model).toBe('a-model')
+  })
+
+  it('falls back to the saved model only for the supplier the configuration holds', () => {
+    expect(modelBoxFor({ memory: {}, door: 'A', saved })).toBe('a-saved')
+    expect(modelBoxFor({ memory: {}, door: 'B', saved })).toBeUndefined()
+    expect(modelBoxFor({ memory: { B: 'b-typed' }, door: 'B', saved })).toBe('b-typed')
+  })
+
+  it('remembers nothing from a supplier that was left empty', () => {
+    const moved = modelBoxOnMove({ memory: {}, leaving: 'A', model: undefined, arriving: 'B', saved })
+    expect(moved.memory).toEqual({})
+  })
+
+  it('covers both supplier pairs, and every key is a field the page draws', () => {
+    expect(MODEL_PAIRS.map((pair) => pair.door)).toEqual(['decisionProvider', 'textProvider'])
+    for (const pair of MODEL_PAIRS) {
+      for (const key of [pair.door, pair.model]) {
+        expect(FIELDS.some((field) => field.key === key), key).toBe(true)
+      }
+      expect(modelPairOf(pair.model)).toEqual(pair)
+      expect(modelPairOf(pair.door)).toEqual(pair)
+    }
+    expect(modelPairOf('browserKind')).toBeUndefined()
+  })
+})
+
 describe('settings page fields', () => {
   it('covers every config key exactly once', () => {
     const schemaKeys = Object.keys(resolveConfig({})).sort()

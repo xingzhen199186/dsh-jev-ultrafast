@@ -382,3 +382,73 @@ export const leftoverKeysNotice = (names: readonly string[]): string => {
     `要保存${one ? '它' : '它们'}，请把对应那一块的供应商（或密钥名）切回原来那个。`
   )
 }
+
+/** One supplier dropdown and the model box that belongs to it. */
+export interface ModelPair {
+  readonly door: string
+  readonly model: string
+}
+
+/**
+ * The supplier/model pairs whose model box remembers what each supplier was given.
+ *
+ * 决策服务 and 文本模型 each have their own dropdown and their own model box, so both pairs get
+ * the same memory.
+ */
+export const MODEL_PAIRS: readonly ModelPair[] = [
+  { door: 'decisionProvider', model: 'decisionModel' },
+  { door: 'textProvider', model: 'textModel' },
+]
+
+/** The pair a field key belongs to, when it is either half of one. */
+export function modelPairOf(key: string): ModelPair | undefined {
+  return MODEL_PAIRS.find((pair) => pair.door === key || pair.model === key)
+}
+
+/**
+ * The model box after the supplier dropdown moves (reader's report, 2026-10-04).
+ *
+ * What was wrong: one box held one value, so a model typed for one supplier stayed on screen
+ * after switching to another supplier, and switching back showed *that* supplier's model — the
+ * reader's sentence was "供应商的模型填好后，切换了供应商，也填好了模型，切换回原来的供应商，也应该
+ * 显示原来的模型名称".
+ *
+ * The move is two halves of one act: the model being left is remembered under the supplier being
+ * left, and the model being chosen is restored from its own memory. When that supplier has never
+ * been given one, the saved value stands for it only if it already belongs to that supplier;
+ * otherwise the answer is "unknown", which the box draws as the supplier's own default.
+ */
+export function modelBoxOnMove(input: {
+  memory: Readonly<Record<string, string>>
+  leaving: string
+  model: string | undefined
+  arriving: string
+  saved: { door: string; model: string | undefined }
+}): { memory: Record<string, string>; model: string | undefined; known: boolean } {
+  const memory =
+    input.leaving === '' || input.model === undefined
+      ? { ...input.memory }
+      : { ...input.memory, [input.leaving]: input.model }
+  const remembered = memory[input.arriving]
+  if (remembered !== undefined) return { memory, model: remembered, known: true }
+  if (input.arriving !== '' && input.arriving === input.saved.door) {
+    return { memory, model: input.saved.model, known: true }
+  }
+  return { memory, model: undefined, known: false }
+}
+
+/**
+ * What a model box shows for one supplier while nothing has been typed on this page.
+ *
+ * The saved model belongs to the supplier the saved configuration holds. For any other supplier
+ * the honest answer is nothing at all, and the box then shows that supplier's own default.
+ */
+export function modelBoxFor(input: {
+  memory: Readonly<Record<string, string>>
+  door: string
+  saved: { door: string; model: string | undefined }
+}): string | undefined {
+  const remembered = input.memory[input.door]
+  if (remembered !== undefined) return remembered
+  return input.door !== '' && input.door === input.saved.door ? input.saved.model : undefined
+}
