@@ -94,6 +94,7 @@ export async function resolveTextSource(
   ctx: Context,
   llm: ReturnType<typeof captureLlm>,
   settings: TextSettings,
+  sessionId?: string,
 ): Promise<TextHelperSource> {
   const textRoute = resolveTextRoute({
     provider: settings.textProvider,
@@ -112,7 +113,7 @@ export async function resolveTextSource(
         reasoning: textRoute.reasoning,
         dsh: {
           provider: dshRouteId(textRoute.provider),
-          stream: (options) => dshStream(llm.get(), options),
+          stream: (options) => dshStream(llm.get(), { ...options, sessionId }),
         },
       }
     : {
@@ -129,7 +130,14 @@ export type RunBase = Omit<TaskOptions, 'goal' | 'startUrl'>
 /** What one caller may override about a run; everything else comes from the settings. */
 export type RunOverrides = Partial<
   Pick<TaskOptions, 'maxSteps' | 'screenshots' | 'record' | 'signal' | 'onEvent' | 'gate'>
->
+> & {
+  /**
+   * The session this run belongs to, when the caller has one (`Agent.id` is a `SessionId`).
+   * A built-in text route that requires a routing identity is refused without it, so the tool
+   * and the command pass their own session's id; the inspector has none and gets the stand-in.
+   */
+  sessionId?: string
+}
 
 /**
  * Assemble a run: resolve both doors, resolve their credentials, and make sure a browser
@@ -152,7 +160,7 @@ export async function prepareRun(
     model: settings.decisionModel,
     keyRef: settings.decisionKeyRef,
   })
-  const textSource = await resolveTextSource(ctx, llm, settings)
+  const textSource = await resolveTextSource(ctx, llm, settings, overrides.sessionId)
 
   // The browser this run will drive, resolved before the loop starts. When nothing is
   // connected and nothing was pinned, this is where the plugin starts the browser the

@@ -209,6 +209,9 @@ export function apply(ctx: Context, config: ConfigShape): void {
           maxSteps: args.maxSteps,
           signal: exec.signal,
           record: true,
+          // The session this call belongs to, so a built-in text route that requires a routing
+          // identity (`x-opencode-session`) answers instead of refusing.
+          sessionId: exec.agent?.id,
         })
         const result = await runTask({ ...base, goal: args.goal, startUrl: args.url, expect: args.expect })
         // The run's own note about a page it could only partly see rides the note the caller

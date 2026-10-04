@@ -135,6 +135,39 @@ describe('DSH model service', () => {
     expect(plain[0]).not.toHaveProperty('reasoningEffort')
   })
 
+  it('carries a session id, because some routes refuse a call without one', async () => {
+    // Measured 2026-10-04: the opencode-backed routes behind DSH answer a call with no
+    // `x-opencode-session` with a 400 (`MissingSessionID`), and the harness fills that header
+    // from this one field (`GenerateOptions.sessionId`) — so a call always carries one.
+    const seen: Record<string, unknown>[] = []
+    const llm = service({
+      stream: (options) => {
+        seen.push(options)
+        return (async function* () {})()
+      },
+    })
+    await dshStream(llm, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4.1-flash',
+      system: 'system wording',
+      user: 'fill this field',
+      maxTokens: 1200,
+      sessionId: 'session-1',
+    })[Symbol.asyncIterator]().next()
+    expect(seen[0]!.sessionId).toBe('session-1')
+
+    // A caller with no live session (the settings page's own test button) still sends one.
+    await dshStream(llm, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4.1-flash',
+      system: 'system wording',
+      user: 'fill this field',
+      maxTokens: 1200,
+    })[Symbol.asyncIterator]().next()
+    expect(typeof seen[1]!.sessionId).toBe('string')
+    expect(seen[1]!.sessionId).not.toBe('')
+  })
+
   it('refuses to stream at all without a model service', () => {
     expect(() =>
       dshStream(undefined, { provider: 'p', model: 'm', system: 's', user: 'u', maxTokens: 1 }),

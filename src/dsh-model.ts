@@ -49,11 +49,27 @@ export function captureLlm(ctx: Context): { get(): DshLlmLike | undefined } {
 }
 
 /**
+ * The session a call belongs to when its own caller has no live agent.
+ *
+ * Some routes behind DSH — the opencode-backed ones — require `x-opencode-session`, which the
+ * harness fills in from `GenerateOptions.sessionId`, and refuse the request without it
+ * (measured 2026-10-04: `MissingSessionID`, 400). A run or a command hands over the live
+ * session's own id; the settings page's test button and the inspector run outside any session,
+ * and this stable stand-in is what keeps that door usable for them.
+ */
+const STANDALONE_SESSION_ID = 'dsh-jev-ultrafast@standalone'
+
+/**
  * One call into DSH's model service, for a text door the user configured in DSH.
  *
  * The message goes through the harness' own constructor rather than a hand-written
  * object: a message carries an identity and a producer tag the harness relies on, and
  * fabricating one is the kind of drift nothing downstream would catch.
+ *
+ * `sessionId` is the routing identity the harness' own loop also passes
+ * (`GenerateOptions.sessionId`); a built-in route that requires it cannot answer without one,
+ * so a call always carries one — the caller's when it has a session, the stand-in above when it
+ * does not.
  */
 export function dshStream(
   llm: DshLlmLike | undefined,
@@ -65,6 +81,7 @@ export function dshStream(
     maxTokens: number
     reasoningEffort?: string
     signal?: AbortSignal
+    sessionId?: string
   },
 ): AsyncIterable<DshChunk> {
   if (llm === undefined) throw new Error(NO_SERVICE)
@@ -76,6 +93,7 @@ export function dshStream(
       createUserMessage({ content: [{ type: 'text', text: request.user }], source: { kind: 'user' } }),
     ],
     maxTokens: request.maxTokens,
+    sessionId: request.sessionId ?? STANDALONE_SESSION_ID,
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
     signal: request.signal,
   })

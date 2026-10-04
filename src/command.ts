@@ -221,6 +221,8 @@ export type RunStarter = (
   parsed: Extract<ParsedInput, { kind: 'run' }>,
   signal: AbortSignal | undefined,
   onProgress?: (line: string) => void,
+  /** The session the run belongs to, so a built-in text route that requires an identity can answer. */
+  sessionId?: string,
 ) => Promise<Attempt>
 
 /**
@@ -235,8 +237,8 @@ export function registerCommand(
   ctx: Context,
   config: ConfigShape,
   llm: ReturnType<typeof captureLlm>,
-  start: RunStarter = (parsed, signal, onProgress) =>
-    runOnce(ctx, config, llm, parsed, signal, onProgress),
+  start: RunStarter = (parsed, signal, onProgress, sessionId) =>
+    runOnce(ctx, config, llm, parsed, signal, onProgress, sessionId),
   resolveTarget: TargetResolver = async (text) => resolveStart(text),
 ): void {
   const scoped = ctx as Context & {
@@ -300,6 +302,10 @@ async function answerTo(
   if (parsed.kind === 'help') return { kind: 'success', text: helpText() }
   if (parsed.kind === 'error') return { kind: 'error', text: parsed.text }
 
+  // The session the command was typed into. A built-in text route that requires a routing
+  // identity refuses a call without one, and `Agent.id` is exactly that `SessionId`.
+  const sessionId = invocation.agent.id
+
   // A sentence that names no address still starts a run: the site it names, or a search engine.
   // Nothing on this path can fail, and that is deliberate — a settings problem must not cost a
   // reader the run they just asked for. The version that asked a model first did exactly that.
@@ -319,7 +325,7 @@ async function answerTo(
   if (jobs === null) {
     // No background registry here (a minimal preset has none). The run happens inside the
     // command, so the composer stays busy until it ends — said in the answer, not hidden.
-    const attempt = await start(run, invocation.signal)
+    const attempt = await start(run, invocation.signal, undefined, sessionId)
     return {
       kind: attempt.ok && attempt.result.status !== 'failed' ? 'success' : 'error',
       text: answerText(attempt, run.url),
@@ -339,7 +345,7 @@ async function answerTo(
       run: (job) => ({
         cancel: () => controller.abort(),
         done: (async () => {
-          const attempt = await start(run, controller.signal, (line) => job.updateProgress?.(line))
+          const attempt = await start(run, controller.signal, (line) => job.updateProgress?.(line), sessionId)
           return {
             status: controller.signal.aborted
               ? ('killed' as const)
@@ -354,7 +360,7 @@ async function answerTo(
   } catch (error) {
     // A registry that refuses this owner (an environment without an attached controller). The
     // run is still worth doing, so it is done here instead, and the answer says which happened.
-    const attempt = await start(run, invocation.signal)
+    const attempt = await start(run, invocation.signal, undefined, sessionId)
     return {
       kind: attempt.ok && attempt.result.status !== 'failed' ? 'success' : 'error',
       text: `${answerText(attempt, run.url)}\n（这个环境没能把任务交给后台，所以是当场跑完才回话的：${
@@ -381,12 +387,14 @@ async function runOnce(
   parsed: { url: string; goal: string },
   signal?: AbortSignal,
   onProgress?: (line: string) => void,
+  sessionId?: string,
 ): Promise<Attempt> {
   let note = ''
   try {
     const prepared = await prepareRun(ctx, config, llm, {
       record: true,
       signal,
+      sessionId,
       onEvent: (event: LoopEvent) => {
         if (event.type === 'executed') onProgress?.(`第 ${event.step} 步：${event.action}`)
         else if (event.type === 'finished') {
