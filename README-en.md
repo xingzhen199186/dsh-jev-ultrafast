@@ -43,10 +43,11 @@ Upstream depends on `browser-harness`. It handles browser connections, the daemo
 
 ## What you need first
 
-1. **Node.js**: `^22.19.0 || >=24.0.0`. Check it with `node --version`.
-2. **DSH**: the `0.2.0-rc.1` generation. The plugin's dependency declaration covers `0.1.7-rc.2` up to before `0.3.0`.
-3. **A browser**: Edge or Chrome.
-4. **Two keys** (depending on the route you pick): one for the decision service and one for the text model. The plugin holds no key of its own. At call time it reads yours from the DSH credential store.
+1. **A DSH**: either the web end (`dsh web`) or the desktop application — either one is fine. The plugin supports both ends, so install it on the end you are using. It wants the `0.2.0-rc.1` generation (the plugin's dependency declaration covers `0.1.7-rc.2` up to before `0.3.0`).
+2. **A browser**: Edge or Chrome.
+3. **Keys** (depending on the route you pick): one for the decision service and one for the text model. The plugin holds no key of its own. At call time it reads yours from the DSH credential store.
+
+You do not need Node.js on its own: installing inside the desktop application does not need it, and when you use the `dsh plugin` command, the runtime that `dsh` brings along is enough.
 
 ## Install
 

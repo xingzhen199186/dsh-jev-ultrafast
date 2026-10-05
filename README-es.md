@@ -43,10 +43,11 @@ Upstream depende de `browser-harness`. Se encarga de la conexión del navegador,
 
 ## Qué necesitas antes de empezar
 
-1. **Node.js**: `^22.19.0 || >=24.0.0`. Compruébalo con `node --version`.
-2. **DSH**: la generación `0.2.0-rc.1`. La declaración de dependencias del plugin cubre desde `0.1.7-rc.2` hasta antes de `0.3.0`.
-3. **Un navegador**: Edge o Chrome.
-4. **Dos claves** (según la ruta que elijas): una para el servicio de decisiones y otra para el modelo de texto. El plugin no guarda ninguna clave propia. En el momento de la llamada lee las tuyas del almacén de credenciales de DSH.
+1. **Un DSH**: el lado web (`dsh web`) o la aplicación de escritorio, cualquiera de los dos sirve. El plugin funciona en ambos lados, así que instálalo en el lado que estés usando. Pide la generación `0.2.0-rc.1` (la declaración de dependencias del plugin cubre desde `0.1.7-rc.2` hasta antes de `0.3.0`).
+2. **Un navegador**: Edge o Chrome.
+3. **Claves** (según la ruta que elijas): una para el servicio de decisiones y otra para el modelo de texto. El plugin no guarda ninguna clave propia. En el momento de la llamada lee las tuyas del almacén de credenciales de DSH.
+
+No hace falta preparar Node.js por separado: instalarlo dentro de la aplicación de escritorio no lo necesita, y cuando usas el comando `dsh plugin`, el entorno de ejecución que trae `dsh` ya es suficiente.
 
 ## Instalación
 

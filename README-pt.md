@@ -43,10 +43,11 @@ O upstream depende do `browser-harness`. Ele cuida da conexão do navegador, do 
 
 ## O que preparar antes
 
-1. **Node.js**: `^22.19.0 || >=24.0.0`. Confira com `node --version`.
-2. **DSH**: a geração `0.2.0-rc.1`. A declaração de dependências do plugin cobre de `0.1.7-rc.2` até antes de `0.3.0`.
-3. **Um navegador**: Edge ou Chrome.
-4. **Duas chaves** (conforme a rota que você escolher): uma para o serviço de decisão e uma para o modelo de texto. O plugin não guarda chave própria. Na hora da chamada ele lê as suas no cofre de credenciais do DSH.
+1. **Um DSH**: a ponta web (`dsh web`) ou o aplicativo de desktop — qualquer um dos dois serve. O plugin funciona nas duas pontas, então instale na ponta que você estiver usando. Ele pede a geração `0.2.0-rc.1` (a declaração de dependências do plugin cobre de `0.1.7-rc.2` até antes de `0.3.0`).
+2. **Um navegador**: Edge ou Chrome.
+3. **Chaves** (conforme a rota que você escolher): uma para o serviço de decisão e uma para o modelo de texto. O plugin não guarda chave própria. Na hora da chamada ele lê as suas no cofre de credenciais do DSH.
+
+Não é preciso preparar o Node.js à parte: instalar dentro do aplicativo de desktop não precisa dele, e quando você usa o comando `dsh plugin`, o ambiente de execução que o `dsh` traz já basta.
 
 ## Instalação
 
