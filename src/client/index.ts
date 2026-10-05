@@ -440,8 +440,10 @@ function JevSettingsPage({ ctx }: { ctx: ClientContext }): ReactNode {
   const value = (key: string): unknown => {
     if (key in draft) return draft[key]
     const pair = modelPairOf(key)
-    // A model box with nothing typed in this page answers for the supplier the dropdown is on.
-    if (pair === undefined) return values[key]
+    // Only the model half of a pair is answered out of the supplier memory. The door half has to
+    // fall straight through to the saved value: answering it from the memory means asking for the
+    // model, which asks for the door — the recursion that blanked this page on 2026-10-05.
+    if (pair === undefined || key !== pair.model) return values[key]
     return modelBoxFor({ memory: doorModels, door: filled(pair.door), saved: savedModelOf(pair) })
   }
   const filled = (key: string): string => {

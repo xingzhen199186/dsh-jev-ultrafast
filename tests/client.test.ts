@@ -57,6 +57,16 @@ describe('the model box remembers what each supplier was given', () => {
     expect(moved.memory).toEqual({})
   })
 
+  it('answers the door half of a pair from the saved value, never from the model memory', () => {
+    // The page's own guard is `key !== pair.model`. It has to exist: reading a model needs the door,
+    // and reading the door through that same branch would read the model again — on 2026-10-05 that
+    // recursion blanked the settings page, so the predicate the guard rests on is pinned here.
+    for (const pair of MODEL_PAIRS) {
+      expect(pair.door === modelPairOf(pair.door)?.model).toBe(false)
+      expect(pair.model === modelPairOf(pair.model)?.model).toBe(true)
+    }
+  })
+
   it('covers both supplier pairs, and every key is a field the page draws', () => {
     expect(MODEL_PAIRS.map((pair) => pair.door)).toEqual(['decisionProvider', 'textProvider'])
     for (const pair of MODEL_PAIRS) {
