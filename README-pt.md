@@ -47,44 +47,19 @@ O upstream depende do `browser-harness`. Ele cuida da conexão do navegador, do 
 2. **Um navegador**: Edge ou Chrome.
 3. **Chaves** (conforme a rota que você escolher): uma para o serviço de decisão e uma para o modelo de texto. O plugin não guarda chave própria. Na hora da chamada ele lê as suas no cofre de credenciais do DSH.
 
-Não é preciso preparar o Node.js à parte: instalar dentro do aplicativo de desktop não precisa dele, e quando você usa o comando `dsh plugin`, o ambiente de execução que o `dsh` traz já basta.
-
 ## Instalação
 
-O mais simples é instalar pelo nome do pacote no npm. Troque `<profile>` pelo nome do seu perfil (por exemplo `web`):
+Ponta web:
 
 ```sh
-dsh plugin --profile <profile> add dsh-jev-ultrafast
+dsh plugin --profile web add dsh-jev-ultrafast
 ```
 
-Reinicie o DSH uma vez depois de instalar. A metade externa do plugin só carrega na inicialização; sem reiniciar, a página do plugin não consegue o próprio token (as ferramentas funcionam).
+Reinicie o DSH uma vez depois de instalar.
 
-Há duas alternativas.
+Ponta desktop:
 
-**Instalar do GitHub** (use quando quiser acompanhar o código mais recente):
-
-```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
-```
-
-`#v0.1.0` agora aponta para o mesmo código que o 0.1.0 do npm (a tag foi movida em 2026-10-05). Fique atento a uma coisa: este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo, então **a cada futura atualização de conteúdo tanto essa tag quanto a versão do npm vão ficar atrás do código mais recente**. Para acompanhar o código mais recente, use a forma sem `#`, ou ponha um id de commit depois do `#`.
-
-Instalar do GitHub leva um passo a mais: o pnpm não roda por padrão os scripts de build de um pacote de código-fonte, então a primeira instalação falha. Libere a chave de pacote que ele imprimir, no `pnpm-workspace.yaml` desse perfil, e instale de novo.
-
-```yaml
-allowBuilds:
-  dsh-jev-ultrafast: true
-```
-
-**Sem internet**: use um tarball empacotado na sua própria máquina. Rode `pnpm pack` primeiro e depois:
-
-```sh
-dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
-```
-
-As linhas de comando acima só valem para perfis que a linha de comando gerencia. O aplicativo de desktop gerencia o próprio perfil `desktop`, e a linha de comando o recusa de imediato: `profile "desktop" is managed exclusively by the Electron application`. No desktop, instale assim: clique em **插件 (Plugins)** na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件 (Adicionar plugin)**; digite `dsh-jev-ultrafast` (ou o endereço do repositório deste projeto, ou um caminho de pasta local) e clique em **安装 (Instalar)**. A «origem de instalação» (安装源) dessa caixa vem por padrão em **npm 官方源**; se a rede estiver lenta na China, troque para **中国大陆镜像源**. Quando terminar, ative conforme indicado, e então **reinicie o aplicativo uma vez**.
-
-Essa reinicialização não é opcional. A carga de inicialização do desktop é enviada uma só vez, quando o aplicativo inicia. Sem a reinicialização, a página do plugin não consegue o próprio token (as ferramentas funcionam).
+Clique em **插件 (Plugins)** na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件 (Adicionar plugin)**; digite `dsh-jev-ultrafast` (ou o endereço do repositório deste projeto, ou um caminho de pasta local) e clique em **安装 (Instalar)**. A «origem de instalação» (安装源) dessa caixa vem por padrão em **npm 官方源**; se a rede estiver lenta na China, troque para **中国大陆镜像源**. Quando terminar, ative conforme indicado, e então **reinicie o aplicativo uma vez**.
 
 ## Como se usa
 
@@ -96,7 +71,7 @@ Diga o que você quer direto na caixa de entrada, em linguagem natural:
 
 “调用插件dsh-jev-ultrafast打开这个页面 https://www.example.com ”
 
-Ou:
+Ou
 
 - `/jev-ultrafast https://www.example.com 找到价格并说明是多少` — a frase traz um endereço. Nenhum modelo é chamado antes de começar.
 - `/jev-ultrafast 查一下明天北京的天气` — a frase não traz endereço. Se ela citar um site, ele é reconhecido localmente. São 13 sites reconhecidos: 百度、必应、谷歌、知乎、微博、豆瓣、淘宝天猫、京东、小红书、抖音、B 站、维基、GitHub. Só quando nenhum é reconhecido ele pergunta uma vez ao modelo de texto. Se este não responder nada, a execução começa por um buscador, Bing por padrão.

@@ -47,44 +47,19 @@ Upstream depends on `browser-harness`. It handles browser connections, the daemo
 2. **A browser**: Edge or Chrome.
 3. **Keys** (depending on the route you pick): one for the decision service and one for the text model. The plugin holds no key of its own. At call time it reads yours from the DSH credential store.
 
-You do not need Node.js on its own: installing inside the desktop application does not need it, and when you use the `dsh plugin` command, the runtime that `dsh` brings along is enough.
-
 ## Install
 
-The simplest way is to install by package name from npm. Replace `<profile>` with your own profile name (for example `web`):
+Web end:
 
 ```sh
-dsh plugin --profile <profile> add dsh-jev-ultrafast
+dsh plugin --profile web add dsh-jev-ultrafast
 ```
 
-Restart DSH once after installing. The outer half of the plugin loads only at start-up; without a restart the plugin page cannot get its own token (the tools themselves are fine).
+Restart DSH once after installing.
 
-Two alternatives.
+Desktop end:
 
-**Install from GitHub** (use this when you want to follow the latest code):
-
-```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
-```
-
-`#v0.1.0` now points at the same code as 0.1.0 on npm (the tag was moved on 2026-10-05). One thing to keep in mind: this project keeps its version number at 0.1.0 and does not change it with the content, so **after every future content update, that tag and the npm version will both fall behind the latest code**. To follow the latest code, use the form without `#`, or put a commit id after `#`.
-
-Installing from GitHub takes one more step: pnpm does not run a source package's build scripts by default, so the first install fails. Allow the package key it prints, in that profile's `pnpm-workspace.yaml`, then install again.
-
-```yaml
-allowBuilds:
-  dsh-jev-ultrafast: true
-```
-
-**Offline**: use a tarball packed on your own machine. Run `pnpm pack` first, then:
-
-```sh
-dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
-```
-
-The command lines above work only for profiles the command line manages. The desktop application manages its own `desktop` profile, and the command line refuses it outright: `profile "desktop" is managed exclusively by the Electron application`. On the desktop, install it this way: click **插件 (Plugins)** in the left sidebar to open the plugin page, then click **添加插件 (Add plugin)**; type `dsh-jev-ultrafast` (or this project's repository address, or a local directory path), then click **安装 (Install)**. The "install source" (安装源) in that dialog defaults to **npm 官方源**; if the network is slow in China, switch to **中国大陆镜像源**. After it installs, enable it as prompted, then **restart the application once**.
-
-That restart is not optional. The desktop start-up payload is sent once, when the application starts. Without the restart, the plugin page cannot get its own token (the tools themselves are fine).
+Click **插件 (Plugins)** in the left sidebar to open the plugin page, then click **添加插件 (Add plugin)**; type `dsh-jev-ultrafast` (or this project's repository address, or a local directory path), then click **安装 (Install)**. The "install source" (安装源) in that dialog defaults to **npm 官方源**; if the network is slow in China, switch to **中国大陆镜像源**. After it installs, enable it as prompted, then **restart the application once**.
 
 ## How to use
 
@@ -96,7 +71,7 @@ Just say what you want in the input box, in plain words:
 
 “调用插件dsh-jev-ultrafast打开这个页面 https://www.example.com ”
 
-Or:
+Or
 
 - `/jev-ultrafast https://www.example.com 找到价格并说明是多少` — the sentence names an address. No model is called before the run starts.
 - `/jev-ultrafast 查一下明天北京的天气` — the sentence names no address. If it names a site, that site is recognized locally. There are 13 recognized sites: 百度、必应、谷歌、知乎、微博、豆瓣、淘宝天猫、京东、小红书、抖音、B 站、维基、GitHub. Only when none is recognized does it ask the text model once. If that answers nothing, the run starts from a search engine, Bing by default.

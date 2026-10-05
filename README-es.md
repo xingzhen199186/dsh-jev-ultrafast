@@ -47,44 +47,19 @@ Upstream depende de `browser-harness`. Se encarga de la conexión del navegador,
 2. **Un navegador**: Edge o Chrome.
 3. **Claves** (según la ruta que elijas): una para el servicio de decisiones y otra para el modelo de texto. El plugin no guarda ninguna clave propia. En el momento de la llamada lee las tuyas del almacén de credenciales de DSH.
 
-No hace falta preparar Node.js por separado: instalarlo dentro de la aplicación de escritorio no lo necesita, y cuando usas el comando `dsh plugin`, el entorno de ejecución que trae `dsh` ya es suficiente.
-
 ## Instalación
 
-Lo más sencillo es instalar por nombre de paquete desde npm. Sustituye `<profile>` por el nombre de tu perfil (por ejemplo `web`):
+Lado web:
 
 ```sh
-dsh plugin --profile <profile> add dsh-jev-ultrafast
+dsh plugin --profile web add dsh-jev-ultrafast
 ```
 
-Reinicia DSH una vez después de instalar. La mitad exterior del plugin solo se carga al arrancar; sin reiniciar, la página del plugin no puede obtener su propio token (las herramientas sí funcionan).
+Reinicia DSH una vez después de instalar.
 
-Hay dos alternativas.
+Lado de escritorio:
 
-**Instalar desde GitHub** (úsalo cuando quieras seguir el código más reciente):
-
-```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
-```
-
-`#v0.1.0` ahora apunta al mismo código que el 0.1.0 de npm (la etiqueta se movió el 2026-10-05). Ten en cuenta una cosa: este proyecto mantiene su número de versión en 0.1.0 y no lo cambia con el contenido, así que **tras cada futura actualización de contenido, tanto esa etiqueta como la versión de npm quedarán por detrás del código más reciente**. Para seguir el código más reciente, usa la forma sin `#`, o pon un id de commit detrás de `#`.
-
-Instalar desde GitHub lleva un paso más: pnpm no ejecuta por defecto los scripts de construcción de un paquete de código fuente, así que la primera instalación falla. Autoriza la clave de paquete que imprima, en el `pnpm-workspace.yaml` de ese perfil, y vuelve a instalar.
-
-```yaml
-allowBuilds:
-  dsh-jev-ultrafast: true
-```
-
-**Sin conexión**: usa un tarball empaquetado en tu propia máquina. Ejecuta `pnpm pack` primero y luego:
-
-```sh
-dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
-```
-
-Las líneas de comando anteriores solo funcionan para perfiles que la línea de comandos gestiona. La aplicación de escritorio gestiona su propio perfil `desktop`, y la línea de comandos lo rechaza sin más: `profile "desktop" is managed exclusively by the Electron application`. En el escritorio, instálalo así: haz clic en **插件 (Plugins)** en la barra lateral izquierda para abrir la página de plugins, y luego en **添加插件 (Añadir plugin)**; escribe `dsh-jev-ultrafast` (o la dirección del repositorio de este proyecto, o una ruta de directorio local) y pulsa **安装 (Instalar)**. El «origen de instalación» (安装源) de ese diálogo viene por defecto en **npm 官方源**; si la red va lenta en China, cambia a **中国大陆镜像源**. Cuando termine, actívalo según te indique, y luego **reinicia la aplicación una vez**.
-
-Ese reinicio no es opcional. La carga de arranque del escritorio se envía una sola vez, al iniciar la aplicación. Sin el reinicio, la página del plugin no puede obtener su propio token (las herramientas sí funcionan).
+Haz clic en **插件 (Plugins)** en la barra lateral izquierda para abrir la página de plugins, y luego en **添加插件 (Añadir plugin)**; escribe `dsh-jev-ultrafast` (o la dirección del repositorio de este proyecto, o una ruta de directorio local) y pulsa **安装 (Instalar)**. El «origen de instalación» (安装源) de ese diálogo viene por defecto en **npm 官方源**; si la red va lenta en China, cambia a **中国大陆镜像源**. Cuando termine, actívalo según te indique, y luego **reinicia la aplicación una vez**.
 
 ## Cómo se usa
 
@@ -96,7 +71,7 @@ Di lo que quieres directamente en el cuadro de entrada, en lenguaje natural:
 
 “调用插件dsh-jev-ultrafast打开这个页面 https://www.example.com ”
 
-O bien:
+O bien
 
 - `/jev-ultrafast https://www.example.com 找到价格并说明是多少` — la frase incluye una dirección. No se llama a ningún modelo antes de empezar.
 - `/jev-ultrafast 查一下明天北京的天气` — la frase no incluye dirección. Si nombra un sitio, se reconoce localmente. Hay 13 sitios reconocidos: 百度、必应、谷歌、知乎、微博、豆瓣、淘宝天猫、京东、小红书、抖音、B 站、维基、GitHub. Solo cuando no reconoce ninguno pregunta una vez al modelo de texto. Si no responde nada, la ejecución empieza desde un buscador, Bing por defecto.
