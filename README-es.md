@@ -85,7 +85,7 @@ Sin red, usa el paquete que armaste en esta máquina. Primero `pnpm pack` y desp
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-Esa línea de comandos solo vale para los profiles que gestiona la línea de comandos. El profile `desktop` lo gestiona la propia aplicación de escritorio, y la línea de comandos lo rechaza: `profile "desktop" is managed exclusively by the Electron application`. En el lado de escritorio, pulsa **插件 → 添加插件** (Plugins → Añadir plugin) y pega la misma dirección (o la ruta absoluta del tarball); al activarlo, **reinicia la aplicación una vez**.
+Esa línea de comandos solo vale para los profiles que gestiona la línea de comandos. El profile `desktop` lo gestiona la propia aplicación de escritorio, y la línea de comandos lo rechaza: `profile "desktop" is managed exclusively by the Electron application`. En el lado de escritorio, pulsa **插件** (Plugins) en la barra lateral izquierda para abrir la página de plugins, y luego **添加插件** (Añadir plugin). En la caja de texto escribe la dirección de este repositorio (`https://github.com/xingzhen199186/dsh-jev-ultrafast`) o una ruta de directorio local, y pulsa **安装** (Instalar). El 「安装源」 (origen de instalación) del diálogo es por defecto la **fuente oficial de npm**; si tu red va lenta, cámbialo al **espejo de China continental**. Después de activarlo, **reinicia la aplicación una vez**.
 
 Ese reinicio no sobra. La carga de arranque del lado de escritorio se entrega una sola vez, al arrancar la aplicación. Sin reiniciar, la página del plugin no recibe su token (las herramientas sí funcionan).
 

@@ -86,7 +86,7 @@ Offline, use a tarball packed on this machine. Run `pnpm pack` first, then:
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-That command line works only for profiles the command line manages. The desktop application manages its own `desktop` profile, and the command line refuses it: `profile "desktop" is managed exclusively by the Electron application`. On the desktop side, click **插件 → 添加插件** (Plugins → Add plugin) and paste the same address (or the tarball's absolute path), then **restart the application once** after you enable it.
+That command line works only for profiles the command line manages. The desktop application manages its own `desktop` profile, and the command line refuses it: `profile "desktop" is managed exclusively by the Electron application`. On the desktop side, click **插件** (Plugins) in the left sidebar to open the plugins page, then click **添加插件** (Add plugin). In the input box, enter this project's repository address (`https://github.com/xingzhen199186/dsh-jev-ultrafast`) or a local directory path, then click **安装** (Install). The dialog's 「安装源」 (Install source) defaults to the **official npm source**; switch it to the **mainland China mirror** when your network is slow. After you enable it, **restart the application once**.
 
 That restart is not optional. The desktop boot payload is sent once, at application start. Without a restart, the plugin's settings page cannot get its own token. The tools themselves work.
 

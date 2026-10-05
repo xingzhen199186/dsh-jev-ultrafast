@@ -71,7 +71,7 @@ allowBuilds:
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-上面这条命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。在桌面端点**插件 → 添加插件**，贴同一个地址（或 tarball 的绝对路径），启用后**重启一次应用**。
+上面这条命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。桌面端这样装：在左侧导航栏点**插件**进入插件页面，再点**添加插件**；在输入框里填本项目的仓库地址（`https://github.com/xingzhen199186/dsh-jev-ultrafast`）或本机目录路径，然后点**安装**。对话框里的「安装源」默认是 **npm 官方源**，国内网络慢可以换「中国大陆镜像源」。装好后按提示启用，再**重启一次应用**。
 
 那一次重启不是多余的。桌面端的启动负载只在应用启动时送一次。不重启，插件页面拿不到自己的令牌（工具本身是好的）。
 
