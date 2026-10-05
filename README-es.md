@@ -80,7 +80,7 @@ Hay otras dos vías.
 dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
 
-**No añadas `#v0.1.0`.** Este proyecto mantiene el número de versión en 0.1.0 y no lo cambia con el contenido. Esa etiqueta se detiene en 2026-10-01. Si la añades, instalas código viejo: más de cien commits por detrás. El 0.1.0 de npm sí es el actual. Para fijar una instantánea exacta, pon un hash de commit después del `#`.
+`#v0.1.0` ahora apunta al mismo código que el 0.1.0 de npm (la etiqueta se movió el 2026-10-05). Ten en cuenta que este proyecto mantiene el número de versión en 0.1.0 y no lo cambia con el contenido, así que **cada actualización posterior deja atrás tanto esa etiqueta como la versión de npm**. Para seguir el código más nuevo, quita el `#` o pon un hash de commit después.
 
 Instalar desde GitHub cuesta un paso más: pnpm no ejecuta los scripts de construcción de paquetes de código fuente por defecto, así que la primera instalación falla. Copia la clave de paquete que pnpm imprime, autorízala en el `pnpm-workspace.yaml` de ese profile y vuelve a instalar.
 

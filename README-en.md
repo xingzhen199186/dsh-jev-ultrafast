@@ -81,7 +81,7 @@ Two other routes.
 dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
 
-**Do not append `#v0.1.0`.** This project keeps its version number at 0.1.0 and does not change it with the content. That tag stops at 2026-10-01. Attach it and you install old code, more than a hundred commits behind. The 0.1.0 on npm is the current one. To pin one exact snapshot, put a commit hash after the `#` instead.
+`#v0.1.0` now points at the same code as 0.1.0 on npm (the tag was moved on 2026-10-05). Note that this project keeps its version number at 0.1.0 and does not change it with the content, so **every later content update leaves both that tag and the npm release behind the newest code**. To follow the newest code, drop the `#`, or put a commit hash after it.
 
 Installing from GitHub costs one more step: pnpm does not run a source package's build script by default, so the first attempt fails. Take the package key it prints, allow it in that profile's `pnpm-workspace.yaml`, and install again.
 
