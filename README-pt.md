@@ -64,11 +64,13 @@ Há outros dois caminhos de origem. O repositório guarda apenas os nomes deles,
 
 ## Instalação
 
-Ponta web (`dsh web`):
+É o mesmo plugin e o mesmo comando. Troque `<profile>` pelo nome do seu profile (por exemplo `web`):
 
 ```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
+dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
+
+**Não acrescente `#v0.1.0`.** Este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo. Essa tag para em 2026-10-01. Se você a usar, instala código velho: mais de cem commits atrás. Para fixar uma cópia exata, ponha um hash de commit depois do `#`.
 
 Por padrão o pnpm não roda os scripts de build de pacotes de código-fonte. A primeira instalação falha. Use a chave de pacote que ele imprimir, libere no `pnpm-workspace.yaml` daquele profile e instale de novo.
 
@@ -83,14 +85,9 @@ Offline, use o pacote gerado nesta máquina. Primeiro `pnpm pack`, depois:
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-**A ponta desktop segue outro caminho.** O profile do aplicativo desktop é gerido pelo próprio aplicativo. A linha de comando recusa na hora: `profile "desktop" is managed exclusively by the Electron application`. Faça assim:
+Essa linha de comando só vale para os profiles que a linha de comando gere. O profile `desktop` é gerido pelo próprio aplicativo, e a linha de comando recusa na hora: `profile "desktop" is managed exclusively by the Electron application`. Na ponta desktop, clique em **插件 → 添加插件** (Plugins → Adicionar plugin) e cole o mesmo endereço (ou o caminho absoluto do tarball); depois de ativar, **reinicie o aplicativo uma vez**.
 
-1. No aplicativo, clique em **Plugins → Adicionar plugin**.
-2. Cole o **caminho absoluto** do tarball.
-3. Depois de instalar, clique em «Ativar agora».
-4. **Reinicie o aplicativo uma vez.**
-
-O passo 4 não é enfeite. A carga de inicialização da ponta desktop é entregue uma única vez, na abertura do aplicativo. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
+Esse reinício não é enfeite. A carga de inicialização da ponta desktop é entregue uma única vez, na abertura do aplicativo. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
 
 ## Como usar
 

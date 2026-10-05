@@ -65,11 +65,13 @@ Two more sources appear in the repository by name only, with no verifiable link.
 
 ## Install
 
-Web (`dsh web`):
+It is one plugin, and one command. Replace `<profile>` with your own profile name (for example `web`):
 
 ```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
+dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
+
+**Do not append `#v0.1.0`.** This project keeps its version number at 0.1.0 and does not change it with the content. That tag stops at 2026-10-01. Attach it and you install old code, more than a hundred commits behind. To pin one exact snapshot, put a commit hash after the `#` instead.
 
 pnpm does not run a source package's build script by default. The first attempt fails. Take the package key it prints, allow it in that profile's `pnpm-workspace.yaml`, and install again.
 
@@ -84,14 +86,9 @@ Offline, use a tarball packed on this machine. Run `pnpm pack` first, then:
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-**The desktop app takes a different route.** The application manages its own profile. The command line refuses it: `profile "desktop" is managed exclusively by the Electron application`. Do this instead:
+That command line works only for profiles the command line manages. The desktop application manages its own `desktop` profile, and the command line refuses it: `profile "desktop" is managed exclusively by the Electron application`. On the desktop side, click **插件 → 添加插件** (Plugins → Add plugin) and paste the same address (or the tarball's absolute path), then **restart the application once** after you enable it.
 
-1. In the application, click **插件 → 添加插件** (Plugins → Add plugin).
-2. Paste the **absolute path** of the tarball.
-3. Press **立即启用** (Enable now) after the install.
-4. **Restart the application once.**
-
-Step 4 is not optional. The desktop boot payload is sent once, at application start. Without a restart, the plugin's settings page cannot get its own token. The tools themselves work.
+That restart is not optional. The desktop boot payload is sent once, at application start. Without a restart, the plugin's settings page cannot get its own token. The tools themselves work.
 
 ## How to use
 

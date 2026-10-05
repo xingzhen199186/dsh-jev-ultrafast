@@ -64,11 +64,13 @@ Hay otros dos orígenes. El repositorio solo guarda sus nombres y no tiene enlac
 
 ## Instalación
 
-Lado web (`dsh web`):
+Es el mismo plugin y el mismo comando. Cambia `<profile>` por el nombre de tu profile (por ejemplo `web`):
 
 ```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
+dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
+
+**No añadas `#v0.1.0`.** Este proyecto mantiene el número de versión en 0.1.0 y no lo cambia con el contenido. Esa etiqueta se detiene en 2026-10-01. Si la añades, instalas código viejo: más de cien commits por detrás. Para fijar una instantánea exacta, pon un hash de commit después del `#`.
 
 pnpm no ejecuta los scripts de construcción de paquetes de código fuente por defecto. La primera instalación falla. Copia la clave de paquete que pnpm imprime, autorízala en el `pnpm-workspace.yaml` de ese profile y vuelve a instalar.
 
@@ -83,14 +85,9 @@ Sin red, usa el paquete que armaste en esta máquina. Primero `pnpm pack` y desp
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-**El lado de escritorio va por otro camino.** La aplicación de escritorio gestiona su propio profile. La línea de comandos lo rechaza: `profile "desktop" is managed exclusively by the Electron application`. Haz esto:
+Esa línea de comandos solo vale para los profiles que gestiona la línea de comandos. El profile `desktop` lo gestiona la propia aplicación de escritorio, y la línea de comandos lo rechaza: `profile "desktop" is managed exclusively by the Electron application`. En el lado de escritorio, pulsa **插件 → 添加插件** (Plugins → Añadir plugin) y pega la misma dirección (o la ruta absoluta del tarball); al activarlo, **reinicia la aplicación una vez**.
 
-1. En la aplicación, pulsa **Plugins → Añadir plugin**.
-2. Pega la **ruta absoluta** del tarball.
-3. Cuando termine, pulsa «Activar ahora».
-4. **Reinicia la aplicación una vez.**
-
-El paso 4 no sobra. La carga de arranque del lado de escritorio se entrega una sola vez, al arrancar la aplicación. Sin reiniciar, la página del plugin no recibe su token (las herramientas sí funcionan).
+Ese reinicio no sobra. La carga de arranque del lado de escritorio se entrega una sola vez, al arrancar la aplicación. Sin reiniciar, la página del plugin no recibe su token (las herramientas sí funcionan).
 
 ## Cómo se usa
 

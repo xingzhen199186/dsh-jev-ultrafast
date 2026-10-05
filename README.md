@@ -50,11 +50,13 @@
 
 ## 安装
 
-网页端（`dsh web`）：
+要装的是同一个插件，命令也一样。把 `<profile>` 换成你自己的配置名（例如 `web`）：
 
 ```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
+dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
+
+**不要接 `#v0.1.0`。** 本项目的版本号固定为 0.1.0，不随内容变；那个 tag 停在 2026-10-01，接上去装到的是旧代码（比现在落后一百多个提交）。想钉住一个固定快照，就把 `#` 后面换成具体的提交号。
 
 pnpm 默认不跑源码包的构建脚本。第一次安装会失败。按它打印出来的包键，在那个 profile 的 `pnpm-workspace.yaml` 里放行，然后重装一次。
 
@@ -69,14 +71,9 @@ allowBuilds:
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-**桌面端另走一条路。** 桌面应用的 profile 由应用自己管。命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。请这样做：
+上面这条命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。在桌面端点**插件 → 添加插件**，贴同一个地址（或 tarball 的绝对路径），启用后**重启一次应用**。
 
-1. 在应用里点**插件 → 添加插件**。
-2. 粘贴 tarball 的**绝对路径**。
-3. 装完点「立即启用」。
-4. **重启一次应用**。
-
-第 4 步不是多余的。桌面端的启动负载只在应用启动时送一次。不重启，插件页面拿不到自己的令牌（工具本身是好的）。
+那一次重启不是多余的。桌面端的启动负载只在应用启动时送一次。不重启，插件页面拿不到自己的令牌（工具本身是好的）。
 
 ## 怎么用
 
