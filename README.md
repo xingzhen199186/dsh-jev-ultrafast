@@ -89,9 +89,11 @@ dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 
 在输入框里直接用自然语言说要做什么：
 
-“用浏览器打开https://www.example.com该网页读取内容”
+“用浏览器打开 https://www.example.com 该网页读取内容”
+
 “用jev浏览器搜索美剧《人生复本》”
-“调用插件dsh-jev-ultrafast打开这个页面https://www.example.com”
+
+“调用插件dsh-jev-ultrafast打开这个页面 https://www.example.com ”
 
 或
 
