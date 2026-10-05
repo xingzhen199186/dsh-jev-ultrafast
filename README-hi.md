@@ -117,6 +117,14 @@ dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 
 इनपुट बॉक्स में सीधे बताइए कि क्या करना है।
 
+“ब्राउज़र से https://www.example.com खोलिए और उस पेज का कॉन्टेंट पढ़िए”
+
+“jev ब्राउज़र से सीरीज़ 《人生复本》 खोजिए”
+
+“प्लगइन dsh-jev-ultrafast से यह पेज https://www.example.com खोलिए ”
+
+या:
+
 - `/jev-ultrafast https://www.example.com क़ीमत खोजिए और बताइए कितनी है` — वाक्य में पता है। शुरू करने से पहले कोई मॉडल नहीं बुलाया जाता।
 - `/jev-ultrafast कल बीजिंग का मौसम देखिए` — वाक्य में पता नहीं है। अगर वाक्य में साइट का नाम है, तो यह स्थानीय रूप से पहचान लेता है। पहचानी जाने वाली साइटें 13 हैं: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao/Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipedia, GitHub। न पहचान पाए तो एक बार टेक्स्ट मॉडल से पूछता है। वह भी न बता पाए तो खोज-इंजन से शुरू करता है, डिफ़ॉल्ट Bing।
 - `/jev-ultrafast` (बिना कुछ लिखे) — केवल व्याख्या और इंटरैक्टिव इंस्पेक्टर का पता लौटाता है।

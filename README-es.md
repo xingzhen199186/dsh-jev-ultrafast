@@ -117,6 +117,14 @@ No importa que la página sea más alta que una pantalla. El desplazamiento se r
 
 Di lo que hay que hacer directamente en el cuadro de entrada.
 
+“Abre con el navegador https://www.example.com y lee el contenido de esa página”
+
+“Usa el navegador jev para buscar la serie 《人生复本》”
+
+“Llama al plugin dsh-jev-ultrafast para abrir esta página https://www.example.com ”
+
+O:
+
 - `/jev-ultrafast https://www.example.com encuentra el precio y dime cuánto es` — la frase lleva una dirección. Antes de arrancar no llama a ningún modelo.
 - `/jev-ultrafast mira el tiempo que hará mañana en Pekín` — la frase no lleva dirección. Si la frase nombra un sitio, el plugin lo reconoce en local. Reconoce 13 sitios: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao/Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipedia y GitHub. Solo si no lo reconoce pregunta una vez al modelo de texto. Si tampoco hay respuesta, empieza por un buscador; por defecto, Bing.
 - `/jev-ultrafast` (sin argumentos) — solo devuelve una explicación y la dirección del inspector interactivo.

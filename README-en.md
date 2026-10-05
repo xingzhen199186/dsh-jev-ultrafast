@@ -28,7 +28,7 @@ One real run, measured on this machine:
 ```text
 Goal:    search for the series "Dark Matter" and tell me about it
 Result:  done · 2 steps · 5 decisions · 14.6 s
-Ended at: Dark Matter Season 1 - Search — https://cn.bing.com/search?q=dark+matter+season+1
+Ended at: Dark Matter Season 1 - Search — https://cn.bing.com/search?q=人生复本第一季
 Page text (excerpt): about 12,300 results; season 1 episodes (S1 E5–E9); Douban 8.5/10
 (21k ratings); plot and creators…
 ```
@@ -117,6 +117,14 @@ A page taller than one screen is no problem. It scrolls again for every screen a
 ### Command `/jev-ultrafast`
 
 Type what to do in the prompt box.
+
+“Use the browser to open https://www.example.com and read the page”
+
+“Use the jev browser to search for the TV series 《人生复本》”
+
+“Call the plugin dsh-jev-ultrafast to open this page https://www.example.com ”
+
+Or:
 
 - `/jev-ultrafast https://www.example.com find the price and tell me what it is` — the sentence carries an address. No model is called before the run.
 - `/jev-ultrafast what is the weather in Beijing tomorrow` — no address. If the sentence names a site, the plugin recognises it locally. It knows 13 sites: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao and Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipedia and GitHub. If it cannot recognise one, it asks the text model once. If that fails, the run starts from a search engine, and the default is Bing.

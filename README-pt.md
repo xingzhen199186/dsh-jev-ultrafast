@@ -117,6 +117,14 @@ Não importa se a página é mais alta que uma tela. Cada tela é rolada de novo
 
 Diga o que fazer direto na caixa de entrada.
 
+“Abra com o navegador https://www.example.com e leia o conteúdo dessa página”
+
+“Use o navegador jev para buscar a série 《人生复本》”
+
+“Chame o plugin dsh-jev-ultrafast para abrir esta página https://www.example.com ”
+
+Ou:
+
 - `/jev-ultrafast https://www.example.com encontre o preço e diga quanto é` — a frase tem endereço. Nenhum modelo é chamado antes de começar.
 - `/jev-ultrafast veja a previsão do tempo em Pequim amanhã` — a frase não tem endereço. Se ela nomeia um site, o reconhecimento é local. São 13 sites reconhecidos: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao/Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipédia e GitHub. Só quando não reconhece é que ele pergunta uma vez ao modelo de texto. Se não conseguir, começa pelo buscador, com o Bing como padrão.
 - `/jev-ultrafast` (sem argumentos) — devolve só uma explicação e o endereço do inspetor interativo.
