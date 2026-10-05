@@ -2,622 +2,233 @@
 
 [English](README-en.md) | [中文](README.md) | Español | [Português](README-pt.md) | [हिन्दी](README-hi.md)
 
-> **Un objetivo de entrada, una llamada de herramienta por paso.** Dale a DeepSeek Harness
-> un objetivo en lenguaje natural y deja que **Jev** (TypeSafe) conduzca el navegador. La
-> página se comprime en una tabla indexada de controles, y una sola petición decide a la vez
-> *qué operación* ejecutar y *sobre qué elemento* ejecutarla — así la sesión paga una llamada
-> de herramienta en lugar de un turno de modelo por cada clic.
+[![License: MIT](https://img.shields.io/github/license/xingzhen199186/dsh-jev-ultrafast?style=flat)](LICENSE)
+[![version](https://img.shields.io/github/v/tag/xingzhen199186/dsh-jev-ultrafast?label=version&style=flat)](https://github.com/xingzhen199186/dsh-jev-ultrafast/tags)
+[![stars](https://img.shields.io/github/stars/xingzhen199186/dsh-jev-ultrafast?label=%E2%98%85&style=flat)](https://github.com/xingzhen199186/dsh-jev-ultrafast/stargazers)
+![dsh plugin](https://img.shields.io/badge/dsh-plugin-000000?style=flat)
 
-Qué se gana con eso, en resumen:
+> Dale a DeepSeek Harness un objetivo en una frase. El plugin conduce un navegador real hasta terminar la tarea. En cada paso, un servicio de decisiones elige «qué operación» y «sobre qué elemento»; eso no gasta turnos de conversación del modelo principal.
 
-- **Una petición por paso.** La operación y su objetivo vuelven juntos, así que no se le pide
-  al modelo mirar, pensar y hacer clic a lo largo de tres turnos distintos.
-- **Sin selectores, coordenadas ni código en el bucle.** Los objetivos son índices de una
-  tabla que el plugin fabrica a partir de la página viva, y la frescura, la visibilidad, la
-  geometría y la oclusión se vuelven a comprobar justo antes de la entrada.
-- **Trae su propio navegador.** Cuando no hay nada alcanzable, una ejecución arranca el
-  Chrome o el Edge que hayas elegido y se conecta a él — su propio directorio de datos, su
-  propio puerto libre.
-- **Sigue la pestaña que abre un clic**, y solo cierra la pestaña que abrió él mismo.
-- **`blocked` no es `failed`.** Una ejecución que topa con un freno se detiene como `blocked`
-  e informa de lo que todavía era operable en la página, así que el punto donde se atascó
-  queda a la vista.
-- **También lee páginas largas.** Una segunda herramienta recorre la página pantalla a
-  pantalla y vuelve a unir el texto, así que un documento más largo que una pantalla vuelve
-  entero — sin gastar una sola petición de decisión.
-- **`done` se comprueba, no se da por bueno.** Escribe lo que la página terminada tiene que
-  mostrar y el plugin irá a buscarlo; una ejecución que se declara terminada sin eso vuelve
-  como `blocked`.
-- **Cada ejecución deja un registro en bruto.** Cada ejecución escribe un `trace.jsonl` —el
-  registro de los intercambios— en un directorio temporal propio: el cuerpo de la petición y
-  la respuesta de cada llamada de decisión y de cada llamada al modelo de texto, con la clave
-  borrada a `***` y todo lo que pase de 20 000 caracteres cortado; además, con las capturas
-  encendidas, un `frames/NNNNNN.jpg` por paso y un `frames.json` que anota el nombre y el
-  momento de cada fotograma. El resultado nombra ese directorio.
-- **Una llamada al modelo de texto que se cae se reintenta; una conexión cortada no.** Un
-  429, 503 o 529 del modelo de texto se reintenta hasta dos veces, esperando 0,5 s y luego
-  1 s; una caída de red se informa tal cual, que es donde la versión Python de aguas arriba
-  traza la misma línea.
-- **Puedes ver una ejecución, no solo leer sobre ella.** El host sirve una página de
-  inspección (véase «Ver una ejecución» más abajo): iniciar una ejecución a mano, ver la
-  pantalla en vivo, ver qué elemento va a elegir cada paso y cuán seguro está el modelo, y
-  pausar, avanzar o detener **antes** de que la acción se ejecute — o reproducir fotograma a
-  fotograma una ejecución ya acabada.
-- **Puedes arrancarlo sin gastar un turno de modelo.** Escribe `/jev-ultrafast` en el campo de
-  entrada y di la tarea justo después, en lenguaje natural: si la frase lleva una dirección, la
-  ejecución arranca de inmediato sin ninguna llamada de modelo; si no la lleva, una llamada
-  pequeña al modelo de texto decide por dónde empezar. La línea del comando y su resultado
-  quedan en la interfaz; por sí solo, el comando solo se explica y da la dirección del inspector.
+## Qué es esto
 
-Es un port independiente y no oficial a TypeScript de
-[jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser
-Use), empaquetado como bundle de DeepSeek Harness. Aguas arriba es Python con un poco de
-JavaScript; el bucle, el script de instantánea de la página y los prompts de aquí están
-reescritos a partir de él.
+Añade una capacidad a DeepSeek Harness (en adelante, DSH): **conducir el navegador con un objetivo escrito en lenguaje natural**.
 
-> **No oficial.** Este proyecto no está afiliado, respaldado ni patrocinado por
-> Browser Use ni por TypeSafe. «Browser Use», «TypeSafe» y «Jev» son marcas de sus
-> respectivos titulares, usadas aquí solo para describir la procedencia y la API que
-> llama el plugin. No se concede licencia de marca.
->
-> **Trae tu propia clave.** El plugin no incluye, empaqueta, intermedia ni revende
-> acceso a la API. Resuelve tu clave de TypeSafe desde el almacén de credenciales de
-> DeepSeek Harness en el momento de la llamada, y tu uso de ese servicio se rige por
-> sus propios términos.
+Lo habitual es que el modelo mire la página, piense un paso y haga un clic. Cada clic gasta un turno de conversación. Aquí el reparto es otro. Primero, la página se comprime en una **tabla de controles con índices** (en adelante, **tabla de elementos**). Después, una sola petición decide a la vez «qué operación» y «sobre qué elemento». El modelo principal solo pone el objetivo al principio y lee el resultado al final. Por eso una tarea de varios pasos gasta una sola llamada de herramienta.
 
-## Compatibility
+Es un plugin (bundle), no una skill. Registra dos herramientas y un comando de barra:
 
-| Superficie | Estado |
+| Entrada | Qué hace |
 |---|---|
-| Harness | DeepSeek Harness `0.1.7-rc.2` y `0.2.0-rc.1` (las dos se han ejecutado aquí); el plugin declara `>=0.1.7-rc.2 <0.3.0-0` en `peerDependencies`, así que el harness rechaza una versión fuera de ese rango en su puerta de compatibilidad antes de cargarlo, con el motivo impreso |
-| Node | `^22.19.0 || >=24.0.0` |
-| Plataformas | Windows, macOS, Linux |
-| Escritorio | Funciona en la app de escritorio (Electron); su perfil lo gestiona la propia app, así que la instalación va aparte — véase el párrafo de escritorio en *Install* más abajo |
-| Navegador | Chrome o Edge: elige uno en la página de ajustes y pulsa 「启动并连接」, y el plugin lo arranca por ti (su propio directorio de datos, su propio puerto libre). También puedes arrancar uno tú mismo con `--remote-debugging-port` y el plugin lo encontrará — y cuando no haya nada alcanzable, una tarea arranca ella misma ese navegador, así que el botón no es un requisito previo |
-| Credenciales | `TYPESAFE_API_KEY`; además, cuando hay que escribir en un campo, una clave para el modelo de texto: en un preset ese nombre por defecto es el que usa la convención del proveedor (en el caso de DeepSeek, `DEEPSEEK_API_KEY`), y las rutas integradas de DSH no necesitan ninguna |
+| Herramienta `jev_browser_task` | Ejecuta un objetivo escrito en una frase. Puede llevar `expect` para verificar. Devuelve el resultado y el texto de la página final |
+| Herramienta `jev_browser_read` | Lee una página larga pantalla a pantalla y vuelve a unir el texto sin duplicados. No gasta peticiones de decisión |
+| Comando `/jev-ultrafast` | Di lo que hay que hacer directamente en el cuadro de entrada. No hace falta que participe el modelo principal |
 
-## What it does
+Una ejecución real (medida en esta máquina):
 
-El plugin registra dos herramientas.
+```text
+Objetivo: busca «人生复本» y dime su información general
+Resultado: completado · 2 pasos · 5 decisiones · 14,6 s
+Última parada: 人生复本第一季 - 搜索 — https://cn.bing.com/search?q=人生复本第一季
+Lo leído en la página (extracto): unos 12 300 resultados; episodios de la temporada 1 (S1 E5–E9); Douban 8,5/10 (21 000 votos)……
+```
 
-**`jev_browser_task`** conduce una página hacia un solo objetivo, ejecutando todo el bucle
-dentro de una única llamada. Recibe cuatro argumentos:
+## Origen upstream
 
-| Argumento | ¿Obligatorio? | Significado |
+**Este es un proyecto portado, no original.** El upstream es [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser Use). El upstream está escrito en Python y tiene unos 690 renglones. Este proyecto lo reescribe en TypeScript y lo empaqueta como plugin de DSH. El repositorio de este proyecto es [xingzhen199186/dsh-jev-ultrafast](https://github.com/xingzhen199186/dsh-jev-ultrafast).
+
+**No es un producto oficial.** Este proyecto no tiene dependencia, respaldo ni patrocinio de Browser Use ni de TypeSafe. «Browser Use», «TypeSafe» y «Jev» son marcas de sus respectivos dueños. Aquí se mencionan solo para explicar el origen y para decir a qué interfaces llama el plugin.
+
+Lo que se trajo del upstream está listado archivo por archivo en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Lo esencial:
+
+| Archivo del upstream | Archivo de este proyecto | Qué se trajo |
 |---|---|---|
-| `goal` | sí | Toda la tarea en una frase, con cada valor que haya que escribir y cada filtro que haya que fijar. El bucle solo ve esta frase y la página actual, nunca tu conversación. |
-| `url` | sí | La página que se abre primero. El espacio de acciones no tiene ninguna operación de «ir a una dirección», así que el punto de entrada solo puede venir de aquí. |
-| `maxSteps` | no | Sustituye el presupuesto de pasos solo para esta ejecución, sin tocar la configuración. |
-| `expect` | no | Cadenas que la página terminada tiene que mostrar, escritas antes de la ejecución y comprobadas después por el plugin. Pon un `!` delante de una para exigir que *no* esté ahí. Esto es lo que impide que «done» sea la última palabra del modelo que hizo el trabajo. |
+| `jev_ultrafast/snapshot.js` | `src/browser/snapshot.js` | El script de instantánea dentro de la página, casi igual |
+| `jev_ultrafast/questions.py` | `src/prompts.ts` | Las preguntas que usa el servicio de decisiones, casi iguales |
+| `jev_ultrafast/model.py` | `src/decision/*` | La tabla de elementos, una petición que decide operación y objetivo, y la comprobación de la respuesta |
+| `jev_ultrafast/agent.py` | `src/loop.ts` | El bucle principal, el trato de las decisiones caducadas y la caché de valores de texto |
+| `jev_ultrafast/browser.py` | `src/browser/*` | La comprobación de frescura y los controles de visibilidad y geometría antes de cada acción |
 
-Devuelve `status` (`done` / `blocked` / `failed`), `reason`, `verification`, `url`,
-`title`, `text`, `steps`, `decisions`, `elapsedMs`, `actions`, `elements`,
-`omittedActions` y `textCalls`, además de la ruta del directorio de registro de la propia
-ejecución. Cuando `status` es `blocked` o `failed`, `elements` lleva lo que todavía era
-operable en la página, de modo que se ve dónde se atascó la ejecución. `omittedActions`
-cuenta los controles que la página ofrecía más allá de los 250 que caben en la tabla; la
-lista de pasos marca un paso sobre el que el propio modelo dudaba (por debajo de la mitad
-de probabilidad); y con las capturas encendidas también devuelve la ruta absoluta, dentro
-del directorio temporal del sistema, de la imagen de la última pantalla.
+El upstream depende de `browser-harness`. Ese paquete gestiona la conexión al navegador, el proceso demonio y las ventanas de permiso. En TypeScript no hay equivalente. Este proyecto reescribió esa parte contra Chrome DevTools Protocol y **sin dependencias**.
 
-**`jev_browser_read`** lee una página en vez de actuar sobre ella. Recibe `url` y, de forma
-opcional, `maxScreens` (por defecto 20) y `maxChars` (por defecto 60000). Recoge el texto
-visible pantalla a pantalla, descarta las líneas que comparten pantallas consecutivas y
-devuelve el texto entero, así que un documento más largo que una pantalla vuelve completo.
-No llama a ningún modelo de decisión y no hace clic en nada: esta es la vía barata, y leer
-es lo único que hace. Se detiene por uno de cuatro motivos — la página se acabó, se agotó
-el presupuesto de pantallas, se agotó el presupuesto de caracteres o la página dejó de
-desplazarse — y dice cuál fue; una pantalla que llenó exactamente el límite de 6000
-caracteres de una sola pantalla se cuenta y se marca como posiblemente cortada. Una
-pestaña recién abierta se traga el primer evento de desplazamiento (descubierto en una
-ejecución real), así que una pantalla que no se movió se empuja una vez más.
+Hay otros dos orígenes. El repositorio solo guarda sus nombres y no tiene enlaces que se puedan comprobar. Por eso aquí se dicen tal cual:
 
-Por qué leer necesita su propia vía: la instantánea es solo del área visible por diseño.
-Descarta toda línea que esté fuera de pantalla y limita lo que queda a 6000 caracteres, y
-ese mismo texto viaja con *cada* petición de decisión, así que ensancharlo encarecería cada
-paso. La herramienta de tarea, por tanto, ve una pantalla; la de lectura recorre la página.
+- **browser-use**: otro proyecto de agentes de navegador. Este proyecto le tomó tres cosas: borrar los parámetros de retorno de inicio de sesión en los registros (18 parámetros se sustituyen por `REDACTED`), volver a observar cuando un índice no acierta (solo se detiene si pasa más de 2 veces seguidas) e informar con sinceridad cuando el contenido está dentro de un marco.
+- **dsh-advisor-group**: otro plugin de DSH del mismo autor. La tabla de proveedores de modelo de texto de este proyecto, y la parte pequeña que llama al servicio de modelos de DSH, se portaron desde él (2026-09-29).
 
-**Qué deja atrás una ejecución.** Cada ejecución escribe en un directorio temporal propio:
-un `trace.jsonl` que contiene el cuerpo de la petición y la respuesta de cada llamada de
-decisión y de cada llamada al modelo de texto, con la clave borrada a `***` y todo lo que
-pase de 20 000 caracteres truncado; además, con las capturas encendidas, un
-`frames/NNNNNN.jpg` por paso y un `frames.json` que anota el nombre y el momento de cada
-fotograma. El resultado informa de ese directorio, así que el intercambio en bruto puede
-volver a leerse después.
+## Qué necesitas antes de empezar
 
-**Ver una ejecución.** El host también sirve en
-`http://127.0.0.1:3080/jev-ultrafast/inspector` un inspector interactivo, es decir, una
-página desde la que se mira una ejecución y se la controla. Ahí puedes iniciar una ejecución
-a mano, ver la pantalla actual, ver qué elemento selecciona cada paso y cuán seguro está el
-modelo, y pausar, avanzar o detener **antes** de que la acción se ejecute. Una ejecución
-que ya ocurrió puede volver a verse: sus fotogramas se reproducen al ritmo al que se
-tomaron, y el JSON en bruto de cada petición puede desplegarse. La página es un único
-archivo HTML emitido por el host en vez de un bundle de cliente, así que no hay que
-reconstruir nada para obtenerla; solo la página misma no necesita token, mientras que cada
-endpoint al que llama toma el mismo token que la página de ajustes.
+1. **Node.js**: `^22.19.0 || >=24.0.0`. Compruébalo con `node --version`.
+2. **DSH**: la generación `0.2.0-rc.1`. La declaración de dependencias del plugin cubre desde `0.1.7-rc.2` hasta antes de `0.3.0`.
+3. **Un navegador**: Edge o Chrome.
+4. **Dos claves** (según la vía que elijas): la clave del servicio de decisiones y la clave del modelo de texto. El plugin no incluye claves. En cada llamada lee las tuyas desde el almacén de credenciales de DSH.
 
-El bucle interno tiene cuatro pasos:
+## Instalación
 
-1. **Observar** — un script inyectado lee los controles visibles en una tabla indexada
-   (rol, nombre, valor actual, estado marcado/seleccionado).
-2. **Decidir** — una petición a TypeSafe devuelve la operación (`CLICK`, `TYPE_TEXT`,
-   `SELECT`, `SCROLL_UP`, `SCROLL_DOWN`, `WAIT`, `DONE`, `BLOCKED`) junto con un
-   objetivo candidato por cada operación disponible; solo se ejecuta el objetivo de la
-   operación elegida.
-3. **Escribir** — solo si la operación es `TYPE_TEXT`, un modelo pequeño compatible con
-   OpenAI redacta el valor del campo.
-4. **Ejecutar** — antes de la entrada se revisan de nuevo frescura, visibilidad,
-   geometría y oclusión, y la acción se registra *antes* de observar su resultado.
-
-El modelo nunca emite selectores, coordenadas ni código ejecutable: los objetivos son
-índices de la tabla observada, emitidos por el plugin.
-
-Tres frenos acotan una ejecución: el número de acciones llega a `maxSteps`; las llamadas de
-decisión llegan a `2 × maxSteps`; o tres pasos consecutivos dejan la página sin cambios. Una
-ejecución que se detiene así termina como `blocked`, no como un fallo — no llegó, no se cayó.
-
-El plugin abre su propia conexión con el navegador y deliberadamente **no** usa la ranura
-`ctx.browserUse`: necesita conducir la página paso a paso a su propio ritmo, y eso no es
-para lo que sirve el contrato de esa ranura, que es «entregar la página a un proveedor».
-
-**Todavía no está hecho:** el paquete no está en npm, así que se instala desde un tarball o
-un directorio local; los resultados de las herramientas usan por ahora la tarjeta genérica y
-no se ha escrito una tarjeta rica propia para él; las pestañas múltiples solo se manejan en
-la medida de seguir la pestaña que abre un clic (la ejecución nunca se cambia a una pestaña
-que ya tuvieras); las subidas de archivos y el arrastrar y soltar, así como cualquier cosa
-dentro de Shadow DOM, iframes o un canvas, nunca han estado en el espacio de acciones, ni
-aguas arriba ni aquí.
-
-Conviene conocer dos límites de la evidencia. La herramienta de tarea devuelve como mucho
-6000 caracteres de la página final, y busca una marca de éxito solo en esa pantalla final —
-una marca situada más abajo en una página muy larga no se encuentra ahí, y por eso una
-comprobación fallida significa «no confirmado» y no «no es cierto». La herramienta de
-lectura es la forma de mirar más lejos.
-
-### O también escribe el comando de barra (una URL no gasta turno de modelo)
-
-Escribe `/jev-ultrafast` en el campo de entrada:
-
-- `/jev-ultrafast <lo que quieras hacer>` — la dirección es opcional y puede ir en cualquier
-  punto de la frase, incluso como dominio desnudo (`example.com`); por ejemplo
-  `/jev-ultrafast https://www.example.com encuentra el precio y di cuál es`, o
-  `/jev-ultrafast mira qué tiempo hace mañana en Pekín`.
-  Si la frase lleva una dirección, no se llama a ningún modelo antes de arrancar; si no lleva
-  ninguna, esa frase se le pasa al modelo de texto elegido en la página de ajustes para que
-  conteste por dónde empezar —una llamada pequeña de más— y, cuando el modelo tampoco sabe qué
-  sitio abrir, la respuesta te pide que escribas la dirección.
-  El comando responde al instante y la ejecución continúa en segundo plano (puedes ver su avance
-  o detenerla en el panel de tareas de la sesión); al terminar te devuelve el resultado.
-- `/jev-ultrafast` por sí solo — devuelve solo esta explicación y la dirección del inspector interactivo.
-
-El comando y su resultado se quedan en la interfaz: nunca pasan a formar parte de la conversación,
-y no gastan ninguna llamada de modelo cuando la frase lleva una dirección; cuando no la lleva, esa
-frase le cuesta una llamada pequeña de más al modelo de texto elegido en la página de ajustes, que
-es el que decide por dónde empezar. El nombre tiene que ser ASCII en minúsculas (es una regla de
-DSH), y por eso es `/jev-ultrafast` y no un nombre en chino. Las capturas paso a paso siguen
-dependiendo del interruptor «una captura en cada paso» de la página de ajustes: con él apagado,
-esta ejecución solo deja el registro en bruto de sus intercambios.
-
-En una sesión completamente nueva, la primera vez la pantalla puede quedarse en la página de
-bienvenida (como si no hubiera pasado nada): envía cualquier otra cosa y la tarjeta del comando ya
-está ahí.
-
-> **Estado.** Versión `0.1.0`, vista previa de desarrollador. El plugin está implementado:
-> registra dos herramientas — `jev_browser_task`, cuyo bucle es el descrito arriba y el que
-> realmente se ejecuta, y `jev_browser_read`. No está publicado en npm — se instala desde un
-> tarball local (véase [Install](#install)). DeepSeek Harness está iterando rápido, así que
-> hay que contar con volver a comprobar este plugin contra él.
-> El plan por etapas y lo que queda pendiente están en [`tasks/todo.md`](tasks/todo.md).
-
-## Install
+Lado web (`dsh web`):
 
 ```sh
-pnpm pack
-dsh plugin --profile <name> add ./dsh-jev-ultrafast-0.1.0.tgz
-dsh --profile <name> --dump-config | grep 'dsh-jev-ultrafast'
+dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast#v0.1.0
 ```
 
-**En la app de escritorio** el perfil lo administra la propia aplicación y la línea de
-comandos lo rechaza (`profile "desktop" is managed exclusively by the Electron
-application`). Abra **插件 → 添加插件** (Complementos → Añadir complemento), pegue la
-**ruta absoluta** del tarball, pulse 立即启用 (Activar ahora) y **reinicie la app una
-vez**: el payload de arranque se envía una sola vez por arranque, así que sin reiniciar
-la página del plugin no recibe su token y muestra un aviso en chino, aunque la
-herramienta funcione igual. La versión web no tiene ese paso: su índice se renderiza en
-cada petición.
+pnpm no ejecuta los scripts de construcción de paquetes de código fuente por defecto. La primera instalación falla. Copia la clave de paquete que pnpm imprime, autorízala en el `pnpm-workspace.yaml` de ese profile y vuelve a instalar.
 
-Antes de una ejecución tienen que estar listas dos cosas.
+```yaml
+allowBuilds:
+  dsh-jev-ultrafast: true
+```
 
-La primera, un navegador al que el plugin pueda llegar. La vía más corta es elegir uno en la
-propia página del plugin: **Ajustes → Jev 浏览器**, elige Chrome o Edge en el desplegable
-del bloque del navegador y pulsa 「启动并连接」. El plugin arranca el ejecutable de ese
-navegador con un **directorio de datos propio** (un perfil de navegador aparte, el del plugin
-y no el tuyo: inicia sesión una vez dentro de él y conserva ese estado), deja que el navegador
-elija un puerto libre y guarda la dirección en ese directorio de datos, así que no hay que
-teclear ningún puerto y un DSH reiniciado lo encuentra otra vez. Chrome y Edge rechazan un
-puerto de depuración sobre el perfil predeterminado desde la versión 136, y por eso «el plugin
-arranca uno limpio» es también la única forma de hacerlo con una sola pulsación. **Sin
-embargo, esa pulsación no es obligatoria**: cuando no hay ningún navegador alcanzable, una
-tarea arranca ella misma el que se haya elegido y se conecta a él, y lo dice en su resultado.
-El botón conserva su otro uso: un sitio que necesita iniciar sesión recibe ese inicio de
-sesión una vez, a mano, dentro de esa ventana.
-
-También puedes arrancar tú mismo una instancia dedicada y no tocar el botón:
+Sin red, usa el paquete que armaste en esta máquina. Primero `pnpm pack` y después:
 
 ```sh
-# Chrome
-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/jev-profile --no-first-run
-# Edge
-msedge --remote-debugging-port=9222 --user-data-dir=/tmp/jev-profile --no-first-run
+dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-En Windows hay que escribir la ruta completa:
+**El lado de escritorio va por otro camino.** La aplicación de escritorio gestiona su propio profile. La línea de comandos lo rechaza: `profile "desktop" is managed exclusively by the Electron application`. Haz esto:
 
-```powershell
-& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
-  --remote-debugging-port=9222 --user-data-dir="C:\Users\<tú>\jev-profile" `
-  --no-first-run --no-default-browser-check
-```
+1. En la aplicación, pulsa **Plugins → Añadir plugin**.
+2. Pega la **ruta absoluta** del tarball.
+3. Cuando termine, pulsa «Activar ahora».
+4. **Reinicia la aplicación una vez.**
 
-Con `cdpUrl` vacío, el plugin busca en este orden: la dirección configurada → las variables
-de entorno `BU_CDP_URL` / `BU_CDP_WS` → el archivo de puerto que escribió el propio navegador
-(entre ellos, los dos directorios de datos que arrancó el plugin) → los dos puertos
-convencionales 9222 y 9223. Si ninguno responde, falla con un mensaje en chino que explica
-cómo arrancar un navegador y menciona ese botón. Si el tuyo ya está escuchando en otro sitio,
-pon `cdpUrl`. **Con los dos navegadores en marcha, una tarea conduce el que hayas elegido en
-el desplegable** — se ordena por delante del otro, en vez de ganar el que se arrancó primero.
+El paso 4 no sobra. La carga de arranque del lado de escritorio se entrega una sola vez, al arrancar la aplicación. Sin reiniciar, la página del plugin no recibe su token (las herramientas sí funcionan).
 
-La segunda, las dos claves. La vía más corta es escribirlas en la propia página del plugin en
-los ajustes de DSH (la sección siguiente), que las escribe en el archivo de credenciales de
-DSH; también pueden guardarse como credenciales (la decisión usa `TYPESAFE_API_KEY` por
-defecto, y el modelo de texto el nombre por defecto de la ruta elegida) o exportarse en el
-entorno que arranca DSH. Si falta una, se produce un error en chino que nombra cuál falta.
-Las claves nunca se escriben en la configuración: la configuración contiene los **nombres de
-variables**.
+## Cómo se usa
 
-## Configuration
+### Herramienta `jev_browser_task`
 
-Cada clave se puede cambiar en `cordis.yml` o en la propia página de ajustes del plugin
-(véase la sección siguiente); los nombres son planos, sin anidamiento. La columna de
-valores predeterminados es lo que se obtiene sin escribir nada.
+Dale un objetivo en una frase y lo completa. También puedes darle `expect`. Escribe en `expect` «lo que tiene que aparecer en la página cuando la tarea esté hecha». Si no se comprueba, la ejecución vuelve como `blocked`; el plugin no se cree la opinión del modelo sobre sí mismo.
 
-| Clave | Tipo | Por defecto | Descripción |
-|---|---|---|---|
-| `browserKind` | `chrome` \| `edge` | `chrome` | Qué navegador arranca 「启动并连接」, y cuál arranca una tarea por su cuenta cuando no hay nada alcanzable. Se le da un directorio de datos propio, así que esto solo elige cuál. |
-| `browserPath` | string | vacío | Dónde vive el ejecutable de ese navegador. Solo hace falta cuando está instalado fuera de los sitios habituales (una copia portátil, por ejemplo). |
-| `cdpUrl` | string | vacío | Punto de acceso de depuración del navegador, p. ej. `http://127.0.0.1:9222`; vacío = búsqueda automática |
-| `userDataDir` | string | vacío | Directorio de datos del navegador, solo si se usó uno no predeterminado |
-| `decisionProvider` | `typesafe` \| `openrouter` | `typesafe` | Por qué puerta se llega al servicio de decisión: el punto de acceso propio de TypeSafe o la ruta alpha de OpenRouter; véase «Dos rutas» más abajo |
-| `decisionEndpoint` | string | vacío | Dirección completa del servicio de decisión; vacío usa la del proveedor elegido, solo hay que rellenarla en una ruta de reventa |
-| `decisionModel` | string | vacío | Nombre del modelo de decisión; vacío usa el del proveedor elegido |
-| `decisionKeyRef` | string | vacío | *Nombre* de la credencial de decisión (nombre de variable de entorno), no la clave; vacío usa el del proveedor elegido |
-| `textProvider` | string | `deepseek` | Por qué camino va el modelo de texto: un nombre predefinido (`deepseek`, `openrouter`, `bailian`, `zhipu`, `moonshot`, `siliconflow`, `openai`), o `dsh:<id del proveedor>` (un modelo ya configurado en DSH); véase «Por qué camino va el modelo de texto» más abajo |
-| `textBaseUrl` | string | vacío | Dirección compatible con OpenAI del modelo de texto; vacío usa la del camino elegido |
-| `textModel` | string | vacío | Nombre del modelo de texto; vacío usa el modelo predeterminado del camino elegido; el camino `dsh:` no tiene valor predeterminado, hay que elegir uno |
-| `textKeyRef` | string | vacío | *Nombre* de la credencial del modelo de texto; vacío usa el nombre del camino elegido; en el camino `dsh:` la clave la lleva DSH mismo |
-| `textReasoning` | `none` \| `auto` | `none` | `none` desactiva el razonamiento del modelo de texto (rellenar un campo es copiar, no razonar); `auto` usa el valor predeterminado de cada proveedor |
-| `maxSteps` | number | `60` | Máximo de acciones; el de decisiones es el doble |
-| `screenshots` | boolean | `false` | Captura en cada paso (mucho más lento) |
+Ejemplo: en `goal` escribe «encuentra el precio más bajo de este vuelo y dime cuánto es», en `url` la dirección de la página de búsqueda y en `expect` `["€"]`.
 
-La configuración se valida con el esquema Schemastery `Config` de `src/config.ts`, así que
-un valor inválido falla al cargar en vez de ejecutarse roto.
+### Herramienta `jev_browser_read`
 
-Los dos campos `keyRef` guardan el *nombre* de una credencial y llevan el rol
-`credential-ref`; cada credencial se resuelve por llamada mediante `ctx.credentials`. Todos
-los campos son `volatile`, y eso es lo que permite que la página de ajustes guarde y surta
-efecto de inmediato: un valor cambiado con DSH en marcha lo recoge la siguiente tarea, sin
-reiniciar. El *valor* que hay detrás de un nombre se pone en la fila 密钥 del bloque
-correspondiente de la página, que escribe el propio archivo de credenciales de DSH: igual de
-inmediato.
+Dale una dirección. Lee la página pantalla a pantalla, quita duplicados y te la devuelve unida. Esta vía no gasta peticiones de decisión. Úsala para leer artículos largos, documentación o especificaciones.
 
-### Por qué camino va el modelo de texto
+No importa que la página sea más alta que una pantalla. El desplazamiento se repite en cada pantalla y al final se une todo en un solo texto.
 
-El modelo de texto solo se usa para «escribir en un campo», y también tiene su propia forma
-de elegir camino, en dos clases:
+### Comando `/jev-ultrafast`
 
-| Clase | Qué es | Dirección y clave |
+Di lo que hay que hacer directamente en el cuadro de entrada.
+
+- `/jev-ultrafast https://www.example.com encuentra el precio y dime cuánto es` — la frase lleva una dirección. Antes de arrancar no llama a ningún modelo.
+- `/jev-ultrafast mira el tiempo que hará mañana en Pekín` — la frase no lleva dirección. Si la frase nombra un sitio, el plugin lo reconoce en local. Reconoce 13 sitios: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao/Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipedia y GitHub. Solo si no lo reconoce pregunta una vez al modelo de texto. Si tampoco hay respuesta, empieza por un buscador; por defecto, Bing.
+- `/jev-ultrafast` (sin argumentos) — solo devuelve una explicación y la dirección del inspector interactivo.
+
+El comando vuelve enseguida. La tarea sigue en segundo plano dentro de DSH. En el panel «Tareas» de la cabecera de la sesión puedes ver el avance y pararla. Cuando termina, devuelve el resultado.
+
+El nombre del comando solo admite ASCII; por eso es `/jev-ultrafast`.
+
+### Inspector interactivo
+
+Abre en el navegador `http://127.0.0.1:3080/jev-ultrafast/inspector`. Funciona con otro puerto y otro host. También puedes abrirlo desde la sección **Navegador** de la página de ajustes, con el botón «Abrir el inspector interactivo».
+
+Allí puedes iniciar una ejecución a mano, ver la pantalla actual, ver qué elemento se elige en cada paso y ver con cuánta confianza decide el modelo. Antes de ejecutar una acción puedes «Pausar / Paso a paso / Detener». También puedes revisar ejecuciones anteriores y reproducirlas fotograma a fotograma a ritmo real.
+
+## Configuración
+
+La página de ajustes está en **Ajustes → Jev navegador**. Hoy tiene **22 campos**. Todos son del tipo «no hace falta reiniciar»: se guardan y ya funcionan, y no interrumpen la tarea que esté corriendo.
+
+### Dos puertas
+
+| Puerta | Dos vías | Clave |
 |---|---|---|
-| Predefinido (`deepseek`, `openrouter`, `bailian`, `zhipu`, `moonshot`, `siliconflow`, `openai`) | una tabla que trae el plugin | la dirección, el modelo predeterminado y el nombre de credencial predeterminado los da esa tabla; el valor de la clave lo guarda en el archivo de credenciales de DSH el campo de pegado de la página de ajustes |
-| Integrado en DSH (`dsh:<id del proveedor>`, por ejemplo `dsh:deepseek-official`) | un modelo ya configurado en DSH | la dirección y la clave las lleva DSH mismo; la página de ajustes solo elige un modelo y no dibuja campo de pegado |
+| Servicio de decisiones | TypeSafe directo; o el canal de decisiones de OpenRouter | Se lee del almacén de credenciales de DSH. El plugin no guarda ninguna copia |
+| Modelo de texto | Siete proveedores predefinidos; o `dsh:<id del proveedor>` (un modelo ya configurado en DSH) | La vía predefinida usa su propia clave; la vía integrada de DSH la gestiona DSH |
 
-Manda el camino que se elija, y los otros tres campos lo siguen cuando quedan vacíos —igual
-que el servicio de decisión de más abajo—. El prefijo `dsh:` no es adorno: en DSH también
-puede haber un proveedor llamado `deepseek`, y con el prefijo «el predefinido deepseek del
-plugin» y «el deepseek de DSH» son dos opciones paralelas que no se desplazan la una a la
-otra; y un valor ya guardado tampoco se tomará por el otro solo porque DSH registre después
-un proveedor con el mismo nombre.
+Los siete predefinidos son: DeepSeek oficial, OpenRouter, Alibaba Cloud Bailian, Zhipu AI, Moonshot Kimi, SiliconFlow y OpenAI.
 
-Los predefinidos solo aceptan las casas de protocolo OpenAI porque a esta mitad de texto le
-basta con «dar una frase y pedir un JSON». Otros protocolos como Anthropic o Gemini
-funcionan igual de bien por el camino integrado de DSH, sin ninguna carencia de capacidad.
+La vía de OpenRouter lleva una tilde en el nombre del modelo: `~typesafe/jev-latest`. **No es una errata.** Si la quitas, te llevará a un modelo que no existe.
 
-**Los problemas transitorios se reintentan; una conexión rota no.** Una llamada al modelo de
-texto que vuelve 429, 503 o 529 se reintenta hasta dos veces, esperando 0,5 s y luego 1 s.
-Una caída de red no se reintenta en absoluto y se informa tal cual — la misma línea que traza
-la versión Python de aguas arriba.
+Los dos desplegables de proveedor agrupan las opciones por origen. Si eliges «integrado en DSH», la fila de la clave se sustituye por una frase: «lo gestiona DSH». No se dibuja caja para pegar nada.
 
-**Un compromiso**: el nombre de credencial predeterminado del predefinido DeepSeek está
-escrito `DEEPSEEK_API_KEY` según la convención del proveedor, y DSH también usa ese nombre
-— así que este camino sale de fábrica ya «configurado». Para que use una clave propia, pon
-otra cosa en «nombre de la clave» dentro de «ajustes avanzados» de la página de ajustes.
+Cuando la vía es la integrada de DSH, el plugin envía la identidad de la sesión actual (`GenerateOptions.sessionId`). Las vías que enrutan por sesión lo necesitan. Sin eso, la vía rechaza la petición.
 
-### Dos rutas hacia el servicio de decisión
+### Navegador: dos formas de conectarse
 
-Las dos puertas se diferencian en exactamente tres valores: la dirección, el nombre del
-modelo y bajo qué nombre de credencial está la clave. Como van juntos, la configuración
-solo nombra la puerta y deja que los otros tres la sigan; la página muestra en gris el
-valor que usará un campo vacío, así que cambiar de proveedor no exige copiar nada ni deja
-residuos.
+**El navegador que ya usas** (por defecto). Aprovecha tu sesión iniciada tal como está. La primera vez hay que hacer esto:
 
-| Proveedor | Dirección | Modelo | Nombre de la credencial |
-|---|---|---|---|
-| TypeSafe, directo | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
-| OpenRouter | `https://openrouter.ai/api/alpha/decisions` | `~typesafe/jev-latest` | `OPENROUTER_API_KEY` |
+1. En la barra de direcciones de ese navegador, abre `edge://inspect/#remote-debugging` (en Chrome, `chrome://inspect/#remote-debugging`).
+2. Marca «Permitir depuración remota».
+3. Cuando aparezca la ventana «¿Permitir depuración remota?», pulsa «Permitir». También puedes pulsar antes «Conectar tu navegador» en la página de ajustes y dejar la conexión en manos del plugin.
 
-La tilde inicial en el nombre del modelo de OpenRouter no es una errata: es como esa ruta
-escribe el mismo modelo, y quitarla pide un modelo que no existe. También se ha visto que
-esa ruta quiere el cuerpo de la petición envuelto en un envoltorio `decisionsRequest`, así
-que por esa puerta el plugin envía primero el cuerpo plano y solo reintenta una vez
-envuelto cuando el cuerpo es rechazado con 400 o 422 —un rechazo de forma, no de
-contenido—. El punto de acceso propio de TypeSafe nunca envuelve. Ninguna de las dos
-puertas se ha probado contra un servicio real desde esta máquina, que no tiene clave para
-ninguna.
+Después de marcarlo una vez, funciona esté abierto o cerrado. Si está cerrado, el plugin te lo abre: sin pasarle ningún parámetro, igual que si hicieras doble clic en el icono (desde 2026-10-03, la línea roja «nunca arrancar tu perfil diario» se retiró por decisión del usuario). Su propio puerto de depuración viaja con él.
 
-**De dónde sale una clave.** Los campos de arriba contienen nombres, no claves; DSH
-resuelve el nombre en un orden fijo: el entorno del proceso tal como se heredó al
-arrancar, luego la sección `refs:` de su propio archivo de credenciales
-`~/.dsh/.credentials.yaml`, luego un `.env` en el directorio de trabajo y, por último,
-`~/.dsh/.env`. El nombre es el nombre de la variable, sin prefijo.
+**Solo se permite una vez por sesión del navegador.** Una vez conectado, el plugin mantiene esa conexión. Ejecutar tareas, leer páginas y abrir pestañas nuevas ya no muestra ninguna ventana. Solo si cierras el navegador del todo y lo vuelves a abrir hay sesión nueva, y preguntará otra vez.
 
-La vía más corta es la propia página del plugin (la fila 密钥 de cada bloque): escribe ese
-archivo de credenciales por ti, surte efecto de inmediato y no exige saber dónde está
-el archivo. Las otras dos vías siguen funcionando: define una variable de entorno con ese
-mismo nombre en la misma terminal antes de arrancar `dsh web`, o añade una línea bajo
-`refs:` en `.credentials.yaml`, que DSH recarga por su cuenta. Un `.env` también sirve,
-pero no puede definir ningún nombre que empiece por `DSH_`, pues entonces DSH se niega a
-arrancar.
+**El navegador propio del plugin.** Abre otro directorio de datos, separado del tuyo. En los sitios que pidan inicio de sesión, inicia sesión una vez en esa ventana y se conserva.
 
-Hay una capa que la página no puede cambiar: **el entorno heredado al arrancar gana, y se
-lee una sola vez, en ese momento.** Cuando el valor de un nombre viene de ahí, la página
-marca esa fila como 「这一页改不了它」 y no ofrece ningún campo, explicando por qué. Esa
-negativa es deliberada: una escritura que pareciera tener éxito mientras la resolución
-siguiera devolviendo el valor antiguo del entorno sería peor que un «esto queda fuera de
-mi alcance» dicho con honestidad.
+Con «el navegador que ya usas» seleccionado, en ese bloque hay dos cosas más que puedes hacer:
 
-## La página del plugin en los ajustes de DSH
+- **Ver cuántos inicios de sesión se pueden llevar**: solo cuenta cuántas cookies hay en tu navegador diario y en qué dominios están. Al terminar se desconecta en el acto y no escribe nada.
+- **Llevar los inicios de sesión al navegador propio del plugin**: escribe las cookies y después comprueba sitio por sitio. Lo hace por el canal de depuración; no toca los archivos del perfil.
 
-Abre **Ajustes → Jev 浏览器**. La página tiene cuatro bloques — **浏览器**, **决策服务**,
-**文本模型**, **任务** — y cada uno está dispuesto de la misma manera: una línea que dice
-cómo está esa parte ahora mismo, y luego los controles que la cambian. Esas líneas de estado
-vienen de un recorrido de ida y vuelta real y no de una suposición: «conectado» significa que
-un punto de acceso de depuración respondió *y* que volvió una instantánea de una pestaña
-real, y «falta una clave» se sienta justo encima de la casilla que lo arregla. La página
-nunca te manda a otra parte de la página para arreglar lo que acaba de informar.
+### Otros interruptores
 
-El bloque del navegador lleva una cosa más: un desplegable 「用哪个浏览器」 (Chrome / Edge) y
-un botón 「启动并连接」. Púlsalo y el plugin arranca ese navegador y se conecta, escribiendo
-el resultado directamente en esta página. Primero guarda el bloque — solo ese bloque, así que
-nada a medio escribir en otro bloque queda confirmado por ello. Cuando no encuentra el
-programa, enumera dónde lo ha buscado; abre 高级设置 y rellena **浏览器程序** para una copia
-portátil guardada en otro sitio. El navegador que se elija aquí es también el que arranca una
-tarea por su cuenta cuando no hay ninguno alcanzable, así que este botón no es un requisito
-previo. Debajo de esos hay un botón más, 「打开交互式检查器」, que te lleva directamente a la
-página descrita arriba; la dirección la compone a partir de donde estés leyendo esto, así que
-es correcta en cualquier puerto.
+Lo que se cambia a menudo está a la vista. Lo que casi nunca se cambia queda en «Ajustes avanzados»: por ejemplo, la ubicación del programa del navegador, el directorio de datos y las direcciones y nombres de clave de las dos puertas.
 
-Dos cosas puede hacer que la herramienta por sí sola no puede informar. Dice si cada nombre
-de credencial se resuelve —nunca cuál es el valor—. Y 测一次决策服务 envía una pregunta de
-decisión real, que es la única forma de probar que la dirección, el nombre del modelo y la
-clave funcionan juntos; esa gasta una llamada, así que solo se ejecuta cuando la pulsas.
+Algunos interruptores que conviene conocer:
 
-La configuración se edita en esos mismos bloques. Los guardados pasan por el propio servicio
-de configuración de DSH, así que la validación y la comprobación de «alguien acaba de cambiar
-esto» son del harness, no nuestras; el cambio llega a la capa de parches del perfil como una
-anulación dirigida por id. Los bloques **决策服务** y **文本模型** llevan cada uno su propio
-保存: pulsar uno escribe los campos de ese bloque, sus anulaciones guardadas en 高级设置
-incluidas, y deja en paz las ediciones sin guardar del otro bloque. El botón del final de la
-página se llama 保存全部改动 y escribe de una vez todos los cambios de la página. En
-cualquiera de los dos casos la configuración va primero y las claves pegadas después. Ese
-orden no es cosmético: un nombre de credencial que acabas de escribir en un campo solo se
-vuelve guardable una vez guardada la configuración que lo nombra, así que una pulsación puede
-cambiar un nombre *y* darle un valor.
+- **Reconocer botones personalizados** (activado por defecto): incluye como candidatos los elementos normales que llevan un clic puesto por script. En muchos sitios el botón es un `div` o un `span`. Si lo apagas, solo se reconocen los controles nativos.
+- **Qué hacer cuando una capa tapa el objetivo** (activado por defecto): cuando una capa flotante tapa el objetivo y no se puede pulsar, el plugin pone en la lista de candidatos el elemento que estorba y la acción «cerrar la capa con Esc». Así el modelo puede cerrarla por su cuenta.
+- **A qué página nueva seguir cuando salen varias** (activado por defecto): si un clic abre varias páginas nuevas, sigue solo la que coincide con el objetivo del paso por dirección o por título. Si ninguna coincide, no sigue a ninguna y se queda donde estaba.
+- **Control central** (desactivado por defecto): al arrancar, otro modelo escribe una lista de comprobación verificable y la revisa durante la ejecución. Si un criterio no se cumple, la ejecución no puede declararse terminada. Usa el modelo de la columna «modelo de texto».
 
-El proveedor es un desplegable, y la casilla del modelo justo debajo puede quedarse vacía: el
-texto gris de marcador de posición muestra entonces lo que usará esa puerta, así que cambiar
-de proveedor no exige copiar nada ni deja residuos. El modelo merece verse junto a su
-proveedor, y por eso está en el bloque; la dirección y el nombre de la credencial son las
-anulaciones que se tocan una vez, y esperan detrás del desplegable 高级设置, al final.
+El límite de salida de una decisión es `393216` por defecto. Si el servidor lo rechaza, el plugin lee su propio límite en la respuesta del servidor y vuelve a preguntar con ese número.
 
-El bloque «modelo de texto» es igual: su desplegable de **proveedor** muestra dos grupos
-con título —el primero (「DSH 内置（由 DSH 管理地址和密钥）」) lista los modelos ya
-configurados en DSH y el segundo (「插件预设（本插件直连）」) los predefinidos que trae el
-plugin—, y los textos de las opciones son nombres simples, sin prefijo; debajo del
-desplegable se dibuja ahora una línea gris más que describe el proveedor elegido —de dónde
-viene su dirección, dónde pedir su clave— (si el camino elegido es uno integrado de DSH esa
-línea no se dibuja, porque la pista del campo y la fila de la clave ya dicen que la dirección
-y la credencial las lleva DSH); con el **modelo** vacío se usa el modelo predeterminado de
-ese camino, y la lista de candidatos de esa casilla se puede abrir para escoger uno o
-escribir encima. Al elegir un predefinido, esa casa trae consigo la dirección, el modelo y el
-nombre de la credencial, y debajo se dibuja el campo de pegado como siempre; al elegir el
-integrado de DSH, esa fila de la clave se sustituye por una línea que dice que la lleva DSH
-mismo y no se dibuja campo de pegado —la dirección y la clave de ese camino están en DSH,
-fuera del alcance de esta página—.
+## Límites de comportamiento
 
-Debajo está la sección 「密钥」. Los nombres que lista son exactamente los que usará esta
-configuración: los nombres por defecto de las dos puertas (así la otra clave puede quedar
-guardada antes de cambiar de proveedor) más cualquier nombre que hayas escrito tú mismo en
-la configuración. Cada fila de 密钥 tiene una primera línea que informa del estado de ese
-nombre —«todavía sin valor», «configurado, desde el archivo de credenciales de DSH» o «fuera
-del alcance de esta página»— y debajo va el campo de pegado. Pega un valor, pulsa 保存 y
-queda escrito en el archivo de credenciales de DSH, usado por la siguiente tarea sin
-reiniciar; 清除 borra la entrada de ese archivo. Después la página solo muestra «configurado»
-y de dónde viene el valor: la interfaz de credenciales de DSH responde si un nombre está
-definido, qué capa ganó y si admite escritura, y nunca entrega el valor a ninguna página, así
-que esta página no puede mostrarlo aunque quisiera. Cuando el valor viene del entorno de
-arranque no hay campo ninguno, y la línea lo dice.
+- **Solo cierra las pestañas que abrió él.** Cuando sigue una pestaña abierta por un clic, esa página se queda para que la veas. Al terminar solo cierra la que abrió él.
+- **No se apodera de tus pestañas.** No cambia a las pestañas que ya tenías.
+- **Nunca cierra tu navegador diario, nunca escribe directamente en su perfil y nunca le pasa parámetros de depuración.** La cadena que copia inicios de sesión solo lee de ese navegador.
+- **No pulsa ventanas por ti ni inicia sesión por ti.** La ventana «¿Permitir depuración remota?» la pulsas tú.
+- **No incluye, no intermediia y no revende ningún acceso a API.** Solo admite claves propias. Las claves no entran en el archivo de configuración ni en el registro de la sesión.
+- **Cada paso deja rastro.** Cada ejecución escribe un `trace.jsonl` en un directorio temporal. Contiene cada petición y cada respuesta de decisión. Las claves se sustituyen por `***` y los parámetros de retorno de inicio de sesión, como `code` o `token`, por `REDACTED`. El resultado indica la ruta de ese directorio.
 
-La página ya no detalla dónde vive el archivo de la clave ni de qué no protege. La ruta
-aparece donde importa: cuando el entorno de arranque eclipsa un nombre, esa fila nombra el
-archivo y ofrece las dos salidas. El resto corresponde aquí y no a la página: el archivo
-está abierto solo para tu propia cuenta de usuario, y DSH no entrega su ruta al modelo
-—pero los procesos de herramientas de una IA corren como el mismo usuario, así que pueden
-leerlo—. La propia documentación de DSH lo dice con más suavidad que nosotros: es
-discreción, no una frontera. Protegerse de una IA local exige el llavero del sistema
-operativo, que todavía no existe.
+## Limitaciones conocidas
 
-## Development
+- **La página final que devuelve la herramienta tiene como máximo 6000 caracteres**, y `expect` solo busca en el texto de la **última pantalla**. Por eso «no se comprobó» solo significa que no se confirmó ahí; no significa que la tarea no se hiciera. Si necesitas ver más lejos, usa `jev_browser_read`.
+- **Los rodeos gastan pasos.** Ejemplo: si le pides la lista de éxitos de animación de Bilibili, puede pulsar antes el cuadro de búsqueda y entrar en la página de resultados. Cuando la entrada del objetivo no está en la página, no tiene otro camino.
+- **Un botón tapado se reintenta hasta el límite.** Si una capa tapa un botón y no se puede cerrar, lo intenta 7 veces seguidas, se detiene y nombra lo que lo tapaba.
+- **Ir y volver entre dos páginas frena la ejecución.** Se detiene tras 9 aterrizajes alternos entre dos páginas. Una tarea que de verdad necesite más de 4 rondas de ida y vuelta también se detendrá; el mensaje final nombra esas dos páginas.
+- **No entra en elementos dentro de iframe, Shadow DOM ni canvas.** Dice con sinceridad «el contenido de dentro no se ve». Si hay una dirección interna, la da.
+- **No hace subida de archivos ni arrastrar y soltar.**
+- **Una página que solo cambia de imagen cae en la rama «sin cambios».** El plugin decide si el contenido llegó por el texto de la página, no por la red.
+- **Con «el navegador que ya usas» seleccionado, no puedes usarlo a la vez durante los minutos que dura la tarea.** Mientras ese interruptor de depuración está encendido, en teoría otros programas de esta máquina también pueden conectarse a él.
+- **Los rastros quedan en el directorio temporal del sistema, incluyen el texto de la página y no se limpian solos.**
+- **Los cinco README quedaron alineados en estructura y contenido el 2026-10-05.**
+- **La versión es 0.1.0 y no se cambia por iniciativa propia.** Este plugin no está publicado en npm. El código está en GitHub.
+
+## Desarrollo y verificación
 
 ```sh
 pnpm install
-pnpm run typecheck
-pnpm test          # 168 pruebas unitarias (15 archivos), sin clave ni red
-pnpm run build
+pnpm typecheck   # comprobación de tipos
+pnpm test        # pruebas unitarias
+pnpm build       # construye lib/
+pnpm pack        # genera el tgz
 ```
 
-La capa del navegador tiene sus propias 14 pruebas de integración, omitidas por defecto y
-ejecutadas solo contra un navegador real:
+Las pruebas de integración con navegador real se saltan por defecto. Para ejecutarlas, añade la variable de entorno:
 
 ```sh
-JEV_BROWSER=1 pnpm exec vitest run tests/browser.integration.test.ts
+JEV_BROWSER=1 pnpm test
 ```
 
-En Windows eso es `$env:JEV_BROWSER='1'; pnpm exec vitest run
-tests/browser.integration.test.ts`. Se conecta al puerto 9222 por defecto, o al que nombre
-`JEV_CDP_URL`.
+Conjunto actual: **44 archivos de prueba** y **724 casos**. De ellos, **704 pasan y 20 se saltan**. Los 20 que se saltan necesitan un navegador real.
 
-También puedes montarlo sin empaquetar: `dsh web --patch ./scratch/cordis.yml`, que ya apunta
-al `lib/index.mjs` construido de este repositorio.
+Las pruebas están en dos sitios:
 
-Hasta ahora se ha verificado lo siguiente: pasan 168 pruebas unitarias (15 archivos); pasan las 14
-pruebas de integración del navegador, ejecutadas aquí contra Edge (las 11 anteriores, contra
-Chrome 153.0.8010.53 y Edge 154.0.4258.37, todas en verde las dos veces); un tarball de `pnpm pack`
-se instala y carga en un perfil desechable limpio. La sección de claves de la página se
-ejercitó contra una instancia desechable en dieciséis comprobaciones: guardar, que la fila
-pase a «viene del archivo de credenciales», que el valor siga configurado tras reiniciar
-el proceso, y que 清除 devuelva el nombre a no configurado; un nombre eclipsado por el
-entorno de arranque rechaza la escritura y dice por qué; un nombre fuera de la lista de la
-página (403), un valor vacío y una petición sin el token son rechazados cada uno; y en
-ocho cuerpos de respuesta el valor no apareció ni una vez. **Todavía no se ha hecho
-ninguna llamada de decisión real con una clave real**: esta máquina no tiene ninguna. El
-plan por etapas y sus criterios de aceptación están en
-[`tasks/todo.md`](tasks/todo.md). Después se recorrieron también la 0.2.0-rc.1 y la app de
-escritorio: el plugin pasa la puerta de compatibilidad de la 0.2.0-rc.1 por la fuerza de esa
-declaración `>=0.1.7-rc.2 <0.3.0-0` (ninguna línea `disabling profile plugin` en
-`--dump-config`); allí sus inyecciones de índice se siguen reconstruyendo en cada petición,
-así que el token que recibe la página es el que acepta la ruta de la herramienta, y una
-petición sin él sigue siendo rechazada con 403; la instalación de escritorio pasó por el
-propio 添加插件 de la app con la ruta absoluta del tarball, y tras reiniciar la aplicación el
-payload de arranque contiene `global/__JEV_ULTRAFAST_TOKEN__` y la página informa de su estado
-en vivo sin error de token; y editar 调试端口 en el escritorio y guardar escribe esa fila en la
-capa de parches del perfil, vaciarla escribe el valor vaciado, y la página sigue siendo usable
-tras ambos guardados — que es el aspecto que tiene un campo de configuración que de verdad no
-necesita recarga.
+- **Rastros de ejecución**: cada ejecución escribe un `trace.jsonl`. Contiene cada petición y cada respuesta de decisión, y cada llamada al modelo de texto.
+- **Documento de ingeniería** [ENGINEERING.md](ENGINEERING.md): registra los cambios paso a paso, con las cifras medidas y los identificadores de rastro que los sostienen.
 
-Una comprobación `dsh-plugin-dev check` pasó en su momento, pero ese CLI se distribuye con la
-habilidad de desarrollo de plugins (el *skill* de DSH) y ya no está en el PATH de esta máquina,
-así que ese punto no se volvió a ejecutar.
+## Origen y enlaces relacionados
 
-La 0.2.8 devolvió el modelo a su propio bloque, y ese cambio se comprobó en una instancia con
-el paquete real instalado: el modelo de decisión se sienta bajo su proveedor con un marcador
-de posición que lo sigue (TypeSafe muestra `jev-latest`, OpenRouter `~typesafe/jev-latest`),
-高级设置 se queda con seis elementos, y la línea de nota bajo cada proveedor se leyó
-correctamente en los dos estados —la de OpenRouter nombra su canal alpha y la tilde—, mientras
-que elegir el integrado de DSH ya no repite lo que la pista de arriba y la fila de la clave de
-abajo ya dicen. La misma versión fijó la redacción de la línea 现在 del bloque de decisión:
-ahora informa juntos de la ruta, el modelo **y el nombre de la credencial** guardados —la
-casilla de la clave de abajo sigue siguiendo el borrador, porque un valor tiene que pegarse
-antes de poder guardarse, y una frase que mezclara la ruta guardada con un nombre de clave en
-borrador describía un estado que nunca existió (visto en vivo: con el proveedor cambiado pero
-sin guardar, la línea seguía diciendo `TypeSafe 官方直连 · jev-latest · 密钥 TYPESAFE_API_KEY
-还没有值。` mientras la fila de la clave ya se había vuelto `OPENROUTER_API_KEY`). La versión 0.2.9 da al bloque del servicio de decisión y al bloque del modelo de texto su propio botón «保存»: pulsar uno escribe solo los cambios de ese bloque —sus anulaciones dentro de los ajustes avanzados incluidas— y las ediciones sin guardar del otro bloque no se arrastran; el botón del final de la página ahora se llama «保存全部改动» y escribe todo de una vez. En una página real esto se comprobó escribiendo un cambio en cada bloque y pulsando el «保存» propio del bloque de decisión: solo se almacenó el cambio del bloque de decisión, mientras que el bloque de texto seguía informando de un cambio sin guardar, y su campo conservaba el valor sin guardar. La versión 0.2.10 quitó ese pliegue de nota al pie de la página de ajustes: ahora la página termina en la fila 「保存全部改动」, su única revelación restante es la de los ajustes avanzados, y los dos bloques de servicio conservan su propio 「保存」.
+- **Upstream**: [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser Use).
+- **Lista de portes**: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Archivo por archivo, qué se trajo y qué no.
+- **TypeSafe Jev**: servicio externo, no se distribuye con este paquete. Este paquete no incluye su código, sus pesos de modelo ni sus credenciales. Sus términos de servicio están en <https://typesafe.ai/legal/terms>.
+- **Repositorio de este proyecto**: [xingzhen199186/dsh-jev-ultrafast](https://github.com/xingzhen199186/dsh-jev-ultrafast).
+- **La base de conocimiento local del mantenedor** (no entra en el repositorio) guarda otra ficha del plugin: instalación, configuración y verificaciones una por una.
 
-La versión 0.2.12 trajo a la página su 「启动并连接」, que se ejecutó de verdad contra esa
-misma instancia instalada desde el tarball, dos veces: el desplegable se abrió con el **Edge**
-guardado de la vez anterior (así que la elección sobrevive a un reinicio del proceso); una
-pulsación arrancó y conectó **Chrome** (puerto 60856 — un puerto aleatorio, porque lo elige el
-navegador en vez de estar fijado el 9222); y cambiar a Edge y volver a pulsar conectó **Edge**
-(`Edg/154.0.4258.37`, puerto 60376) *mientras Chrome seguía en marcha*. Esa segunda ronda es
-donde se ve el arreglo del orden: en la primera implementación la línea de estado seguía
-apuntando a Chrome, porque el descubrimiento no ponía primero el navegador elegido. Captura:
-`scratch/review-0212-browser-block.png`; sonda: `scratch/probe-0212c.js`.
+## Licencia
 
-**La 0.2.13 es la primera ejecución de extremo a extremo** (2026-09-29, pedida como «用插件搜
-DeepSeek DSH 桌面版的下载页»). La mitad del navegador funciona: la herramienta abrió Bing de
-verdad y leyó de vuelta el texto de la página y 20 elementos accionables. La mitad de decisión
-se paró en **HTTP 401**, y la causa no estaba en el plugin: las dos credenciales de decisión
-de la máquina (`OPENROUTER_API_KEY` y `TYPESAFE_API_KEY`) son **el mismo valor de 35
-caracteres** (pegado en los dos campos), y ningún servicio lo acepta — enviado a OpenRouter
-responde «Missing Authentication header» (ni siquiera reconoce la forma; una clave falsa pero
-bien formada recibe «User not found.», así que sí está leyendo la clave), y enviado al punto de
-acceso propio de TypeSafe responde «Cannot authenticate with the server». De la misma
-investigación salieron dos hechos: el punto de acceso público de `openrouter.ai` responde 200
-sin clave (así que el camino de red está bien) y el canal alpha de OpenRouter **sí** acepta una
-clave de portador (así que la puerta OpenRouter del plugin es viable — solo necesita una clave
-real). La ejecución también destapó un defecto real del plugin, arreglado en esta versión: un
-rechazo decía solo «HTTP 401», que no distingue «esta clave no se reconoce» de «esta petición
-no es del gusto del endpoint». Ahora las palabras del propio servicio viajan en una línea,
-cortadas a 240 caracteres, con la clave misma borrada a `***` antes — fijado por una prueba
-unitaria. Instalado en el perfil web diario, los dos artefactos idénticos byte a byte a los del
-repositorio, `--dump-config` sale 0.
-
-**La 0.2.14 sigue la pestaña que abre un clic** (el mismo día, más tarde). La ejecución de la
-0.2.13 dejó una escena reveladora: había tres pestañas de resultados de Bing abiertas de
-verdad, mientras la ejecución informaba de que «la página no cambió en 3 pasos» — cada clic
-había funcionado, el sitio abría cada resultado en una pestaña nueva, y la ejecución solo
-miraba la pestaña a la que se había adherido. Cambiaron dos cosas. Primero, un paso que deja
-esta pestaña en la misma dirección mientras trae a la vida una página nueva ahora mueve la
-ejecución a esa página y lo dice, así que la siguiente decisión ve lo que hizo el clic; un paso
-en el que la dirección de esta pestaña *sí* se movió se queda donde está, y la línea del paso
-informa de la ventana nueva en vez de fingir que no pasó nada. La prueba es la dirección y no
-la página entera, porque un resultado de búsqueda que pasa a «visitado» redibuja la página
-donde está — con la regla de huella que este plugin usó primero, la ejecución en vivo se
-negaba a seguir en Bing exactamente por eso. Segundo, una ejecución ahora cierra solo la
-pestaña que creó: la página a la que se movió queda abierta, así que lo que la tarea fue a
-buscar sigue ahí cuando termina. Siete pruebas nuevas (tres en el bucle, dos para la única
-línea que lee el usuario, una prueba de integración con navegador real que hace clic en un
-enlace `target="_blank"` y comprueba que se leyó la segunda página), más una ejecución en vivo
-contra el servicio de decisión real — Bing → 冯时 → el artículo de 百度百科: un paso, seguido,
-la página final el propio artículo, donde el mismo objetivo necesitaba cuatro pasos y acababa
-en la propia página de búsqueda de Baike antes del arreglo. Instalado en el perfil web diario,
-los dos artefactos idénticos byte a byte, `--dump-config` sale 0.
-
-**La 0.2.15 hace que una tarea arranque ella misma el navegador** (el mismo día, más tarde). La
-pregunta era si el modelo principal, llamando a este plugin desde la página de conversación,
-podía arrancar y conectar en vez de mandar al lector primero a la página de ajustes. Puede:
-arrancar un navegador aquí es del todo mecánico (encontrar el ejecutable, darle un directorio
-de datos, dejar que elija un puerto, esperar a que el puerto responda), y el botón de la
-0.2.12 ejecuta ese mismo código. «Un modelo no tiene manos» significaba que un modelo no puede
-arrancar un proceso por sí mismo — una llamada de herramienta es la mano del propio plugin, y
-por eso la frontera se mueve en vez de romperse. Así que una ejecución ahora busca un navegador
-primero, y cuando no hay nada alcanzable *y* nada estaba fijado, arranca el navegador que
-nombra la página de ajustes —la misma búsqueda del ejecutable, el mismo directorio de datos,
-el mismo truco del archivo de puerto— y lo dice en su resultado. Se conservan dos bordes a
-propósito. Un `cdpUrl` o un `userDataDir` fijados son una instrucción y no una pista: cuando
-uno de ellos está puesto y muerto, la ejecución lo informa en vez de arrancar otro navegador,
-porque arrancar un navegador que nadie pidió es peor respuesta que decir que la dirección no
-responde. Y el modelo nunca nombra un ejecutable ni un puerto: el ejecutable viene de los
-ajustes, el puerto del propio navegador. Verificado: 7 pruebas unitarias nuevas
-(`ensureBrowser` fija cuándo se arranca un navegador, cuál, y cuándo ninguno; `launchNote` fija
-la única línea que lee el usuario), 126 en total; dos ejecuciones en vivo — una con el
-directorio de datos del plugin apuntando a un directorio desechable, de modo que nada era
-alcanzable, que arrancó Edge de verdad (`Edg/154.0.4258.37`) y se conectó a él, tras lo cual se
-le pidió a esa instancia que se cerrara para que no quedara ninguna ventana; y otra con un
-navegador ya en marcha, que no arrancó nada en absoluto. Instalado en el perfil web diario, los
-dos artefactos idénticos byte a byte, `--dump-config` sale 0.
-
-**Límites conocidos, dichos sin rodeos**: el perfil de escritorio sigue en la 0.2.1 y el
-`dsh web` diario del 3080 sigue ejecutando los artefactos viejos hasta que se reinicie, así que
-actualizar la app de escritorio significa volver a instalar allí el tarball. La propia página
-del inspector solo recoge una compilación nueva tras un reinicio de `dsh web`, y su superficie
-de clic todavía no se ha recorrido a clic limpio en un navegador real — lo que un navegador
-real ha comprobado es la *semántica* de pausar / avanzar / detener (una pausa realmente
-retiene el clic, soltar realmente hace clic, detener para siempre realmente no hace clic).
-«Grabación» significa los fotogramas reproducidos al ritmo al que se tomaron; no se produce
-ningún archivo de vídeo. El registro cae en el directorio temporal del sistema, contiene texto
-de página, y nada lo limpia automáticamente.
-
-## License
-
-MIT. Parte del código deriva de jev-ultrafast (MIT, © 2026 Browser Use); la lista de
-archivos derivados está en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), y el aviso de
-aguas arriba está reproducido en [LICENSE](LICENSE).
+MIT, ver [LICENSE](LICENSE). El copyright del upstream y las notas de terceros están en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
