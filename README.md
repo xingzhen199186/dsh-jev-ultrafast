@@ -47,44 +47,19 @@
 2. **一个浏览器**：Edge 或 Chrome。
 3. **密钥**（按你选的路）：决策服务的密钥，以及文本模型的密钥。插件不内置密钥，调用时从 DSH 凭据库读你自己的。
 
-Node.js 不用单独准备：在桌面应用里装不需要它；用 `dsh plugin` 命令时，`dsh` 自带的运行环境已经够用。
-
 ## 安装
 
-最省事的是按包名从 npm 装。把 `<profile>` 换成你自己的配置名（例如 `web`）：
+网页端：
 
 ```sh
-dsh plugin --profile <profile> add dsh-jev-ultrafast
+dsh plugin --profile web add dsh-jev-ultrafast
 ```
 
-装完重启一次 DSH。插件的外壳那一半只在启动时加载，不重启插件页面拿不到自己的令牌（工具本身是好的）。
+装完重启一次 DSH。
 
-另外两条备选。
+桌面端：
 
-**从 GitHub 装**（想跟着最新代码走时用）：
-
-```sh
-dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
-```
-
-`#v0.1.0` 现在指的是与 npm 上 0.1.0 同一份代码（2026-10-05 重新打过这个 tag）。要注意：本项目的版本号固定为 0.1.0、不随内容变，所以**以后每次内容更新，这个 tag 与 npm 上的那一版都会落后于最新代码**。想跟最新代码，就用不带 `#` 的写法，或把 `#` 后面换成具体的提交号。
-
-从 GitHub 装要多一步：pnpm 默认不跑源码包的构建脚本，第一次会失败。按它打印出来的包键，在那个 profile 的 `pnpm-workspace.yaml` 里放行，然后重装一次。
-
-```yaml
-allowBuilds:
-  dsh-jev-ultrafast: true
-```
-
-**离线装**：用本机打的包。先 `pnpm pack`，再：
-
-```sh
-dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
-```
-
-上面这些命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。桌面端这样装：在左侧导航栏点**插件**进入插件页面，再点**添加插件**；在输入框里填 `dsh-jev-ultrafast`（或本项目的仓库地址、本机目录路径），然后点**安装**。对话框里的「安装源」默认是 **npm 官方源**，国内网络慢可以换「中国大陆镜像源」。装好后按提示启用，再**重启一次应用**。
-
-那一次重启不是多余的。桌面端的启动负载只在应用启动时送一次。不重启，插件页面拿不到自己的令牌（工具本身是好的）。
+在左侧导航栏点**插件**进入插件页面，再点**添加插件**；在输入框里填 `dsh-jev-ultrafast`（或本项目的仓库地址、本机目录路径），然后点**安装**。对话框里的「安装源」默认是 **npm 官方源**，国内网络慢可以换「中国大陆镜像源」。装好后按提示启用，再**重启一次应用**。
 
 ## 怎么用
 
