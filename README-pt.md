@@ -7,211 +7,128 @@
 [![stars](https://img.shields.io/github/stars/xingzhen199186/dsh-jev-ultrafast?label=%E2%98%85&style=flat)](https://github.com/xingzhen199186/dsh-jev-ultrafast/stargazers)
 ![dsh plugin](https://img.shields.io/badge/dsh-plugin-000000?style=flat)
 
-> Dê ao DeepSeek Harness um objetivo em uma frase. O plugin conduz um navegador de verdade e conclui a tarefa. Em cada passo, um serviço de decisão escolhe «qual operação» e «sobre qual elemento». Isso não gasta turnos de conversa do modelo principal.
+> A implementação para DeepSeek Harness do jev-ultrafast: conduza um navegador de verdade com objetivos em linguagem natural dentro de uma conversa do DSH, com o modelo Jev fazendo o controle do navegador.
 
 ## O que é isto
 
-Ele acrescenta uma capacidade ao DeepSeek Harness (daqui em diante, DSH): **conduzir o navegador com um objetivo em linguagem natural**.
+Ele acrescenta uma capacidade ao DeepSeek Harness (daqui em diante DSH): **conduzir um navegador a partir de um objetivo escrito em linguagem natural**.
 
-O caminho comum é o modelo olhar a página, pensar um passo e clicar. Cada clique gasta um turno de conversa. Aqui a divisão é outra. Primeiro a página vira uma **tabela de controles numerados** (daqui em diante, **tabela de elementos**). Uma requisição decide ao mesmo tempo «qual operação» e «sobre qual elemento». O modelo principal só entra no começo, para dar o objetivo, e no fim, para ler o resultado. Assim, uma tarefa de vários passos gasta uma única chamada de ferramenta.
+O jeito comum é o modelo olhar a página, pensar um passo e clicar uma vez. Cada clique gasta um turno de conversa. Aqui a divisão é outra. Primeiro a página é comprimida em uma **tabela numerada de controles** (a **tabela de elementos**). Uma única requisição fixa ao mesmo tempo «qual operação» e «sobre qual elemento». O modelo principal só fala no começo, para dar o objetivo, e no fim, para ler o resultado. Assim uma tarefa de vários passos custa uma só chamada de ferramenta.
 
-Ele é um plugin (bundle), não uma skill. Ele registra duas ferramentas e um comando de barra:
+É um plugin (um bundle), não uma skill. Ele registra duas ferramentas e um comando de barra:
 
 | Entrada | O que faz |
 |---|---|
-| Ferramenta `jev_browser_task` | Executa um objetivo em uma frase. Aceita `expect` para conferir. Volta com o resultado e com o texto da página final |
-| Ferramenta `jev_browser_read` | Lê uma página longa tela a tela e costura o texto, sem repetições. Não gasta requisição de decisão |
-| Comando `/jev-ultrafast` | Você diz o que fazer direto na caixa de entrada. Sem passar pelo modelo principal |
-
-Uma execução real (medida nesta máquina):
-
-```text
-Objetivo: pesquisar 《人生复本》 e me dar as informações gerais
-Resultado: concluído · 2 passos · 5 decisões · 14,6 segundos
-Parou em: 人生复本第一季 - 搜索 — https://cn.bing.com/search?q=人生复本第一季
-Trecho lido na página: cerca de 12.300 resultados; episódios da 1ª temporada (S1 E5–E9); Douban 8,5/10 (21 mil pessoas)……
-```
+| Ferramenta `jev_browser_task` | Executa a tarefa a partir de um objetivo de uma frase. Aceita `expect` para verificar. Devolve o resultado e o texto da página final |
+| Ferramenta `jev_browser_read` | Lê uma página longa tela por tela e a remonta sem repetições. Não gasta requisição de decisão |
+| Comando `/jev-ultrafast` | Diz o que fazer direto na caixa de entrada. O modelo principal não precisa participar |
 
 ## De onde vem (upstream)
 
-**Este é um projeto portado, não original.** O upstream é o [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser Use). O upstream é uma implementação em Python, com cerca de 690 linhas. Este projeto o reescreveu em TypeScript e o empacotou como plugin do DSH. O repositório deste projeto é [xingzhen199186/dsh-jev-ultrafast](https://github.com/xingzhen199186/dsh-jev-ultrafast).
+**Isto é um port, não trabalho original.** O projeto upstream é o [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser Use). O upstream é uma implementação em Python de cerca de 690 linhas. Este projeto o reescreve em TypeScript e o empacota como plugin do DSH. O repositório próprio deste projeto é [xingzhen199186/dsh-jev-ultrafast](https://github.com/xingzhen199186/dsh-jev-ultrafast).
 
-**Ele não é oficial.** Este projeto não tem vínculo, endosso nem patrocínio da Browser Use ou da TypeSafe. «Browser Use», «TypeSafe» e «Jev» são marcas de seus respectivos titulares. As menções aqui servem apenas para dizer de onde ele vem e de quem é a API que o plugin chama.
+**Não é um produto oficial.** Este projeto não tem vínculo, aval ou patrocínio do Browser Use nem do TypeSafe. «Browser Use», «TypeSafe» e «Jev» são marcas de seus respectivos donos. Eles são citados aqui apenas para indicar a origem e para dizer a quais interfaces o plugin chama.
 
-O que veio do upstream está listado arquivo por arquivo em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Os pontos principais:
+O que foi tirado do upstream está listado peça por peça em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). O essencial:
 
-| Arquivo do upstream | Arquivo deste projeto | O que foi trazido |
+| Arquivo upstream | Arquivo deste projeto | O que foi tirado |
 |---|---|---|
-| `jev_ultrafast/snapshot.js` | `src/browser/snapshot.js` | O script de snapshot dentro da página, quase sem mudança |
-| `jev_ultrafast/questions.py` | `src/prompts.ts` | Os prompts da decisão, quase sem mudança |
-| `jev_ultrafast/model.py` | `src/decision/*` | A tabela de elementos, a requisição que decide operação e alvo, a checagem da resposta |
-| `jev_ultrafast/agent.py` | `src/loop.ts` | O laço principal, o tratamento de decisão vencida, o cache de valores de texto |
-| `jev_ultrafast/browser.py` | `src/browser/*` | A guarda de frescor, as checagens de visibilidade e de geometria antes da ação |
+| `jev_ultrafast/snapshot.js` | `src/browser/snapshot.js` | O script de instantâneo dentro da página, quase sem mudanças |
+| `jev_ultrafast/questions.py` | `src/prompts.ts` | Os prompts de decisão, quase sem mudanças |
+| `jev_ultrafast/model.py` | `src/decision/*` | A tabela de elementos, uma requisição para operação e alvo, a conferência das respostas |
+| `jev_ultrafast/agent.py` | `src/loop.ts` | O laço principal, o tratamento de decisões vencidas, o cache de valores de texto |
+| `jev_ultrafast/browser.py` | `src/browser/*` | A guarda de frescor, as verificações de visibilidade e geometria antes da ação |
 
-O upstream depende de `browser-harness`. Ele cuida da conexão com o navegador, do processo daemon e das caixas de permissão. Não existe equivalente disso em TypeScript. Este projeto reescreveu essa parte seguindo o Chrome DevTools Protocol e com **zero dependências**.
-
-Há outros dois caminhos de origem. O repositório guarda apenas os nomes deles, sem link verificável. Aqui vai a informação como ela é:
-
-- **browser-use**: outro projeto de agente de navegador. Este projeto pegou três coisas dele: a limpeza dos endereços nos registros (18 parâmetros de retorno de login viram `REDACTED`), a nova observação quando um número não existe mais (só para depois de 2 vezes seguidas) e o relato honesto quando o conteúdo fica dentro de um frame.
-- **dsh-advisor-group**: outro plugin de DSH do mesmo autor. A tabela de fornecedores de texto deste projeto, e a pequena parte que chama o serviço de modelos do DSH, vieram dele (2026-09-29).
+O upstream depende do `browser-harness`. Ele cuida da conexão do navegador, do daemon e das caixas de permissão. Em TypeScript não há equivalente. Este projeto reescreveu essa parte sobre o Chrome DevTools Protocol.
 
 ## O que preparar antes
 
 1. **Node.js**: `^22.19.0 || >=24.0.0`. Confira com `node --version`.
 2. **DSH**: a geração `0.2.0-rc.1`. A declaração de dependências do plugin cobre de `0.1.7-rc.2` até antes de `0.3.0`.
 3. **Um navegador**: Edge ou Chrome.
-4. **Duas chaves** (conforme o caminho que você escolher): a chave do serviço de decisão e a chave do modelo de texto. O plugin não traz chave embutida. Na hora da chamada, ele lê as suas do cofre de credenciais do DSH.
+4. **Duas chaves** (conforme a rota que você escolher): uma para o serviço de decisão e uma para o modelo de texto. O plugin não guarda chave própria. Na hora da chamada ele lê as suas no cofre de credenciais do DSH.
 
 ## Instalação
 
-O mais curto é instalar pelo nome do pacote, do npm. Troque `<profile>` pelo nome do seu profile (por exemplo `web`):
+O mais simples é instalar pelo nome do pacote no npm. Troque `<profile>` pelo nome do seu perfil (por exemplo `web`):
 
 ```sh
 dsh plugin --profile <profile> add dsh-jev-ultrafast
 ```
 
-Reinicie o DSH uma vez depois de instalar. A metade de casca do plugin só carrega na abertura. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
+Reinicie o DSH uma vez depois de instalar. A metade externa do plugin só carrega na inicialização; sem reiniciar, a página do plugin não consegue o próprio token (as ferramentas funcionam).
 
-Há outros dois caminhos.
+Há duas alternativas.
 
-**Do GitHub** (use este para acompanhar o código mais novo):
+**Instalar do GitHub** (use quando quiser acompanhar o código mais recente):
 
 ```sh
 dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
 
-`#v0.1.0` agora aponta para o mesmo código que o 0.1.0 do npm (a tag foi movida em 2026-10-05). Lembre que este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo, então **cada atualização posterior deixa para trás tanto essa tag quanto a versão do npm**. Para acompanhar o código mais novo, tire o `#` ou ponha um hash de commit depois dele.
+`#v0.1.0` agora aponta para o mesmo código que o 0.1.0 do npm (a tag foi movida em 2026-10-05). Fique atento a uma coisa: este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo, então **a cada futura atualização de conteúdo tanto essa tag quanto a versão do npm vão ficar atrás do código mais recente**. Para acompanhar o código mais recente, use a forma sem `#`, ou ponha um id de commit depois do `#`.
 
-Instalar do GitHub custa um passo a mais: por padrão o pnpm não roda os scripts de build de pacotes de código-fonte, então a primeira instalação falha. Use a chave de pacote que ele imprimir, libere no `pnpm-workspace.yaml` daquele profile e instale de novo.
+Instalar do GitHub leva um passo a mais: o pnpm não roda por padrão os scripts de build de um pacote de código-fonte, então a primeira instalação falha. Libere a chave de pacote que ele imprimir, no `pnpm-workspace.yaml` desse perfil, e instale de novo.
 
 ```yaml
 allowBuilds:
   dsh-jev-ultrafast: true
 ```
 
-**Offline**: use o pacote gerado nesta máquina. Primeiro `pnpm pack`, depois:
+**Sem internet**: use um tarball empacotado na sua própria máquina. Rode `pnpm pack` primeiro e depois:
 
 ```sh
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-Essas linhas de comando só valem para os profiles que a linha de comando gere. O profile `desktop` é gerido pelo próprio aplicativo, e a linha de comando recusa na hora: `profile "desktop" is managed exclusively by the Electron application`. Na ponta desktop, clique em **插件** (Plugins) na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件** (Adicionar plugin). Na caixa de entrada, escreva `dsh-jev-ultrafast` (ou o endereço deste repositório, ou um caminho de diretório local), e clique em **安装** (Instalar). O 「安装源」 (origem de instalação) da caixa de diálogo é, por padrão, a **fonte oficial do npm**; se a sua rede estiver lenta, troque para o **espelho da China continental**. Depois de ativar, **reinicie o aplicativo uma vez**.
+As linhas de comando acima só valem para perfis que a linha de comando gerencia. O aplicativo de desktop gerencia o próprio perfil `desktop`, e a linha de comando o recusa de imediato: `profile "desktop" is managed exclusively by the Electron application`. No desktop, instale assim: clique em **插件 (Plugins)** na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件 (Adicionar plugin)**; digite `dsh-jev-ultrafast` (ou o endereço do repositório deste projeto, ou um caminho de pasta local) e clique em **安装 (Instalar)**. A «origem de instalação» (安装源) dessa caixa vem por padrão em **npm 官方源**; se a rede estiver lenta na China, troque para **中国大陆镜像源**. Quando terminar, ative conforme indicado, e então **reinicie o aplicativo uma vez**.
 
-Esse reinício não é enfeite. A carga de inicialização da ponta desktop é entregue uma única vez, na abertura do aplicativo. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
+Essa reinicialização não é opcional. A carga de inicialização do desktop é enviada uma só vez, quando o aplicativo inicia. Sem a reinicialização, a página do plugin não consegue o próprio token (as ferramentas funcionam).
 
-## Como usar
+## Como se usa
 
-### Ferramenta `jev_browser_task`
+Diga o que você quer direto na caixa de entrada, em linguagem natural:
 
-Dê um objetivo em uma frase e ela conclui a tarefa. Também aceita `expect`. Escreva `expect` como «o que precisa aparecer na página quando der certo». Se não conferir, ela reporta `blocked` e não confia na autoavaliação do modelo.
+“用浏览器打开 https://www.example.com 该网页读取内容”
 
-Exemplo: em `goal`, «encontre o preço mais baixo deste voo e diga quanto é»; em `url`, o endereço da página de consulta; em `expect`, `["R$"]`.
+“用jev浏览器搜索美剧《人生复本》”
 
-### Ferramenta `jev_browser_read`
-
-Dê um endereço e ela lê tela a tela, tira as repetições e devolve o texto costurado. Esse caminho não gasta requisição de decisão. Use para textos longos, documentação e especificações.
-
-Não importa se a página é mais alta que uma tela. Cada tela é rolada de novo e no fim tudo vira um texto só.
-
-### Comando `/jev-ultrafast`
-
-Diga o que fazer direto na caixa de entrada.
-
-“Abra com o navegador https://www.example.com e leia o conteúdo dessa página”
-
-“Use o navegador jev para buscar a série 《人生复本》”
-
-“Chame o plugin dsh-jev-ultrafast para abrir esta página https://www.example.com ”
+“调用插件dsh-jev-ultrafast打开这个页面 https://www.example.com ”
 
 Ou:
 
-- `/jev-ultrafast https://www.example.com encontre o preço e diga quanto é` — a frase tem endereço. Nenhum modelo é chamado antes de começar.
-- `/jev-ultrafast veja a previsão do tempo em Pequim amanhã` — a frase não tem endereço. Se ela nomeia um site, o reconhecimento é local. São 13 sites reconhecidos: Baidu, Bing, Google, Zhihu, Weibo, Douban, Taobao/Tmall, JD, Xiaohongshu, Douyin, Bilibili, Wikipédia e GitHub. Só quando não reconhece é que ele pergunta uma vez ao modelo de texto. Se não conseguir, começa pelo buscador, com o Bing como padrão.
-- `/jev-ultrafast` (sem argumentos) — devolve só uma explicação e o endereço do inspetor interativo.
-
-O comando volta na hora. A tarefa continua no quadro de tarefas em segundo plano do DSH. No painel «Tarefas», no topo da sessão, você vê o progresso e pode parar. Ao terminar, o resultado volta.
-
-O nome do comando só aceita ASCII, por isso ele é `/jev-ultrafast`.
-
-### Inspetor interativo
-
-Abra `http://127.0.0.1:3080/jev-ultrafast/inspector` no navegador. Trocar a porta ou o host também funciona. Na página de configuração, no bloco **Navegador**, o botão «Abrir o inspetor interativo» também abre.
-
-Ali você pode começar uma execução à mão, ver a tela atual, ver qual elemento cada passo escolheu e qual a confiança do modelo. Antes de a ação ser executada, dá para «Pausar / Avançar um passo / Parar». Também dá para rever execuções antigas, quadro a quadro, no ritmo real.
+- `/jev-ultrafast https://www.example.com 找到价格并说明是多少` — a frase traz um endereço. Nenhum modelo é chamado antes de começar.
+- `/jev-ultrafast 查一下明天北京的天气` — a frase não traz endereço. Se ela citar um site, ele é reconhecido localmente. São 13 sites reconhecidos: 百度、必应、谷歌、知乎、微博、豆瓣、淘宝天猫、京东、小红书、抖音、B 站、维基、GitHub. Só quando nenhum é reconhecido ele pergunta uma vez ao modelo de texto. Se este não responder nada, a execução começa por um buscador, Bing por padrão.
 
 ## Configuração
 
-A página fica em **Configurações → Jev browser**. Hoje são **22 campos**. Todos são do tipo «muda sem reiniciar»: salvou, valeu. E nenhum interrompe uma tarefa em andamento.
+A página de ajustes fica em **设置 (Configurações) → Jev 浏览器 (Navegador Jev)**.
 
-### Duas portas
+### As duas portas
 
-| Porta | Dois caminhos | Chave |
+| Porta | Duas rotas | Chave |
 |---|---|---|
-| Serviço de decisão | TypeSafe direto; ou o canal de decisão do OpenRouter | Lida do cofre de credenciais do DSH. O plugin não guarda outra cópia |
-| Modelo de texto | Sete fornecedores predefinidos; ou `dsh:<id do fornecedor>` (um modelo já configurado no DSH) | No caminho predefinido, usa a própria chave; no caminho interno do DSH, quem cuida disso é o DSH |
+| Serviço de decisão | TypeSafe direto; ou o canal de decisões do OpenRouter | Lida no cofre de credenciais do DSH. O plugin não guarda nenhuma |
+| Modelo de texto | Sete fornecedores predefinidos; ou `dsh:<id do fornecedor>` (um modelo já configurado no DSH) | A rota predefinida usa a chave dela; a rota interna do DSH é gerenciada pelo próprio DSH |
 
-Os sete predefinidos são: DeepSeek oficial, OpenRouter, Alibaba Cloud Bailian, Zhipu AI, Moonshot Kimi, SiliconFlow e OpenAI.
+### Navegador: as duas formas de conexão
 
-No caminho do OpenRouter, o nome do modelo tem um til: `~typesafe/jev-latest`. **Não é erro de digitação.** Sem o til, a requisição vai para um modelo que não existe.
+**O navegador que você já usa** (o padrão). Ele usa direto o seu estado de login atual. Na primeira vez, faça assim:
 
-As duas listas de fornecedores são agrupadas por origem. Ao escolher «interno do DSH», a linha da chave vira a frase «quem cuida disso é o DSH» e nenhuma caixa de colar aparece.
+1. Na barra de endereços desse navegador, abra `edge://inspect/#remote-debugging` (`chrome://inspect/#remote-debugging` no Chrome).
+2. Marque «允许远程调试» (Permitir depuração remota).
+3. Quando aparecer a caixa «允许远程调试?» (Permitir depuração remota?), clique em Permitir. Você também pode clicar antes em «连接你的浏览器» (Conectar seu navegador) na página de ajustes, para segurar a conexão você mesmo.
 
-No caminho interno do DSH, o plugin envia a identidade da sessão atual (`GenerateOptions.sessionId`). Rotas roteadas por sessão precisam disso. Sem isso, a rota recusa a resposta.
+Depois de marcar uma vez, funciona aberto ou fechado. Se estiver fechado, o plugin o abre para você — sem nenhum argumento, igual a dar dois cliques no ícone (desde 2026-10-03 a linha vermelha «nunca iniciar seu perfil diário» foi removida por decisão do usuário). A porta de depuração dele vem junto.
 
-### Navegador: dois modos de conexão
+**Só uma vez por sessão de navegador.** Depois de conectar, o plugin segura essa conexão. Rodar tarefas, ler páginas e abrir abas novas não traz a caixa de volta. Só fechar o navegador por completo e abrir de novo conta como sessão nova, e aí ele pergunta mais uma vez.
 
-**O navegador que você já usa** (padrão). Ele aproveita o seu estado de login atual. Na primeira vez, faça assim:
+**O navegador próprio do plugin.** Ele usa uma pasta de dados separada, independente da sua diária. Para um site que exija login, entre uma vez naquela janela e fica guardado.
 
-1. Na barra de endereços desse navegador, abra `edge://inspect/#remote-debugging` (no Chrome, `chrome://inspect/#remote-debugging`).
-2. Marque «Permitir depuração remota».
-3. Quando aparecer a caixa «Permitir depuração remota?», clique em «Permitir». Você também pode clicar antes em «Conectar o seu navegador», na página de configuração, para segurar a conexão.
+Quando «o navegador que você já usa» está escolhido, esse bloco oferece mais duas coisas:
 
-Depois de marcar uma vez, funciona com o navegador aberto ou fechado. Se estiver fechado, o plugin o abre para você — sem passar nenhum parâmetro, o mesmo que dar um duplo clique no ícone (desde 2026-10-03, a regra «nunca iniciar o seu perfil do dia a dia» foi removida por decisão do usuário). A porta de depuração dele vem junto.
-
-**Só uma vez por sessão de navegador.** Depois de conectar, o plugin segura essa conexão. Executar tarefas, ler páginas e abrir abas novas não mostram mais a caixa. Só fechar o navegador por completo e abrir de novo cria uma sessão nova, e aí ele pergunta outra vez.
-
-**O navegador do próprio plugin.** Ele abre outro diretório de dados, separado do seu. Em sites que exigem login, faça o login uma vez nessa janela; depois ele fica guardado.
-
-Com «o navegador que você já usa» escolhido, esse bloco ainda tem duas coisas:
-
-- **Ver quanto login dá para levar**: só conta quantos cookies existem no navegador do dia a dia e em quais domínios. Desconecta em seguida e não escreve nada.
-- **Levar o login para o navegador do plugin**: escreve os cookies lá e confere site por site. Ele lê e escreve pelo canal de depuração, sem tocar nos arquivos do perfil.
-
-### Outros interruptores
-
-O que se muda com frequência fica à vista. O que quase nunca muda fica em «Configurações avançadas», como o caminho do executável do navegador, o diretório de dados e os endereços e nomes de chave das duas portas.
-
-Alguns interruptores que vale conhecer:
-
-- **Reconhecer botões personalizados** (ligado por padrão): também lista como candidatos elementos comuns que receberam um clique por script. Em muitos sites os botões são `div` ou `span`. Desligado, ele só reconhece controles nativos.
-- **Tratamento quando uma camada cobre o alvo** (ligado por padrão): quando o alvo está coberto e não dá para clicar, o plugin coloca nos candidatos o elemento que atrapalha e a opção «fechar a camada com Esc». Assim o modelo pode fechar essa camada sozinho.
-- **Qual seguir quando abrem várias páginas novas** (ligado por padrão): quando um passo abre várias páginas novas, ele segue só a que combina com o objetivo do passo, pelo endereço ou pelo título. Se nenhuma combina, ele não segue e fica na página atual.
-- **Controle central** (desligado por padrão): no começo da execução, outro modelo escreve uma lista conferível e a verifica durante o percurso. Sem essa marca, ele não pode declarar conclusão. Ele usa o modelo da coluna «Modelo de texto».
-
-O limite de saída de uma decisão é `393216` por padrão. Quando o servidor recusa, o plugin lê o limite que veio na resposta e pergunta de novo com esse número.
-
-## Limites de comportamento
-
-- **Ele só fecha as abas que ele mesmo abriu.** Depois de seguir uma aba aberta por um clique, ela fica ali para você ver. No fim, ele fecha apenas a que ele abriu.
-- **Ele não toma conta das suas abas.** Ele não troca para abas que já eram suas.
-- **Nunca fecha, nunca escreve direto no perfil do seu navegador do dia a dia e nunca passa parâmetros de depuração para ele.** A cadeia que leva o login só lê desse navegador.
-- **Ele não clica em caixa de diálogo nem faz login por você.** A caixa «Permitir depuração remota?» é você quem clica.
-- **Não embute, não intermedeia e não revende nenhum acesso de API.** Só aceita chave própria. A chave não entra no arquivo de configuração nem no registro da sessão.
-- **Cada passo deixa rastro.** Cada execução grava um `trace.jsonl` num diretório temporário. Dentro dele estão cada requisição e cada resposta de decisão. As chaves viram `***`; parâmetros de retorno de login, como `code` e `token` no endereço, viram `REDACTED`. O resultado informa o caminho desse diretório.
-
-## Limitações conhecidas
-
-- **O texto da página final que a ferramenta devolve tem no máximo 6000 caracteres**, e o `expect` procura só no texto da **última tela**. Então «não conferiu» quer dizer apenas que não deu para confirmar ali; não quer dizer que não aconteceu. Para ver mais longe, use `jev_browser_read`.
-- **Desvios gastam passos.** Exemplo: pedir o ranking da área de anime do Bilibili pode fazer ele clicar na caixa de busca e entrar na página de resultados. Quando o alvo não está na página, ele não tem outro caminho.
-- **Botão coberto é tentado até o limite.** Um botão coberto por uma camada e impossível de fechar é tentado 7 vezes; depois ele para e nomeia o que estava cobrindo.
-- **Ir e voltar entre duas páginas aciona o freio.** Nove chegadas alternadas entre duas páginas e ele para. Tarefas que realmente precisam de mais de 4 idas e voltas também são interrompidas, e a frase final nomeia as duas páginas.
-- **Ele não entra em elementos dentro de iframe, Shadow DOM ou canvas.** Ele diz com honestidade «o conteúdo de dentro não dá para ver». Se houver um endereço interno, ele informa.
-- **Não faz upload de arquivo nem arrastar e soltar.**
-- **Página que só troca imagens cai no ramo «sem mudança».** O plugin julga se o conteúdo chegou pelo texto da página, não pela rede.
-- **Com «o navegador que você já usa», você não pode usar esse navegador durante os minutos da tarefa.** Enquanto o interruptor de depuração estiver ligado, em teoria outros programas desta máquina também conseguem se conectar a ele.
-- **Os registros ficam no diretório temporário do sistema, incluem o texto das páginas e não são apagados automaticamente.**
-- **Os cinco READMEs ficaram alinhados em estrutura e conteúdo em 2026-10-05.**
-- **A versão é 0.1.0 e não é alterada sem pedido.** Este plugin não foi publicado no npm. O código está no GitHub.
+- **Ver quanto login dá para levar**: ele só conta quantos cookies o navegador diário tem e em quais domínios estão. Ele se desconecta logo após contar e não escreve nada.
+- **Despejar o login no navegador próprio do plugin**: ele escreve os cookies e depois confere site por site. Lê e escreve pelo canal de depuração e não toca nos arquivos do perfil.
 
 ## Desenvolvimento e verificação
 
@@ -219,31 +136,16 @@ O limite de saída de uma decisão é `393216` por padrão. Quando o servidor re
 pnpm install
 pnpm typecheck   # checagem de tipos
 pnpm test        # testes unitários
-pnpm build       # gera lib/
+pnpm build       # constrói lib/
 pnpm pack        # gera o tgz
 ```
 
-Os testes de integração com navegador de verdade são pulados por padrão. Para rodá-los, use a variável de ambiente:
+Os testes de integração com navegador real são pulados por padrão. Para rodá-los, acrescente a variável de ambiente:
 
 ```sh
 JEV_BROWSER=1 pnpm test
 ```
 
-Suíte atual: **44 arquivos de teste** e **724 casos**. Desses, **704 passam e 20 são pulados**. Os 20 pulados precisam de um navegador de verdade.
-
-As evidências ficam em dois lugares:
-
-- **Registro de execução**: cada execução grava um `trace.jsonl`, com cada requisição e cada resposta de decisão e cada chamada ao modelo de texto.
-- **Documento de engenharia** [ENGINEERING.md](ENGINEERING.md): registra as mudanças passo a passo, com os números medidos e os identificadores dos registros que as sustentam.
-
-## Fontes e ligações
-
-- **Upstream**: [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, © 2026 Browser Use).
-- **Lista do port**: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Arquivo por arquivo, o que foi trazido e o que não foi.
-- **TypeSafe Jev**: serviço externo, não distribuído com este pacote. Este pacote não contém o código, os pesos do modelo nem as credenciais dele. Os termos de serviço estão em <https://typesafe.ai/legal/terms>.
-- **Repositório deste projeto**: [xingzhen199186/dsh-jev-ultrafast](https://github.com/xingzhen199186/dsh-jev-ultrafast).
-- **A base de conhecimento local do mantenedor** (fora do controle de versão) tem outra entrada deste plugin: instalação, configuração e verificação a cada rodada.
-
 ## Licença
 
-MIT, veja [LICENSE](LICENSE). O copyright do upstream e as notas de terceiros estão em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT, veja [LICENSE](LICENSE). O copyright do upstream e os avisos de terceiros estão em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
