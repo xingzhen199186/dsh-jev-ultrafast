@@ -272,9 +272,11 @@ describe('what a daily run is allowed to do to the browser', () => {
    * The answers a test gives instead of the machine's: whether a discovered endpoint still answers,
    * whether the reader's browser shows a window, whether one of this plugin's own is up, and what
    * starting the reader's browser would produce. All ordinary here — up, no window, none of ours,
-   * no port — and a test that needs another answer says so itself.
+   * no port — and a test that needs another answer says so itself. `heldDoor` answers `none` because
+   * a test host holds nothing; the tests that care about a held connection say so themselves.
    */
-  const injected: Pick<EnsureDeps, 'endpointAlive' | 'browserRunning' | 'ownBrowser' | 'launchDaily'> = {
+  const injected: Pick<EnsureDeps, 'heldDoor' | 'endpointAlive' | 'browserRunning' | 'ownBrowser' | 'launchDaily'> = {
+    heldDoor: async () => 'none',
     endpointAlive: async () => true,
     browserRunning: async () => false,
     ownBrowser: async () => null,
@@ -303,6 +305,79 @@ describe('what a daily run is allowed to do to the browser', () => {
     )
     expect(ensured).toEqual({ endpoint: found, launched: null })
     expect(launches).toBe(0)
+  })
+
+  it('asks the connection it already holds instead of opening one of its own', async () => {
+    // 2026-10-05, the reader's report: every page he read put 「允许远程调试？」 back on screen while a
+    // connection he had already allowed sat in the holder. The check that ran before every act
+    // (`endpointAlive`) answers by opening a WebSocket, so the held connection is asked first — and
+    // the address itself must stay unasked, or the box comes back.
+    let probes = 0
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        discover: async () => found,
+        endpointAlive: async () => {
+          probes += 1
+          return true
+        },
+        heldDoor: async (wsUrl, route) => {
+          expect(wsUrl).toBe(found.wsUrl)
+          expect(route).toBe('daily')
+          return 'answering'
+        },
+        launch: async () => {
+          throw new Error('这条路不该启动任何浏览器')
+        },
+      },
+    )
+    expect(ensured).toEqual({ endpoint: found, launched: null })
+    expect(probes).toBe(0)
+  })
+
+  it('opens no second socket over a held connection that stayed silent', async () => {
+    // A held socket that is there but says nothing is still not a reason to raise the box: the act
+    // reports what went wrong in the words its own failure already has.
+    let probes = 0
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        discover: async () => found,
+        heldDoor: async () => 'held',
+        endpointAlive: async () => {
+          probes += 1
+          return false
+        },
+        launch: async () => {
+          throw new Error('这条路不该启动任何浏览器')
+        },
+      },
+    )
+    expect(ensured).toEqual({ endpoint: found, launched: null })
+    expect(probes).toBe(0)
+  })
+
+  it('asks the address itself only when nothing is held for it', async () => {
+    let probes = 0
+    const ensured = await ensureBrowser(
+      { connection: 'daily', preferredKind: 'edge' },
+      {
+        ...injected,
+        discover: async () => found,
+        heldDoor: async () => 'none',
+        endpointAlive: async () => {
+          probes += 1
+          return true
+        },
+        launch: async () => {
+          throw new Error('这条路不该启动任何浏览器')
+        },
+      },
+    )
+    expect(ensured).toEqual({ endpoint: found, launched: null })
+    expect(probes).toBe(1)
   })
 
   it('falls back to the plugin’s own copy when opening theirs brings no port', async () => {

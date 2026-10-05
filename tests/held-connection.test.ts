@@ -25,6 +25,7 @@ import { clearAttached } from '../src/browser/attached'
 import { DailyBrowserError, dailyFailure } from '../src/browser/discover'
 import {
   clearHeld,
+  heldDoor,
   heldStatus,
   holdConnection,
   reconnectConnection,
@@ -182,6 +183,52 @@ describe('one connection, many tasks', () => {
     await Promise.all([first.close(), second.close()])
 
     expect(factory.asked).toEqual([DAILY])
+  })
+})
+
+describe('the question asked before anything is opened', () => {
+  it('is answered by the connection this host already holds, opening nothing', async () => {
+    const factory = countingConnector()
+    setHeldConnector(factory.connect)
+    await holdConnection(DAILY, { route: 'daily', kind: 'edge' })
+
+    expect(await heldDoor(DAILY, 'daily')).toBe('answering')
+    // One connection, and the question rides on it: this is the check that must never be the reason
+    // a second handshake — and so a second 「允许远程调试？」 — appears.
+    expect(factory.asked).toEqual([DAILY])
+    expect(factory.last().sent.filter((entry) => entry.method === 'Browser.getVersion')).toHaveLength(1)
+  })
+
+  it('says nothing is held for another address, or for the other route', async () => {
+    const factory = countingConnector()
+    setHeldConnector(factory.connect)
+    await holdConnection(DAILY, { route: 'daily', kind: 'edge' })
+
+    // A different port is a different browser, and a different route is a different promise.
+    expect(await heldDoor(OWN, 'daily')).toBe('none')
+    expect(await heldDoor(DAILY, 'plugin')).toBe('none')
+  })
+
+  it('stays silent rather than opening a socket when the held connection does not answer', async () => {
+    const factory = countingConnector()
+    setHeldConnector(factory.connect)
+    await holdConnection(DAILY, { route: 'daily', kind: 'edge' })
+    // A socket that is there and says nothing: the deadline ends the wait, and the answer is still
+    // not "open another one".
+    const quiet: HeldSocket = factory.last()
+    quiet.send = async () => await new Promise(() => {})
+
+    expect(await heldDoor(DAILY, 'daily', 10)).toBe('held')
+    expect(factory.asked).toEqual([DAILY])
+  })
+
+  it('says nothing is held once that connection has died', async () => {
+    const factory = countingConnector()
+    setHeldConnector(factory.connect)
+    await holdConnection(DAILY, { route: 'daily', kind: 'edge' })
+    factory.last().die()
+
+    expect(await heldDoor(DAILY, 'daily')).toBe('none')
   })
 })
 

@@ -128,6 +128,68 @@ export function heldStatus(route: BrowserConnection): HeldStatus {
 }
 
 /**
+ * What this host can say about a discovered address *before* anything opens a socket to it.
+ *
+ *  - `answering` — a connection held for this route is the door to this address and the browser
+ *    answered over it, so the address is alive and nothing has to be opened.
+ *  - `held` — a connection is held for this address but did not answer in time. This is not a moment
+ *    to open a second one: a fresh handshake is what puts 「允许远程调试？」 on screen (measured
+ *    2026-10-05 — one per page read, for a connection the reader had already allowed), so the caller
+ *    goes ahead with what is held and the act reports its own failure if the browser is really gone.
+ *  - `none` — nothing is held for this address (or what was held is known dead), so asking the
+ *    address itself is the only way left.
+ */
+export type HeldDoor = 'answering' | 'held' | 'none'
+
+/**
+ * Whether the connection this host already holds is the door to this address.
+ *
+ * Why this exists: `ensureBrowser` asks about a discovered address before every act, and its own
+ * check (`endpointAlive`) answers by opening a WebSocket of its own. That made a held connection
+ * pointless — every page read opened one more handshake to the reader's browser, and the browser
+ * asked again for permission each time. Asking the held socket instead costs one small command and
+ * cannot raise the box, so this question is asked first and the address itself only when the answer
+ * here is `none` (`browser/launch.ts`, `ensureBrowser`).
+ *
+ * The answer is read back from the holder after a failed command on purpose: a socket that dies
+ * while being asked is exactly the legitimate case for opening a new one, because a dead connection
+ * is not something the reader can be told to press about from here.
+ */
+export async function heldDoor(wsUrl: string, route: BrowserConnection, timeoutMs = 1_500): Promise<HeldDoor> {
+  const entry = held.get(route)
+  if (entry === undefined || entry.socket === null || entry.state !== 'connected') return 'none'
+  if (entry.key !== addressKey(wsUrl)) return 'none'
+  const socket = entry.socket
+  try {
+    await settleWithin(socket.send('Browser.getVersion'), timeoutMs)
+    return 'answering'
+  } catch {
+    // A connection the browser closed while this was in flight has already been marked by its own
+    // `close`/`error`; anything else is a socket that is there but silent, and silence is not a
+    // reason to raise the box.
+    return held.get(route)?.state === 'connected' ? 'held' : 'none'
+  }
+}
+
+/** One command's answer, or a refusal once the deadline passes. The timer never outlives the ask. */
+function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('held connection did not answer in time')), timeoutMs)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    work.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      },
+    )
+  })
+}
+
+/**
  * The connection for this address, opening one only if there is not a live one already.
  *
  * The reader's own browser: a connection that has gone is *not* replaced here. Rethrowing what the

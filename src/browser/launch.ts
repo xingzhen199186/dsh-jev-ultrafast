@@ -30,10 +30,12 @@ import {
   pluginProfileDir,
   readActivePort,
   remoteDebuggingEnabled,
+  type BrowserConnection,
   type BrowserEndpoint,
   type BrowserKind,
   type DiscoverOptions,
 } from './discover'
+import { heldDoor, type HeldDoor } from './held'
 import { inspectPageUrl } from '../protocol'
 
 // The browser union and the names it is called by live in ./discover, next to the two routes
@@ -429,6 +431,14 @@ export interface EnsuredBrowser {
 export interface EnsureDeps {
   discover: (options: DiscoverOptions) => Promise<BrowserEndpoint>
   launch: (kind: BrowserKind, options: LaunchOptions) => Promise<LaunchedBrowser>
+  /**
+   * What this host already holds for a discovered address, asked before any socket is opened.
+   *
+   * This one exists because the two checks below it are not interchangeable: `endpointAlive` opens a
+   * socket of its own, while a held connection can answer for the same address over the connection
+   * the reader has already allowed (see `browser/held.ts`).
+   */
+  heldDoor: (wsUrl: string, route: BrowserConnection) => Promise<HeldDoor>
   /** Whether an endpoint that was discovered still answers. */
   endpointAlive: (endpoint: BrowserEndpoint) => Promise<boolean>
   /** Whether the chosen browser is already running on this machine. */
@@ -442,6 +452,7 @@ export interface EnsureDeps {
 const ENSURE_DEPS: EnsureDeps = {
   discover: discoverBrowser,
   launch: launchBrowser,
+  heldDoor,
   endpointAlive,
   browserRunning,
   ownBrowser: runningOwnBrowser,
@@ -473,8 +484,15 @@ export async function ensureBrowser(
   options: EnsureOptions = {},
   deps: EnsureDeps = ENSURE_DEPS,
 ): Promise<EnsuredBrowser> {
+  const route: BrowserConnection = options.connection === 'daily' ? 'daily' : 'plugin'
   try {
     const endpoint = await deps.discover(options)
+    // The connection this host already holds is asked first, because asking the address itself opens
+    // a socket: 2026-10-05, that was one fresh handshake per page read, and the browser put
+    // 「允许远程调试？」 back on screen for every one of them even though the reader had already
+    // allowed the connection sitting right there. Only when nothing is held does the address have to
+    // be asked directly — and only then can a new handshake be the honest answer.
+    if ((await deps.heldDoor(endpoint.wsUrl, route)) !== 'none') return { endpoint, launched: null }
     if (await deps.endpointAlive(endpoint)) return { endpoint, launched: null }
     // A recorded address outlives the browser that wrote it. One that no longer answers is passed
     // on as "nothing was found" — never as an endpoint a step would die on at its first move.
