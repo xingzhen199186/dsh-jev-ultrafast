@@ -50,28 +50,38 @@
 
 ## 安装
 
-要装的是同一个插件，命令也一样。把 `<profile>` 换成你自己的配置名（例如 `web`）：
+最省事的是按包名从 npm 装。把 `<profile>` 换成你自己的配置名（例如 `web`）：
+
+```sh
+dsh plugin --profile <profile> add dsh-jev-ultrafast
+```
+
+装完重启一次 DSH。插件的外壳那一半只在启动时加载，不重启插件页面拿不到自己的令牌（工具本身是好的）。
+
+另外两条备选。
+
+**从 GitHub 装**（想跟着最新代码走时用）：
 
 ```sh
 dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
 
-**不要接 `#v0.1.0`。** 本项目的版本号固定为 0.1.0，不随内容变；那个 tag 停在 2026-10-01，接上去装到的是旧代码（比现在落后一百多个提交）。想钉住一个固定快照，就把 `#` 后面换成具体的提交号。
+这里**不要接 `#v0.1.0`**。本项目的版本号固定为 0.1.0、不随内容变；那个 tag 停在 2026-10-01，接上去装到的是旧代码（比现在落后一百多个提交）。npm 上的 0.1.0 才是最新的。想钉住一个固定快照，就把 `#` 后面换成具体的提交号。
 
-pnpm 默认不跑源码包的构建脚本。第一次安装会失败。按它打印出来的包键，在那个 profile 的 `pnpm-workspace.yaml` 里放行，然后重装一次。
+从 GitHub 装要多一步：pnpm 默认不跑源码包的构建脚本，第一次会失败。按它打印出来的包键，在那个 profile 的 `pnpm-workspace.yaml` 里放行，然后重装一次。
 
 ```yaml
 allowBuilds:
   dsh-jev-ultrafast: true
 ```
 
-离线时用本机打的包。先 `pnpm pack`，再：
+**离线装**：用本机打的包。先 `pnpm pack`，再：
 
 ```sh
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-上面这条命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。桌面端这样装：在左侧导航栏点**插件**进入插件页面，再点**添加插件**；在输入框里填本项目的仓库地址（`https://github.com/xingzhen199186/dsh-jev-ultrafast`）或本机目录路径，然后点**安装**。对话框里的「安装源」默认是 **npm 官方源**，国内网络慢可以换「中国大陆镜像源」。装好后按提示启用，再**重启一次应用**。
+上面这些命令行只对命令行管的 profile 有效。桌面应用的 `desktop` profile 由应用自己管，命令行会直接拒绝：`profile "desktop" is managed exclusively by the Electron application`。桌面端这样装：在左侧导航栏点**插件**进入插件页面，再点**添加插件**；在输入框里填 `dsh-jev-ultrafast`（或本项目的仓库地址、本机目录路径），然后点**安装**。对话框里的「安装源」默认是 **npm 官方源**，国内网络慢可以换「中国大陆镜像源」。装好后按提示启用，再**重启一次应用**。
 
 那一次重启不是多余的。桌面端的启动负载只在应用启动时送一次。不重启，插件页面拿不到自己的令牌（工具本身是好的）。
 

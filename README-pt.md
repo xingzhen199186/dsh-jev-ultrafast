@@ -64,28 +64,38 @@ Há outros dois caminhos de origem. O repositório guarda apenas os nomes deles,
 
 ## Instalação
 
-É o mesmo plugin e o mesmo comando. Troque `<profile>` pelo nome do seu profile (por exemplo `web`):
+O mais curto é instalar pelo nome do pacote, do npm. Troque `<profile>` pelo nome do seu profile (por exemplo `web`):
+
+```sh
+dsh plugin --profile <profile> add dsh-jev-ultrafast
+```
+
+Reinicie o DSH uma vez depois de instalar. A metade de casca do plugin só carrega na abertura. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
+
+Há outros dois caminhos.
+
+**Do GitHub** (use este para acompanhar o código mais novo):
 
 ```sh
 dsh plugin --profile <profile> add github:xingzhen199186/dsh-jev-ultrafast
 ```
 
-**Não acrescente `#v0.1.0`.** Este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo. Essa tag para em 2026-10-01. Se você a usar, instala código velho: mais de cem commits atrás. Para fixar uma cópia exata, ponha um hash de commit depois do `#`.
+**Não acrescente `#v0.1.0`.** Este projeto mantém o número de versão em 0.1.0 e não o muda com o conteúdo. Essa tag para em 2026-10-01. Se você a usar, instala código velho: mais de cem commits atrás. O 0.1.0 do npm é o atual. Para fixar uma cópia exata, ponha um hash de commit depois do `#`.
 
-Por padrão o pnpm não roda os scripts de build de pacotes de código-fonte. A primeira instalação falha. Use a chave de pacote que ele imprimir, libere no `pnpm-workspace.yaml` daquele profile e instale de novo.
+Instalar do GitHub custa um passo a mais: por padrão o pnpm não roda os scripts de build de pacotes de código-fonte, então a primeira instalação falha. Use a chave de pacote que ele imprimir, libere no `pnpm-workspace.yaml` daquele profile e instale de novo.
 
 ```yaml
 allowBuilds:
   dsh-jev-ultrafast: true
 ```
 
-Offline, use o pacote gerado nesta máquina. Primeiro `pnpm pack`, depois:
+**Offline**: use o pacote gerado nesta máquina. Primeiro `pnpm pack`, depois:
 
 ```sh
 dsh plugin --profile <profile> add ./dsh-jev-ultrafast-0.1.0.tgz
 ```
 
-Essa linha de comando só vale para os profiles que a linha de comando gere. O profile `desktop` é gerido pelo próprio aplicativo, e a linha de comando recusa na hora: `profile "desktop" is managed exclusively by the Electron application`. Na ponta desktop, clique em **插件** (Plugins) na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件** (Adicionar plugin). Na caixa de entrada, escreva o endereço deste repositório (`https://github.com/xingzhen199186/dsh-jev-ultrafast`) ou um caminho de diretório local, e clique em **安装** (Instalar). O 「安装源」 (origem de instalação) da caixa de diálogo é, por padrão, a **fonte oficial do npm**; se a sua rede estiver lenta, troque para o **espelho da China continental**. Depois de ativar, **reinicie o aplicativo uma vez**.
+Essas linhas de comando só valem para os profiles que a linha de comando gere. O profile `desktop` é gerido pelo próprio aplicativo, e a linha de comando recusa na hora: `profile "desktop" is managed exclusively by the Electron application`. Na ponta desktop, clique em **插件** (Plugins) na barra lateral esquerda para abrir a página de plugins, e depois em **添加插件** (Adicionar plugin). Na caixa de entrada, escreva `dsh-jev-ultrafast` (ou o endereço deste repositório, ou um caminho de diretório local), e clique em **安装** (Instalar). O 「安装源」 (origem de instalação) da caixa de diálogo é, por padrão, a **fonte oficial do npm**; se a sua rede estiver lenta, troque para o **espelho da China continental**. Depois de ativar, **reinicie o aplicativo uma vez**.
 
 Esse reinício não é enfeite. A carga de inicialização da ponta desktop é entregue uma única vez, na abertura do aplicativo. Sem reiniciar, a página do plugin não recebe o próprio token (as ferramentas em si funcionam).
 
