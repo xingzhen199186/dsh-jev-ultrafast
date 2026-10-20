@@ -50,6 +50,7 @@ import { TargetCovered, act, coverAfter, withCoverActions, withCoverCandidates }
 import type { DiscoverOptions } from './browser/discover'
 import { frameAction, openArtifacts, recordable, type TraceSink } from './artifacts'
 import { verify, type Verification } from './verify'
+import { priorNote, type ResumeSeed } from './resume'
 
 /** How a run ended. `blocked` means the loop stopped itself, `failed` means the environment did. */
 export type RunStatus = 'done' | 'blocked' | 'failed'
@@ -204,6 +205,14 @@ export interface TaskOptions {
    * that "done" is not the last word of the model that did the work.
    */
   expect?: string[]
+  /**
+   * What the previous run did, when this one continues it (see `./resume.ts`). The run starts on the
+   * address that run stopped at — its own tab was closed with it, so the page is opened again — and
+   * this sentence, said once in the first request, is the one thing the page cannot carry: which
+   * steps were already taken. Nothing of the earlier run's element indices rides along: they were
+   * minted for a frame that no longer exists.
+   */
+  prior?: ResumeSeed['prior']
   /** Cancellation from the caller; checked between steps and forwarded to every request. */
   signal?: AbortSignal
   onEvent?: (event: LoopEvent) => void
@@ -997,7 +1006,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
       // The page's own table can be far larger than one decision can carry — the GitHub run of the
       // 2026-10 audit grew it from 14 elements to 97 inside one run — so what is sent is a
       // selection. The selection is said out loud rather than passed off as the whole page.
-      const note = [nestedNote(page.nested), hint].filter(Boolean).join(' ')
+      const note = [
+        history.length === 0 && options.prior !== undefined ? priorNote(options.prior) : '',
+        nestedNote(page.nested),
+        hint,
+      ]
+        .filter(Boolean)
+        .join(' ')
       // What the model is shown, as opposed to what the run judges itself by: the page's own table,
       // plus the element that stood over a target it could not click through and the one press that
       // gets rid of it, while that cover is still the thing in the way (see `withCoverActions`). A

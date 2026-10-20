@@ -250,12 +250,27 @@ function run(
     control?: { model: ControlModel; cap: number }
     /** Every event the loop reported, for the one line that says how the run ended. */
     onEvent?: (event: LoopEvent) => void
+    /** What the previous run did, when this one continues it. */
+    prior?: { actions: readonly string[]; status: 'done' | 'blocked' | 'failed'; reason: string }
   } = {},
 ) {
   return runTask({ goal: 'Find a flight', startUrl: 'https://example.test/', decision, text, deps, ...extra })
 }
 
 describe('run loop', () => {
+  it('tells a continued run what the last one did, in its first request and only there', async () => {
+    const h = harness({ pages: [pageState('f0'), pageState('f1')], choices: ['e1', 'DONE'] })
+    const prior = {
+      actions: ['click 「Sign in」', 'type 「a@b.c」'],
+      status: 'blocked' as const,
+      reason: '登录浮层挡住了「搜索」',
+    }
+    await run(h.deps, { prior })
+    expect(h.seen.contexts[0]?.note).toContain('接着上一次')
+    expect(h.seen.contexts[0]?.note).toContain('a@b.c')
+    expect(h.seen.contexts[0]?.note).toContain('登录浮层')
+    expect(h.seen.contexts[1]?.note ?? '').not.toContain('接着上一次')
+  })
   it('runs actions until the decision says DONE', async () => {
     const h = harness({
       // The screen the first step lands on is a different screen by the same test the stopping

@@ -16,6 +16,8 @@ import { registerPanel } from './panel'
 import { MAX_PAGE_TEXT } from './prompts'
 import { LOGIN_HINT, NO_ANSWER, NO_ANSWER_BODY_BELOW, NO_RESULT, NO_RESULT_BODY_BELOW } from './protocol'
 import { browserNote, prepareRun } from './run-setup'
+import { seedFromLastRun } from './resume'
+import { claimRun, lastRun, lastRunOf } from './run-slot'
 
 export const name = 'dsh-jev-ultrafast'
 // `credentials` is injected so a key is resolved through the harness credential
@@ -108,8 +110,13 @@ export function apply(ctx: Context, config: ConfigShape): void {
         },
         url: {
           type: 'string',
-          required: true,
-          description: 'The page to open first. The action space can click links but cannot navigate to an address, so this is where the run begins.',
+          description:
+            'The page to open first. The action space can click links but cannot navigate to an address, so this is where the run begins. Leave it out only when `resume` is set: then the address the previous run stopped on is used.',
+        },
+        resume: {
+          type: 'boolean',
+          description:
+            'Continue the run that just ended in this process, instead of starting a new one: the plugin opens the address that run stopped on and tells the loop which steps were already taken, so a half-done task is not started over. Use it when a run came back blocked and the user asks to carry on from there. The previous tab was closed with its run, so unsubmitted form content is not restored; logins are.',
         },
         maxSteps: {
           type: 'number',
@@ -203,28 +210,61 @@ export function apply(ctx: Context, config: ConfigShape): void {
         },
       },
       async execute(args, exec) {
-        // The run is assembled in one shared place, so the tool and the inspector page start
-        // the same run: same doors, same credentials, same browser.
-        const { base, note } = await prepareRun(ctx, config, llm, {
-          maxSteps: args.maxSteps,
-          signal: exec.signal,
-          record: true,
-          // The session this call belongs to, so a built-in text route that requires a routing
-          // identity (`x-opencode-session`) answers instead of refusing.
-          sessionId: exec.agent?.id,
-        })
-        const result = await runTask({ ...base, goal: args.goal, startUrl: args.url, expect: args.expect })
-        // The run's own note about a page it could only partly see rides the note the caller
-        // already reads, so the sentence reaches the user through the channel that exists.
-        const output = toOutput(result, [note, result.pageNote].filter(Boolean).join('\n'))
-        // Screenshots are off unless the settings page turns them on. When they are on, the
-        // picture the last observation took is written out instead of being thrown away, so
-        // the caller can look at the page it was told about.
-        if (result.screenshot) {
-          const saved = saveScreenshot(result.screenshot)
-          return saved ? { ...output, screenshot: saved } : output
+        // A continuation is a seed, not a mode of the loop: it supplies the address the last run
+        // stopped on and one sentence about what that run did (`./resume.ts`).
+        const seed = args.resume === true ? seedFromLastRun(lastRun()) : null
+        if (seed !== null && !seed.ok) throw new Error(seed.error)
+        const given = (args.url ?? '').trim()
+        const startUrl = given !== '' ? given : seed !== null ? seed.seed.url : ''
+        if (startUrl === '') {
+          throw new Error('要给一个起始网址；只有接着上一次继续（resume）时才可以不给。')
         }
-        return output
+        // The run table is shared with the command and the inspector (`./run-slot.ts`): claiming it
+        // here is what lets the page pause or stop a run the model started, and what keeps two runs
+        // from driving one browser window.
+        const claim = claimRun({ owner: 'tool', goal: args.goal })
+        if (!claim.ok) throw new Error(claim.error)
+        const lease = claim.lease
+        if (exec.signal !== undefined) {
+          if (exec.signal.aborted) lease.controller.abort()
+          else exec.signal.addEventListener('abort', () => lease.controller.abort(), { once: true })
+        }
+        try {
+          // The run is assembled in one shared place, so the tool and the inspector page start
+          // the same run: same doors, same credentials, same browser.
+          const { base, note } = await prepareRun(ctx, config, llm, {
+            maxSteps: args.maxSteps,
+            signal: lease.controller.signal,
+            record: true,
+            // The session this call belongs to, so a built-in text route that requires a routing
+            // identity (`x-opencode-session`) answers instead of refusing.
+            sessionId: exec.agent?.id,
+            gate: (info) => lease.gate(info),
+          })
+          const result = await runTask({
+            ...base,
+            goal: args.goal,
+            startUrl,
+            expect: args.expect,
+            ...(seed !== null && seed.ok ? { prior: seed.seed.prior } : {}),
+          })
+          // Before the answer is built: the next `resume` reads this even if this call then fails
+          // to save its screenshot or build its output.
+          lease.release(lastRunOf(result))
+          // The run's own note about a page it could only partly see rides the note the caller
+          // already reads, so the sentence reaches the user through the channel that exists.
+          const output = toOutput(result, [note, result.pageNote].filter(Boolean).join('\n'))
+          // Screenshots are off unless the settings page turns them on. When they are on, the
+          // picture the last observation took is written out instead of being thrown away, so
+          // the caller can look at the page it was told about.
+          if (result.screenshot) {
+            const saved = saveScreenshot(result.screenshot)
+            return saved ? { ...output, screenshot: saved } : output
+          }
+          return output
+        } finally {
+          lease.release()
+        }
       },
     }),
   )

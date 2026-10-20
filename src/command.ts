@@ -38,6 +38,7 @@ import {
 import { namedSite, resolveStart } from './resolve-start'
 import { unfinishedDeaths } from './run-history'
 import { prepareRun } from './run-setup'
+import { claimRun, lastRunOf } from './run-slot'
 import { findUrl } from './urls'
 
 /** The name DSH parses out of `/jev-ultrafast …`: lowercase ASCII, as the registry requires. */
@@ -390,23 +391,42 @@ async function runOnce(
   sessionId?: string,
 ): Promise<Attempt> {
   let note = ''
+  // The command's own cancellation (the session going away, the jobs panel's stop) is the slot's
+  // controller too: the inspector's 「停止」 and this one button have to be the same act.
+  const controller = new AbortController()
+  if (signal !== undefined) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  const claim = claimRun({ owner: 'command', goal: parsed.goal, controller })
+  if (!claim.ok) return { ok: false, message: claim.error, note }
+  const lease = claim.lease
   try {
     const prepared = await prepareRun(ctx, config, llm, {
       record: true,
-      signal,
+      signal: lease.controller.signal,
       sessionId,
+      gate: (info) => lease.gate(info),
       onEvent: (event: LoopEvent) => {
-        if (event.type === 'executed') onProgress?.(`第 ${event.step} 步：${event.action}`)
-        else if (event.type === 'finished') {
-          onProgress?.(`结束：${verdictText(event.status, event.reason, event.unmet, event.verified)}`)
+        if (event.type === 'executed') {
+          const line = `第 ${event.step} 步：${event.action}`
+          onProgress?.(line)
+          lease.progress(line)
+        } else if (event.type === 'finished') {
+          const line = `结束：${verdictText(event.status, event.reason, event.unmet, event.verified)}`
+          onProgress?.(line)
+          lease.progress(line)
         }
       },
     })
     note = prepared.note
     const result = await runTask({ ...prepared.base, goal: parsed.goal, startUrl: parsed.url })
+    lease.release(lastRunOf(result))
     return { ok: true, result, note }
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error), note }
+  } finally {
+    lease.release()
   }
 }
 

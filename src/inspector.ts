@@ -29,6 +29,7 @@ import { runTask, verdictText, type LoopEvent, type TaskResult } from './loop'
 import { NO_ANSWER, NO_RESULT } from './protocol'
 import { prepareRun } from './run-setup'
 import { hasLastWord } from './run-history'
+import { activeState, claimRun, controlActive, lastRunOf, type SlotControl } from './run-slot'
 
 /** Where every run's artifacts live. `openArtifacts` owns that layout; this only reads it. */
 const ARTIFACTS_ROOT = join(tmpdir(), 'dsh-jev-ultrafast')
@@ -73,19 +74,11 @@ interface StepLine {
 }
 
 interface Run {
-  controller: AbortController
   goal: string
   /** The run's own directory name under the artifacts root, once the loop has opened it. */
   dir: string
   note: string
   running: boolean
-  paused: boolean
-  /** One step was released while paused; consumed by the next gate. */
-  stepped: boolean
-  /** The gate is holding right now: the page shows this as "已停下，等你". */
-  waiting: boolean
-  stopped: boolean
-  hold: (() => void) | null
   steps: StepLine[]
   seq: number
   result: TaskResult | null
@@ -166,34 +159,12 @@ export function createInspector(
    * The hold the loop waits on. A pause is honoured before an action, never during one, and
    * returning from here is what lets either one step through or the whole run carry on.
    */
-  const gate = async (run: Run, info: { step: number; action: string }): Promise<void> => {
-    if (!run.paused || run.stepped) {
-      run.stepped = false
-      return
-    }
-    run.waiting = true
-    line(run, 'waiting', `第 ${info.step} 步：已停下，等你按「继续」或「单步」再执行「${info.action}」`)
-    await new Promise<void>((resolve) => {
-      run.hold = resolve
-    })
-    run.waiting = false
-    run.hold = null
-    run.stepped = false
-  }
-
   const start = (goal: string, url: string, expect: string[]): void => {
-    const controller = new AbortController()
     const run: Run = {
-      controller,
       goal,
       dir: '',
       note: '',
       running: true,
-      paused: false,
-      stepped: false,
-      waiting: false,
-      stopped: false,
-      hold: null,
       steps: [],
       seq: 0,
       result: null,
@@ -201,6 +172,21 @@ export function createInspector(
     }
     current = run
     void (async () => {
+      // The slot is what every door shares: taking it here is what lets the page pause, step and
+      // stop a run the command or the tool started, and what makes a second start a sentence
+      // rather than two runs driving one window.
+      const claim = claimRun({
+        owner: 'inspector',
+        goal,
+        onHold: (info) => line(run, 'waiting', `第 ${info.step} 步：已停下，等你按「继续」或「单步」再执行「${info.action}」`),
+      })
+      if (!claim.ok) {
+        run.running = false
+        run.error = claim.error
+        line(run, 'error', claim.error)
+        return
+      }
+      const lease = claim.lease
       try {
         // The inspector is inherently visual, so it takes the screenshots and the record a
         // run would only take when asked for: without frames there is nothing to step through
@@ -208,9 +194,9 @@ export function createInspector(
         const { base, note } = await prepareRun(ctx, config, llm, {
           screenshots: true,
           record: true,
-          signal: controller.signal,
+          signal: lease.controller.signal,
           onEvent: (event) => onEvent(run, event),
-          gate: (info) => gate(run, info),
+          gate: (info) => lease.gate(info),
         })
         run.note = note
         run.result = await runTask({ ...base, goal, startUrl: url, expect })
@@ -218,19 +204,37 @@ export function createInspector(
         run.error = error instanceof Error ? error.message : String(error)
         line(run, 'error', `这次运行没能开始：${run.error}`)
       } finally {
+        lease.release(run.result === null ? undefined : lastRunOf(run.result))
         run.running = false
-        run.waiting = false
       }
     })()
   }
 
   const stateOf = (run: Run | null): Record<string, unknown> => {
-    if (run === null) {
-      return { running: false, paused: false, waiting: false, state: '未开始', note: '', steps: [], frame: null, runs: listRuns() }
+    const slot = activeState()
+    if (run === null || !run.running) {
+      // Nobody here started a run, but somebody else's is in the slot: the page can still pause,
+      // step and stop it, so it is drawn rather than reported as idle.
+      if (slot !== null) {
+        const door = slot.owner === 'command' ? '命令' : '工具'
+        return {
+          running: true,
+          paused: slot.paused,
+          waiting: slot.waiting,
+          state: `${door}起的运行：${slot.goal}${slot.line ? `｜${slot.line}` : ''}`,
+          note: '',
+          steps: [],
+          frame: null,
+          runs: listRuns(),
+        }
+      }
+      if (run === null) {
+        return { running: false, paused: false, waiting: false, state: '未开始', note: '', steps: [], frame: null, runs: listRuns() }
+      }
     }
     const result = run.result
     const state = run.running
-      ? run.waiting
+      ? slot?.waiting
         ? '已暂停：等你按「继续」或「单步」'
         : '运行中'
       : run.error
@@ -242,8 +246,8 @@ export function createInspector(
     const newest = manifest.frames[manifest.frames.length - 1]
     return {
       running: run.running,
-      paused: run.paused,
-      waiting: run.waiting,
+      paused: slot?.paused ?? false,
+      waiting: slot?.waiting ?? false,
       state,
       note: run.note,
       steps: run.steps,
@@ -280,7 +284,7 @@ export function createInspector(
         send(res, 405, { error: '这个接口只接受 POST。' })
         return
       }
-      if (current?.running) {
+      if (activeState() !== null) {
         send(res, 409, { error: '已经有一次运行在跑了。先等它结束，或者按「停止」。' })
         return
       }
@@ -304,30 +308,14 @@ export function createInspector(
       }
       const body = await readJson(req)
       const action = String(body.action ?? '')
-      const run = current
-      if (!run || !run.running) {
-        send(res, 409, { error: '现在没有在跑的运行。' })
+      if (!['pause', 'resume', 'step', 'stop'].includes(action)) {
+        send(res, 400, { error: '不认识的控制指令。' })
         return
       }
-      const release = (): void => {
-        run.hold?.()
-        run.hold = null
-      }
-      if (action === 'pause') run.paused = true
-      else if (action === 'resume') {
-        run.paused = false
-        release()
-      } else if (action === 'step') {
-        run.stepped = true
-        release()
-      } else if (action === 'stop') {
-        // Stopping is cancellation, not a nudge: the loop checks the signal right after the
-        // hold, so a paused run stops without executing the action it was holding.
-        run.stopped = true
-        run.controller.abort()
-        release()
-      } else {
-        send(res, 400, { error: '不认识的控制指令。' })
+      // The slot, not this module's own run: the command and the tool take the same one, so the
+      // page drives whichever door started the run that is in front of it.
+      if (!controlActive(action as SlotControl)) {
+        send(res, 409, { error: '现在没有在跑的运行。' })
         return
       }
       send(res, 200, { ok: true })
